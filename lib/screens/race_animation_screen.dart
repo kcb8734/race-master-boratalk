@@ -614,10 +614,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   late double _boost200;
   late double _spurt100;
 
-  // 줌 뷰: START 시 즐시 트랙 표시 (zoomVal 제거)
-  // 이전 _zoomVal 1.0→0.0 동안 트랙 alpha=0 → 13~19초 검은화면 원인
-  // 해결: phase==racing이면 즌 짜 트랙 보여줌
-  double _zoomVal = 1.0; // 유지(게이트뷰 페이드용)—실제 alpha 계산은 아래 변경
+  // 게이트뷰 페이드아웃: _zoomAnim (AnimationController) 으로 안정적으로 처리
+  // JS loop 의존 제거 → 브라우저 throttle과 무관
 
   // 경주 방향 — 모든 경주장 CCW
   bool get _isCW   => false; // 항상 CCW
@@ -639,8 +637,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _calcParams();
     _initHorses();
 
-    // ValueNotifier<int> _renderTick — 별도 초기화 불필요 (선언 시 초기화)
-    // JS setTimeout 루프에서 _renderTick.value++ → AnimatedBuilder 즉시 리빌드
+    // JSFunction 미리 생성 (initState에서 1회만 생성 → GC 폭발 방지)
+    // dart2js release 빌드에서 클로저 stale reference 방지
+    _jsFn = (() => _onJsTick()).toJS;
 
     _glowAnim = AnimationController(
       vsync: this,
@@ -728,18 +727,15 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   }
 
   // ── 브라우저 네이티브 setTimeout 재귀 게임루프 ──
-  // _scheduleNext() → _jsSetTimeout(_onJsTick, 16) → _onJsTick() → _scheduleNext() ...
   void _scheduleNext() {
     if (!_gameActive) return;
-    // JSFunction 재사용: 최초 1회만 생성, 이후 동일 객체 사용
-    // 매 틱마다 새 객체 생성하면 GC 폭발 → 8~10초 freeze
-    _jsFn ??= (() => _onJsTick()).toJS;
     _jsTimerId = _jsSetTimeout(_jsFn!, 16);
   }
 
   void _onJsTick() {
-    if (!_gameActive || _phase != _Phase.racing) return;
+    if (!_gameActive) return;
     _scheduleNext();
+    if (_phase != _Phase.racing) return; // racing 상태에서만 물리 연산
 
     // performance.now(): 브라우저 고정밀 타이머 (마이크로초 수준)
     // DateTime.now()는 JS에서 1ms 해상도 → 연속 호출시 차이=0 → dt=0.001
@@ -750,10 +746,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         : ((nowMs - _prevPerfMs) / 1000.0).clamp(0.001, 0.1);
     _prevPerfMs = nowMs;
 
-    // 게이트뷰 페이드아웃 (1.0→0.0, 0.8초)
-    if (_zoomVal > 0.0) {
-      _zoomVal = (_zoomVal - realDt / 0.8).clamp(0.0, 1.0);
-    }
+    // 게이트뷰 페이드아웃은 _zoomAnim (AnimationController) 이 담당
+    // JS loop는 물리 연산만 처리
 
     _elapsed += realDt;
 
@@ -874,8 +868,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }
     // JS setTimeout 루프 → ValueNotifier.value++ → AnimatedBuilder 즉시 리빌드
     // Flutter 스케줄러(SchedulerBinding) 완전 우회
-    // → _horses[].prog, _zoomVal 변경이 즉시 Canvas에 반영됨
-    if (mounted) _renderTick.value++;
+    // → _horses[].prog 변경이 즉시 Canvas에 반영됨
+    // mounted 체크 없이 _gameActive 플래그로만 제어 (JS 컨텍스트 참조 안전성)
+    _renderTick.value++;
   }
 
   // 레이스 경과 시간 (결과 팝업 표시용)
@@ -914,11 +909,15 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _gameActive = true;
     _phase = _Phase.racing;
 
+    // ★ 게이트뷰 페이드아웃: JS loop 의존 제거 → AnimationController로 처리
+    // _zoomAnim: 0.0→1.0 forward (역방향 사용: 1.0에서 시작해서 0.0으로)
+    // 실제로는 _zoomAnim.value를 (1.0 - value)로 사용
+    _zoomAnim.value = 0.0;
+    _zoomAnim.animateTo(1.0, duration: const Duration(milliseconds: 800));
+
     // 브라우저 네이티브 setTimeout 게임루프 시작
     _scheduleNext();
 
-    _zoomVal = 1.0; // 게이트뷰 페이드 시작지점 유지
-    // _phase 변경(waiting→racing)을 UI에 반영: START 버튼 숨김, 배너 표시
     if (mounted) setState(() {});
   }
 
@@ -954,7 +953,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
           // _gatePulse / _glowAnim: 게이트뷰 펄스 + 부스터 글로우 (AnimationController)
           Positioned.fill(
             child: AnimatedBuilder(
-              animation: Listenable.merge([_gatePulse, _glowAnim, _renderTick]),
+              // _zoomAnim 추가: 게이트뷰 페이드아웃을 AnimationController로 안정적으로 처리
+              // _renderTick: JS 루프에서 물리연산 결과 트리거
+              animation: Listenable.merge([_gatePulse, _glowAnim, _zoomAnim, _renderTick]),
               builder: (_, __) => CustomPaint(
                 painter: _RacePainter(
                   horses:     _horses,
@@ -970,7 +971,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
                   frameIdx:   _frameIdx,
                   glowVal:    _glowAnim.value,
                   gatePulse:  _gatePulse.value,
-                  zoomVal:    _zoomVal,
+                  // 게이트뷰 페이드아웃: _zoomAnim.value 0→1.0 → zoomVal 1.0→0.0
+                  // JS loop 의존 없이 AnimationController가 안정적으로 처리
+                  zoomVal:    1.0 - _zoomAnim.value,
                   phase:      _phase,
                   ranking:    _ranking,
                   isJeju:     _isJeju,
