@@ -722,11 +722,19 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   void _onTickerTick(Duration elapsed) {
     if (_phase != _Phase.racing) return;
 
+    // ── 첫 틱: _prevElapsedDur를 현재 elapsed로 초기화 (누적값 점프 방지) ──
+    // Ticker.start()를 재호출해도 elapsed는 0부터 다시 시작하지 않으므로
+    // 첫 틱에서 기준점을 현재 elapsed로 설정해야 diffMs가 정상(~16ms)이 됨
+    if (_prevElapsedDur == Duration.zero) {
+      _prevElapsedDur = elapsed;
+      return; // 첫 틱은 dt 계산 생략 (다음 틱부터 정상 진행)
+    }
+
     // 실제 경과 시간(초) 계산
     final diffMs = elapsed.inMicroseconds - _prevElapsedDur.inMicroseconds;
     _prevElapsedDur = elapsed;
 
-    // 첫 프레임 또는 비정상적으로 큰 dt(100ms 이상) 스킵
+    // 비정상적으로 큰 dt(100ms 이상) 스킵 — 탭 전환/백그라운드 복귀 시 보호
     if (diffMs <= 0 || diffMs > 100000) return;
 
     // realDt: 초 단위 (Web 60fps → ~16ms)
@@ -877,11 +885,18 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
   void _startRace() {
     if (_phase != _Phase.waiting) return; // 중복 실행 방지
-    _prevElapsedDur = Duration.zero;
-    _phase = _Phase.racing;
-    // Ticker 시작: 이미 시작됐으면 stop 후 재시작
+
+    // ── Ticker 재생성: stop/start 재사용 시 elapsed 누적 → diffMs 폭증 버그 방지 ──
+    // 새 Ticker는 start() 시 elapsed가 항상 Duration.zero부터 시작함
     _ticker?.stop();
-    _ticker?.start();
+    _ticker?.dispose();
+    _ticker = createTicker(_onTickerTick);
+
+    // _prevElapsedDur = Duration.zero: _onTickerTick 첫 틱에서 기준점 자동 설정
+    _prevElapsedDur = Duration.zero;
+
+    _phase = _Phase.racing;
+    _ticker!.start();
     _zoomAnim.reset();
     _zoomAnim.forward();
     if (mounted) setState(() {});
