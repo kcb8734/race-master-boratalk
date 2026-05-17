@@ -1,24 +1,10 @@
 import 'dart:math';
 import 'dart:async';
-import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
 import '../utils/horse_cap_colors.dart';
 
-// ── 브라우저 네이티브 setTimeout / clearTimeout (Flutter Web 전용) ──
-// AnimationController.repeat()와 Timer.periodic은 탭 백그라운드·muted 상태에서
-// 완전히 정지하지만, 네이티브 setTimeout은 계속 작동함
-@JS('setTimeout')
-external int _jsSetTimeout(JSFunction fn, int ms);
 
-@JS('clearTimeout')
-external void _jsClearTimeout(int id);
-
-// performance.now(): 브라우저 고정밀 타이머 (마이크로초 수준)
-// DateTime.now()는 JS에서 1ms 해상도 → 연속 호출시 차이=0 → dt=0.001
-// → 1.2초 줌이 19초 걸리는 원인
-@JS('performance.now')
-external double _jsPerfNow();
 
 // ══════════════════════════════════════════════════════════════════════════
 //  경마통 · 탑다운 단일레인 오벌 레이스 (Round 7)
@@ -574,18 +560,11 @@ class RaceAnimationScreen extends StatefulWidget {
 class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     with TickerProviderStateMixin {
 
-  // ── 게임루프: 브라우저 네이티브 setTimeout 재귀 호출 ──
-  // Timer.periodic / AnimationController.repeat() / SchedulerBinding 모두
-  // Flutter Web Release 빌드에서 탭 상태에 따라 throttle됨
-  // → 브라우저 네이티브 setTimeout은 이 제한을 받지 않음
-  bool      _gameActive = false;
-  int       _jsTimerId  = -1;   // 현재 예약된 setTimeout ID
-  double    _prevPerfMs = -1.0; // performance.now() 기반 이전 프레임 시각(ms)
-  JSFunction? _jsFn;            // 재사용 JS 함수 (매 틱 새 객체 생성 방지)
+  // ── 게임루프: dart:async Timer.periodic ──
+  bool   _gameActive = false;
+  Timer? _gameTimer;            // 게임루프 타이머 (dart:async Timer.periodic)
 
-  // 렌더 트리거: JS setTimeout 루프에서 직접 value++ 호출
-  // Flutter AnimationController.repeat()는 탭 비활성 시 throttle → 화면 정지
-  // ValueNotifier<int>는 Flutter 스케줄러와 무관하게 즉시 리빌드 트리거
+  // 렌더 트리거: ValueNotifier → AnimatedBuilder 즉시 리빌드
   final ValueNotifier<int> _renderTick = ValueNotifier<int>(0);
 
   // 기타 애니메이션 컨트롤러 (게이트뷰 펄스 / 글로우 / 결승 암전)
@@ -638,10 +617,6 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     super.initState();
     _calcParams();
     _initHorses();
-
-    // JSFunction 미리 생성 (initState에서 1회만 생성 → GC 폭발 방지)
-    // dart2js release 빌드에서 클로저 stale reference 방지
-    _jsFn = (() => _onJsTick()).toJS;
 
     _glowAnim = AnimationController(
       vsync: this,
@@ -728,28 +703,17 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }).toList();
   }
 
-  // ── 브라우저 네이티브 setTimeout 재귀 게임루프 ──
-  void _scheduleNext() {
-    if (!_gameActive) return;
-    _jsTimerId = _jsSetTimeout(_jsFn!, 16);
+  // ── 게임루프: dart:async Timer.periodic (16ms ≈ 60fps) ──
+  void _startGameTimer() {
+    _gameTimer?.cancel();
+    _gameTimer = Timer.periodic(const Duration(milliseconds: 16), (_) => _onTick());
   }
 
-  void _onJsTick() {
-    if (!_gameActive) return;
-    _scheduleNext();
-    if (_phase != _Phase.racing) return; // racing 상태에서만 물리 연산
+  void _onTick() {
+    if (!_gameActive || _phase != _Phase.racing) return;
 
-    // performance.now(): 브라우저 고정밀 타이머 (마이크로초 수준)
-    // DateTime.now()는 JS에서 1ms 해상도 → 연속 호출시 차이=0 → dt=0.001
-    // → 1.2초 줌이 19초 걸리는 원인
-    final double nowMs = _jsPerfNow();
-    final double realDt = _prevPerfMs < 0
-        ? 0.016
-        : ((nowMs - _prevPerfMs) / 1000.0).clamp(0.001, 0.1);
-    _prevPerfMs = nowMs;
-
-    // 게이트뷰 페이드아웃은 _zoomAnim (AnimationController) 이 담당
-    // JS loop는 물리 연산만 처리
+    // dt: Timer.periodic 16ms 고정값 사용 (Flutter Web에서는 정확한 연산)
+    const double realDt = 0.016;
 
     _elapsed += realDt;
 
@@ -868,10 +832,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       _doFinish();
       return;
     }
-    // JS setTimeout 루프 → ValueNotifier.value++ → AnimatedBuilder 즉시 리빌드
-    // Flutter 스케줄러(SchedulerBinding) 완전 우회
-    // → _horses[].prog 변경이 즉시 Canvas에 반영됨
-    // mounted 체크 없이 _gameActive 플래그로만 제어 (JS 컨텍스트 참조 안전성)
+    // ValueNotifier.value++ → AnimatedBuilder 즉시 리빌드 → CustomPaint 재렌더
     _renderTick.value++;
   }
 
@@ -893,11 +854,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }
     if (_raceElapsed == 0.0) _raceElapsed = _elapsed;
     _phase = _Phase.finishing;
-    _gameActive = false; // _scheduleNext()가 이 플래그를 보고 중단
-    if (_jsTimerId >= 0) {
-      _jsClearTimeout(_jsTimerId);
-      _jsTimerId = -1;
-    }
+    _gameActive = false;
+    _gameTimer?.cancel();
+    _gameTimer = null;
 
     _fadeAnim.forward().then((_) {
       if (mounted) setState(() => _phase = _Phase.result);
@@ -907,41 +866,30 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   void _startRace() {
     if (_phase != _Phase.waiting) return;
 
-    _prevPerfMs = -1.0;
     _gameActive = true;
     _phase = _Phase.racing;
 
-    // 브라우저 네이티브 setTimeout 게임루프 시작
-    _scheduleNext();
+    // 게임루프 시작 (dart:async Timer.periodic)
+    _startGameTimer();
 
-    // 게이트뷰 페이드아웃: dart:async Timer로 16ms마다 opacity 감소
-    // - Flutter AnimationController / JS loop 완전 독립
-    // - setState로 Widget 레벨 opacity 갱신 → CSS compositor가 처리
+    // 게이트뷰 페이드아웃 (800ms, 50 steps)
     _gateOpacity = 1.0;
-    const steps = 50; // 800ms / 16ms = 50 steps
-    const stepDt = 1.0 / steps;
     var tick = 0;
     Timer.periodic(const Duration(milliseconds: 16), (t) {
       tick++;
-      if (!mounted || tick >= steps) {
-        t.cancel();
-        if (mounted) setState(() => _gateOpacity = 0.0);
-        return;
-      }
-      if (mounted) setState(() => _gateOpacity = 1.0 - (stepDt * tick));
+      final done = tick >= 50;
+      if (mounted) setState(() => _gateOpacity = done ? 0.0 : 1.0 - tick / 50.0);
+      if (done) t.cancel();
     });
 
-    if (mounted) setState(() {});
+    setState(() {}); // phase 변경 반영
   }
 
   @override
   void dispose() {
     _gameActive = false;
-    _jsFn = null; // JSFunction 참조 해제
-    if (_jsTimerId >= 0) {
-      _jsClearTimeout(_jsTimerId);
-      _jsTimerId = -1;
-    }
+    _gameTimer?.cancel();
+    _gameTimer = null;
     _renderTick.dispose();
     _glowAnim.dispose();
     _zoomAnim.dispose();
