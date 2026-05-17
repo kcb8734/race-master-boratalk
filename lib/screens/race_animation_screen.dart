@@ -1,8 +1,23 @@
-import 'dart:async';
 import 'dart:math';
+import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
 import '../utils/horse_cap_colors.dart';
+
+// ── 브라우저 네이티브 setTimeout / clearTimeout (Flutter Web 전용) ──
+// AnimationController.repeat()와 Timer.periodic은 탭 백그라운드·muted 상태에서
+// 완전히 정지하지만, 네이티브 setTimeout은 계속 작동함
+@JS('setTimeout')
+external int _jsSetTimeout(JSFunction fn, int ms);
+
+@JS('clearTimeout')
+external void _jsClearTimeout(int id);
+
+// performance.now(): 브라우저 고정밀 타이머 (마이크로초 수준)
+// DateTime.now()는 JS에서 1ms 해상도 → 연속 호출시 차이=0 → dt=0.001
+// → 1.2초 줌이 19초 걸리는 원인
+@JS('performance.now')
+external double _jsPerfNow();
 
 // ══════════════════════════════════════════════════════════════════════════
 //  경마통 · 탑다운 단일레인 오벌 레이스 (Round 7)
@@ -558,16 +573,23 @@ class RaceAnimationScreen extends StatefulWidget {
 class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     with TickerProviderStateMixin {
 
-  // ── 게임루프: dart:async Timer.periodic (Web iframe/탭 환경에서도 안정 동작) ──
-  Timer? _gameTimer;
-  DateTime? _lastTickTime;
+  // ── 게임루프: 브라우저 네이티브 setTimeout 재귀 호출 ──
+  // Timer.periodic / AnimationController.repeat() / SchedulerBinding 모두
+  // Flutter Web Release 빌드에서 탭 상태에 따라 throttle됨
+  // → 브라우저 네이티브 setTimeout은 이 제한을 받지 않음
+  bool      _gameActive = false;
+  int       _jsTimerId  = -1;   // 현재 예약된 setTimeout ID
+  double    _prevPerfMs = -1.0; // performance.now() 기반 이전 프레임 시각(ms)
+  JSFunction? _jsFn;            // 재사용 JS 함수 (매 틱 새 객체 생성 방지)
 
-  // 렌더 트리거용 AnimationController
-  late AnimationController _renderNotifier;
+  // 렌더 트리거: JS setTimeout 루프에서 직접 value++ 호출
+  // Flutter AnimationController.repeat()는 탭 비활성 시 throttle → 화면 정지
+  // ValueNotifier<int>는 Flutter 스케줄러와 무관하게 즉시 리빌드 트리거
+  final ValueNotifier<int> _renderTick = ValueNotifier<int>(0);
 
-  // 기타 애니메이션 컨트롤러
+  // 기타 애니메이션 컨트롤러 (게이트뷰 펄스 / 글로우 / 결승 암전)
   late AnimationController _glowAnim;  // 부스터 글로우 펄스
-  late AnimationController _zoomAnim;  // 스타트 줌 아웃
+  late AnimationController _zoomAnim;  // 스타트 줌 아웃 (미사용, 유지)
   late AnimationController _fadeAnim;  // 결승 암전
   late AnimationController _gatePulse; // 게이트 뷰 펄스 애니
 
@@ -592,8 +614,10 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   late double _boost200;
   late double _spurt100;
 
-  // 줌 뷰
-  double _zoomVal = 1.0; // 1=줌인 게이트뷰, 0=전체뷰
+  // 줌 뷰: START 시 즐시 트랙 표시 (zoomVal 제거)
+  // 이전 _zoomVal 1.0→0.0 동안 트랙 alpha=0 → 13~19초 검은화면 원인
+  // 해결: phase==racing이면 즌 짜 트랙 보여줌
+  double _zoomVal = 1.0; // 유지(게이트뷰 페이드용)—실제 alpha 계산은 아래 변경
 
   // 경주 방향 — 모든 경주장 CCW
   bool get _isCW   => false; // 항상 CCW
@@ -615,11 +639,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _calcParams();
     _initHorses();
 
-    // 렌더 트리거: repeat()으로 항상 리스닝 상태 유지
-    _renderNotifier = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    )..repeat();
+    // ValueNotifier<int> _renderTick — 별도 초기화 불필요 (선언 시 초기화)
+    // JS setTimeout 루프에서 _renderTick.value++ → AnimatedBuilder 즉시 리빌드
 
     _glowAnim = AnimationController(
       vsync: this,
@@ -629,9 +650,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _zoomAnim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
-    )..addListener(() {
-      setState(() => _zoomVal = 1.0 - _zoomAnim.value);
-    });
+    ); // 실제 줌은 _onJsTick에서 직접 계산 (AnimationController throttle 회피)
 
     _fadeAnim = AnimationController(
       vsync: this,
@@ -708,24 +727,33 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }).toList();
   }
 
-  // ────────────────────────────────────────────────────────────────────────
-  //  게임 루프 — Ticker 콜백
-  //  elapsed: Ticker.start() 이후 누적 Duration (매 vsync마다 호출)
-  // ────────────────────────────────────────────────────────────────────────
-  // ── 게임루프 콜백 (Timer.periodic 16ms 마다 호출) ──
-  void _onGameTick(Timer _) {
-    if (_phase != _Phase.racing) return;
+  // ── 브라우저 네이티브 setTimeout 재귀 게임루프 ──
+  // _scheduleNext() → _jsSetTimeout(_onJsTick, 16) → _onJsTick() → _scheduleNext() ...
+  void _scheduleNext() {
+    if (!_gameActive) return;
+    // JSFunction 재사용: 최초 1회만 생성, 이후 동일 객체 사용
+    // 매 틱마다 새 객체 생성하면 GC 폭발 → 8~10초 freeze
+    _jsFn ??= (() => _onJsTick()).toJS;
+    _jsTimerId = _jsSetTimeout(_jsFn!, 16);
+  }
 
-    final now = DateTime.now();
-    final double realDt;
-    if (_lastTickTime == null) {
-      realDt = 0.016; // 첫 틱: 기본값 16ms
-    } else {
-      final diffMs = now.difference(_lastTickTime!).inMilliseconds;
-      // 비정상 dt 클램프: 최소 1ms, 최대 100ms
-      realDt = diffMs.clamp(1, 100) / 1000.0;
+  void _onJsTick() {
+    if (!_gameActive || _phase != _Phase.racing) return;
+    _scheduleNext();
+
+    // performance.now(): 브라우저 고정밀 타이머 (마이크로초 수준)
+    // DateTime.now()는 JS에서 1ms 해상도 → 연속 호출시 차이=0 → dt=0.001
+    // → 1.2초 줌이 19초 걸리는 원인
+    final double nowMs = _jsPerfNow();
+    final double realDt = _prevPerfMs < 0
+        ? 0.016
+        : ((nowMs - _prevPerfMs) / 1000.0).clamp(0.001, 0.1);
+    _prevPerfMs = nowMs;
+
+    // 게이트뷰 페이드아웃 (1.0→0.0, 0.8초)
+    if (_zoomVal > 0.0) {
+      _zoomVal = (_zoomVal - realDt / 0.8).clamp(0.0, 1.0);
     }
-    _lastTickTime = now;
 
     _elapsed += realDt;
 
@@ -840,10 +868,14 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       }
     }
 
-    if (!anyRunning && _phase == _Phase.racing) { _doFinish(); return; }
-
-    // Timer 콜백에서 setState로 매 틱마다 화면 갱신
-    if (mounted) setState(() {});
+    if (!anyRunning && _phase == _Phase.racing) {
+      _doFinish();
+      return;
+    }
+    // JS setTimeout 루프 → ValueNotifier.value++ → AnimatedBuilder 즉시 리빌드
+    // Flutter 스케줄러(SchedulerBinding) 완전 우회
+    // → _horses[].prog, _zoomVal 변경이 즉시 Canvas에 반영됨
+    if (mounted) _renderTick.value++;
   }
 
   // 레이스 경과 시간 (결과 팝업 표시용)
@@ -864,8 +896,11 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }
     if (_raceElapsed == 0.0) _raceElapsed = _elapsed;
     _phase = _Phase.finishing;
-    _gameTimer?.cancel(); // 타이머 정지
-    _gameTimer = null;
+    _gameActive = false; // _scheduleNext()가 이 플래그를 보고 중단
+    if (_jsTimerId >= 0) {
+      _jsClearTimeout(_jsTimerId);
+      _jsTimerId = -1;
+    }
 
     _fadeAnim.forward().then((_) {
       if (mounted) setState(() => _phase = _Phase.result);
@@ -875,29 +910,27 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   void _startRace() {
     if (_phase != _Phase.waiting) return;
 
-    // 기존 타이머 정리
-    _gameTimer?.cancel();
-    _lastTickTime = null;
-
+    _prevPerfMs = -1.0;
+    _gameActive = true;
     _phase = _Phase.racing;
 
-    // Timer.periodic: 16ms(~60fps) 주기로 게임루프 실행
-    // Web/iframe 환경에서 Ticker보다 훨씬 안정적
-    _gameTimer = Timer.periodic(
-      const Duration(milliseconds: 16),
-      _onGameTick,
-    );
+    // 브라우저 네이티브 setTimeout 게임루프 시작
+    _scheduleNext();
 
-    _zoomAnim.reset();
-    _zoomAnim.forward();
+    _zoomVal = 1.0; // 게이트뷰 페이드 시작지점 유지
+    // _phase 변경(waiting→racing)을 UI에 반영: START 버튼 숨김, 배너 표시
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _gameTimer?.cancel();
-    _gameTimer = null;
-    _renderNotifier.dispose();
+    _gameActive = false;
+    _jsFn = null; // JSFunction 참조 해제
+    if (_jsTimerId >= 0) {
+      _jsClearTimeout(_jsTimerId);
+      _jsTimerId = -1;
+    }
+    _renderTick.dispose();
     _glowAnim.dispose();
     _zoomAnim.dispose();
     _fadeAnim.dispose();
@@ -917,9 +950,11 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       body: Stack(
         children: [
           // ── 레이스 캔버스 ──
+          // _renderTick: JS setTimeout 루프에서 직접 트리거 (Flutter 스케줄러 우회)
+          // _gatePulse / _glowAnim: 게이트뷰 펄스 + 부스터 글로우 (AnimationController)
           Positioned.fill(
             child: AnimatedBuilder(
-              animation: Listenable.merge([_gatePulse, _glowAnim, _renderNotifier]),
+              animation: Listenable.merge([_gatePulse, _glowAnim, _renderTick]),
               builder: (_, __) => CustomPaint(
                 painter: _RacePainter(
                   horses:     _horses,
@@ -954,14 +989,20 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
               ),
             ),
 
-          // ── 상단 HUD ──
-          _buildHUD(size),
+          // ── 상단 HUD + 배너 (JS 루프 트리거로 실시간 갱신) ──
+          // _renderTick 구독: JS setTimeout마다 value++ → 즉시 리빌드
+          AnimatedBuilder(
+            animation: _renderTick,
+            builder: (_, __) => Stack(
+              children: [
+                _buildHUD(size),
+                if (_phase == _Phase.racing) _buildEventBanner(),
+              ],
+            ),
+          ),
 
           // ── 스타트 버튼 ──
           if (_phase == _Phase.waiting) _buildStartButton(size),
-
-          // ── 스퍼트/부스터 배너 ──
-          if (_phase == _Phase.racing) _buildEventBanner(),
 
           // ── 결과 팝업 ──
           if (_phase == _Phase.result) _buildResult(size),
@@ -1216,18 +1257,17 @@ class _RacePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final fullTr = _trackRect(size);
 
-    // ── 게이트 뷰: 스타트 전 ──
-    if (phase == _Phase.waiting || zoomVal > 0.01) {
-      _paintGateView(canvas, size, fullTr, zoomVal);
-    }
-
-    // ── 전체 트랙 뷰 ──
-    if (phase != _Phase.waiting || zoomVal < 0.99) {
-      final alpha = phase == _Phase.waiting ? 0.0 : (1.0 - zoomVal).clamp(0.0, 1.0);
-      canvas.saveLayer(Rect.fromLTWH(0, 0, size.width, size.height),
-          Paint()..color = Colors.white.withValues(alpha: alpha));
+    if (phase == _Phase.waiting) {
+      // ── 대기 중: 게이트뷰만 ──
+      _paintGateView(canvas, size, fullTr, 1.0);
+    } else {
+      // ── 레이스 중 / finishing / result ──
+      // 트랙 즘시 표시 (alpha 제한 없음)
       _paintFullTrack(canvas, size, fullTr);
-      canvas.restore();
+      // 게이트뷰 페이드아웃 오버레이 (0.8초 동안)
+      if (zoomVal > 0.01) {
+        _paintGateView(canvas, size, fullTr, zoomVal);
+      }
     }
   }
 
