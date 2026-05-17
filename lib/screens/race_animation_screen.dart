@@ -712,6 +712,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   void _onTick() {
     if (!_gameActive || _phase != _Phase.racing) return;
 
+    try {
     // dt: Timer.periodic 16ms 고정값 사용 (Flutter Web에서는 정확한 연산)
     const double realDt = 0.016;
 
@@ -833,7 +834,16 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       return;
     }
     // ValueNotifier.value++ → AnimatedBuilder 즉시 리빌드 → CustomPaint 재렌더
-    _renderTick.value++;
+    if (mounted) _renderTick.value++;
+
+    } catch (e, st) {
+      // 게임루프 내 예외: 루프만 중단, 화면은 유지 (Navigator.pop 하지 않음)
+      _gameActive = false;
+      _gameTimer?.cancel();
+      _gameTimer = null;
+      // 개발용 로그 (release 빌드에서는 무시됨)
+      assert(() { debugPrint('[_onTick] 예외: $e\n$st'); return true; }());
+    }
   }
 
   // 레이스 경과 시간 (결과 팝업 표시용)
@@ -843,7 +853,16 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _raceElapsed = _elapsed;
   }
 
+  bool _finishCalled = false; // _doFinish 중복 호출 방지
+
   void _doFinish() {
+    if (_finishCalled) return; // 중복 호출 방지
+    _finishCalled = true;
+
+    _gameActive = false;
+    _gameTimer?.cancel();
+    _gameTimer = null;
+
     final sorted = [..._horses]..sort((a, b) => b.prog.compareTo(a.prog));
     for (final h in sorted) {
       if (!h.finished) {
@@ -853,11 +872,12 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       }
     }
     if (_raceElapsed == 0.0) _raceElapsed = _elapsed;
-    _phase = _Phase.finishing;
-    _gameActive = false;
-    _gameTimer?.cancel();
-    _gameTimer = null;
 
+    // ★ setState 로 _phase 전환 → UI 즉시 갱신
+    if (!mounted) return;
+    setState(() => _phase = _Phase.finishing);
+
+    _fadeAnim.reset();
     _fadeAnim.forward().then((_) {
       if (mounted) setState(() => _phase = _Phase.result);
     });
@@ -865,9 +885,13 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
   void _startRace() {
     if (_phase != _Phase.waiting) return;
+    if (_gameActive) return; // 중복 방지
 
-    _gameActive = true;
-    _phase = _Phase.racing;
+    // ★ phase와 gameActive를 setState 안에서 원자적으로 변경
+    setState(() {
+      _gameActive = true;
+      _phase = _Phase.racing;
+    });
 
     // 게임루프 시작 (dart:async Timer.periodic)
     _startGameTimer();
@@ -881,8 +905,6 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       if (mounted) setState(() => _gateOpacity = done ? 0.0 : 1.0 - tick / 50.0);
       if (done) t.cancel();
     });
-
-    setState(() {}); // phase 변경 반영
   }
 
   @override
@@ -1245,11 +1267,8 @@ class _RacePainter extends CustomPainter {
   //  정면 게이트 뷰 (Round 11 — 정보 배너 확대 + 색상바 최소화)
   // ────────────────────────────────────────────────────────────────────────
   void _paintGateView(Canvas canvas, Size size, Rect fullTr, double zv) {
-    final alpha = zv.clamp(0.0, 1.0);
-    canvas.saveLayer(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Paint()..color = Colors.white.withValues(alpha: alpha),
-    );
+    // ★ saveLayer 완전 제거 — Flutter Web에서 렌더 블록킹 원인
+    // opacity는 Widget 레벨(AnimatedOpacity)에서 처리하므로 여기서는 항상 불투명하게 그림
 
     final w = size.width;
     final h = size.height;
@@ -1275,8 +1294,6 @@ class _RacePainter extends CustomPainter {
 
     // ── ⑤ 하단: 경주 방향 바 ──
     _paintDirectionBar(canvas, size, h * 0.88);
-
-    canvas.restore();
   }
 
   // 관중석 느낌 배경
