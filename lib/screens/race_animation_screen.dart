@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart'; // Ticker
 import '../models/race_models.dart';
 import '../utils/horse_cap_colors.dart';
 
@@ -558,14 +558,11 @@ class RaceAnimationScreen extends StatefulWidget {
 class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     with TickerProviderStateMixin {
 
-  // ── 게임루프: Ticker 직접 사용 (AnimationController 대체) ──
-  // AnimationController.forward()는 Web에서 value 변화량이 너무 작아
-  // addListener가 실질적으로 호출되지 않는 먹통 현상 발생
-  // → Ticker는 매 vsync(60fps)마다 elapsed Duration을 직접 제공 → 안정적
-  Ticker? _ticker;
-  Duration _prevElapsedDur = Duration.zero;
+  // ── 게임루프: dart:async Timer.periodic (Web iframe/탭 환경에서도 안정 동작) ──
+  Timer? _gameTimer;
+  DateTime? _lastTickTime;
 
-  // 렌더 트리거용 AnimationController (값 변화 없이 notify만)
+  // 렌더 트리거용 AnimationController
   late AnimationController _renderNotifier;
 
   // 기타 애니메이션 컨트롤러
@@ -618,14 +615,10 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _calcParams();
     _initHorses();
 
-    // ── Ticker 초기화 (게임루프) ──
-    // createTicker: TickerProviderStateMixin이 제공, 매 vsync마다 onTick 호출
-    _ticker = createTicker(_onTickerTick);
-
     // 렌더 트리거: repeat()으로 항상 리스닝 상태 유지
     _renderNotifier = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 16), // ~60fps
+      duration: const Duration(milliseconds: 500),
     )..repeat();
 
     _glowAnim = AnimationController(
@@ -719,26 +712,20 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   //  게임 루프 — Ticker 콜백
   //  elapsed: Ticker.start() 이후 누적 Duration (매 vsync마다 호출)
   // ────────────────────────────────────────────────────────────────────────
-  void _onTickerTick(Duration elapsed) {
+  // ── 게임루프 콜백 (Timer.periodic 16ms 마다 호출) ──
+  void _onGameTick(Timer _) {
     if (_phase != _Phase.racing) return;
 
-    // ── 첫 틱: _prevElapsedDur를 현재 elapsed로 초기화 (누적값 점프 방지) ──
-    // Ticker.start()를 재호출해도 elapsed는 0부터 다시 시작하지 않으므로
-    // 첫 틱에서 기준점을 현재 elapsed로 설정해야 diffMs가 정상(~16ms)이 됨
-    if (_prevElapsedDur == Duration.zero) {
-      _prevElapsedDur = elapsed;
-      return; // 첫 틱은 dt 계산 생략 (다음 틱부터 정상 진행)
+    final now = DateTime.now();
+    final double realDt;
+    if (_lastTickTime == null) {
+      realDt = 0.016; // 첫 틱: 기본값 16ms
+    } else {
+      final diffMs = now.difference(_lastTickTime!).inMilliseconds;
+      // 비정상 dt 클램프: 최소 1ms, 최대 100ms
+      realDt = diffMs.clamp(1, 100) / 1000.0;
     }
-
-    // 실제 경과 시간(초) 계산
-    final diffMs = elapsed.inMicroseconds - _prevElapsedDur.inMicroseconds;
-    _prevElapsedDur = elapsed;
-
-    // 비정상적으로 큰 dt(100ms 이상) 스킵 — 탭 전환/백그라운드 복귀 시 보호
-    if (diffMs <= 0 || diffMs > 100000) return;
-
-    // realDt: 초 단위 (Web 60fps → ~16ms)
-    final realDt = diffMs / 1000000.0; // microseconds → seconds
+    _lastTickTime = now;
 
     _elapsed += realDt;
 
@@ -853,9 +840,10 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       }
     }
 
-    if (!anyRunning && _phase == _Phase.racing) { _doFinish(); }
-    // Ticker 콜백 안에서는 setState 불필요:
-    // _renderNotifier.repeat()이 매 16ms마다 AnimatedBuilder를 리빌드함
+    if (!anyRunning && _phase == _Phase.racing) { _doFinish(); return; }
+
+    // Timer 콜백에서 setState로 매 틱마다 화면 갱신
+    if (mounted) setState(() {});
   }
 
   // 레이스 경과 시간 (결과 팝업 표시용)
@@ -876,7 +864,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }
     if (_raceElapsed == 0.0) _raceElapsed = _elapsed;
     _phase = _Phase.finishing;
-    _ticker?.stop(); // Ticker 정지
+    _gameTimer?.cancel(); // 타이머 정지
+    _gameTimer = null;
 
     _fadeAnim.forward().then((_) {
       if (mounted) setState(() => _phase = _Phase.result);
@@ -884,19 +873,21 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   }
 
   void _startRace() {
-    if (_phase != _Phase.waiting) return; // 중복 실행 방지
+    if (_phase != _Phase.waiting) return;
 
-    // ── Ticker 재생성: stop/start 재사용 시 elapsed 누적 → diffMs 폭증 버그 방지 ──
-    // 새 Ticker는 start() 시 elapsed가 항상 Duration.zero부터 시작함
-    _ticker?.stop();
-    _ticker?.dispose();
-    _ticker = createTicker(_onTickerTick);
-
-    // _prevElapsedDur = Duration.zero: _onTickerTick 첫 틱에서 기준점 자동 설정
-    _prevElapsedDur = Duration.zero;
+    // 기존 타이머 정리
+    _gameTimer?.cancel();
+    _lastTickTime = null;
 
     _phase = _Phase.racing;
-    _ticker!.start();
+
+    // Timer.periodic: 16ms(~60fps) 주기로 게임루프 실행
+    // Web/iframe 환경에서 Ticker보다 훨씬 안정적
+    _gameTimer = Timer.periodic(
+      const Duration(milliseconds: 16),
+      _onGameTick,
+    );
+
     _zoomAnim.reset();
     _zoomAnim.forward();
     if (mounted) setState(() {});
@@ -904,8 +895,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
   @override
   void dispose() {
-    _ticker?.stop();
-    _ticker?.dispose();
+    _gameTimer?.cancel();
+    _gameTimer = null;
     _renderNotifier.dispose();
     _glowAnim.dispose();
     _zoomAnim.dispose();
