@@ -1,38 +1,99 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="경마통 RE-RACE AI SIMULATOR — AI 기반 경마 시뮬레이터. 서울·부산경남·제주 경마장 실제 도면 기반 모의레이스 엔진">
+  <meta name="keywords" content="경마통,경마,AI시뮬레이터,모의레이스,서울경마,부산경남,제주경마,KRA">
+  <meta name="author" content="경마통 RE-RACE AI SIMULATOR">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="경마통 RE-RACE AI SIMULATOR">
+  <meta property="og:description" content="AI 기반 경마 시뮬레이터 — 서울·부산경남·제주 3개 경마장 실제 도면 기반 모의레이스">
+  <meta property="og:image" content="icons/Icon-512.png">
+  <meta property="og:url" content="https://www.boratalk.live">
+  <meta property="og:type" content="website">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="race_master">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="경마통">
+  <meta name="theme-color" content="#0A1628">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>race_master</title>
+  <title>경마통 RE-RACE AI SIMULATOR</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    /* 로딩 스플래시 */
+    body {
+      background-color: #0A1628;
+      margin: 0;
+      padding: 0;
+    }
+    #loading-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #0A1628;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    #loading-overlay img {
+      width: 120px;
+      height: 120px;
+      border-radius: 24px;
+      margin-bottom: 24px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    #loading-overlay .title {
+      color: #C8A84B;
+      font-size: 28px;
+      font-weight: bold;
+      font-family: sans-serif;
+      letter-spacing: 2px;
+    }
+    #loading-overlay .sub {
+      color: rgba(255,255,255,0.5);
+      font-size: 13px;
+      font-family: sans-serif;
+      margin-top: 8px;
+      letter-spacing: 1px;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.75; transform: scale(0.96); }
+    }
+  </style>
 </head>
 <body>
+  <!-- 로딩 스플래시 -->
+  <div id="loading-overlay">
+    <img src="icons/Icon-192.png" alt="경마통">
+    <div class="title">경마통</div>
+    <div class="sub">RE-RACE AI SIMULATOR</div>
+  </div>
+
+  <script>
+    // Flutter 로드 완료 시 스플래시 제거
+    window.addEventListener('flutter-first-frame', function() {
+      var overlay = document.getElementById('loading-overlay');
+      if (overlay) {
+        overlay.style.transition = 'opacity 0.4s ease';
+        overlay.style.opacity = '0';
+        setTimeout(function() { overlay.remove(); }, 400);
+      }
+    });
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

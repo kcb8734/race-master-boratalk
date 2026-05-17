@@ -1,55 +1,85 @@
-# ══════════════════════════════════════════════════════════════════
-#  경마통 Race Master — Cloudflare Pages CI/CD 파이프라인
-#  트리거: main 브랜치 push → Flutter 빌드 → Cloudflare Pages 배포
-#  도메인: www.boratalk.live
-# ══════════════════════════════════════════════════════════════════
-name: Deploy to Cloudflare Pages
+# ══════════════════════════════════════════════════════════════════════
+#  경마통 RE-RACE AI SIMULATOR — Cloudflare Pages CI/CD 파이프라인
+#  ▸ 트리거 : main 브랜치 push
+#  ▸ 빌드   : flutter build web --release  (Framework Preset: None)
+#  ▸ 출력   : build/web
+#  ▸ 배포   : Cloudflare Pages → www.boratalk.live
+#  ▸ Flutter: 3.35.4 (버전 고정)
+# ══════════════════════════════════════════════════════════════════════
+name: 🏇 Deploy to Cloudflare Pages
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:   # 수동 트리거 허용
+
+env:
+  FLUTTER_VERSION: "3.35.4"   # 빌드 환경 버전 고정
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    name: Build Flutter Web & Deploy
+    name: Flutter Build → Cloudflare Pages
+
+    permissions:
+      contents: read
+      deployments: write
 
     steps:
-      # ── 1. 소스 체크아웃 ──────────────────────────────────────────
-      - name: Checkout repository
+      # ── 1. 소스 체크아웃 ──────────────────────────────────────────────
+      - name: ① Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # ── 2. Flutter SDK 설치 (3.35.4 버전 고정) ────────────────────
-      - name: Setup Flutter
+      # ── 2. Flutter SDK 설치 (버전 고정: 3.35.4) ───────────────────────
+      - name: ② Setup Flutter ${{ env.FLUTTER_VERSION }}
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.4'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
 
-      # ── 3. 의존성 설치 ────────────────────────────────────────────
-      - name: Install dependencies
+      # ── 3. Flutter 버전 확인 ───────────────────────────────────────────
+      - name: ③ Verify Flutter version
+        run: |
+          flutter --version
+          dart --version
+
+      # ── 4. 의존성 설치 ────────────────────────────────────────────────
+      - name: ④ flutter pub get
         run: flutter pub get
 
-      # ── 4. 코드 분석 (에러만 차단, info는 허용) ───────────────────
-      - name: Analyze code
+      # ── 5. 코드 분석 (info 허용, error 차단) ──────────────────────────
+      - name: ⑤ flutter analyze
         run: flutter analyze --no-fatal-infos
-        continue-on-error: false
 
-      # ── 5. Flutter Web 릴리즈 빌드 ────────────────────────────────
-      #    Framework Preset: None
-      #    Build command:    flutter build web --release
-      #    Output directory: build/web
-      - name: Build Flutter Web (Release)
+      # ── 6. Flutter Web 릴리즈 빌드 ────────────────────────────────────
+      #    Framework Preset : None
+      #    Build command    : flutter build web --release
+      #    Output directory : build/web
+      - name: ⑥ flutter build web --release
         run: |
           flutter build web --release \
-            --dart-define=flutter.inspector.structuredErrors=false
+            --dart-define=flutter.inspector.structuredErrors=false \
+            --dart-define=debugShowCheckedModeBanner=false
+        env:
+          FLUTTER_VERSION: ${{ env.FLUTTER_VERSION }}
 
-      # ── 6. Cloudflare Pages 배포 ──────────────────────────────────
-      #    Secrets 필요: CF_API_TOKEN, CF_ACCOUNT_ID
-      - name: Deploy to Cloudflare Pages
+      # ── 7. 빌드 결과 확인 ─────────────────────────────────────────────
+      - name: ⑦ Verify build output
+        run: |
+          echo "📦 build/web 디렉토리 내용:"
+          ls -la build/web/
+          echo "📊 총 크기: $(du -sh build/web/ | cut -f1)"
+
+      # ── 8. Cloudflare Pages 배포 ──────────────────────────────────────
+      #    Secrets 필요:
+      #      CF_API_TOKEN  : Cloudflare API 토큰 (Edit Cloudflare Pages 권한)
+      #      CF_ACCOUNT_ID : Cloudflare 계정 ID
+      - name: ⑧ Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -58,11 +88,15 @@ jobs:
           directory: build/web
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
           branch: main
+          wranglerVersion: '3'
 
-      # ── 7. 배포 완료 알림 ─────────────────────────────────────────
-      - name: Deployment Summary
+      # ── 9. 배포 완료 요약 ─────────────────────────────────────────────
+      - name: ⑨ Deployment Summary
+        if: success()
         run: |
-          echo "✅ 배포 완료!"
-          echo "🌐 도메인: https://www.boratalk.live"
-          echo "📦 빌드: build/web"
-          echo "🕐 시각: $(date '+%Y-%m-%d %H:%M:%S KST')"
+          echo "╔══════════════════════════════════════════╗"
+          echo "║  🏇 경마통 배포 완료!                        ║"
+          echo "║  🌐 https://www.boratalk.live             ║"
+          echo "║  📦 출력: build/web                       ║"
+          echo "║  🕐 $(date '+%Y-%m-%d %H:%M UTC')          ║"
+          echo "╚══════════════════════════════════════════╝"

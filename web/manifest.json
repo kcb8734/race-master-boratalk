@@ -1,11 +1,11 @@
 {
-    "name": "race_master",
-    "short_name": "race_master",
+    "name": "경마통 RE-RACE AI SIMULATOR",
+    "short_name": "경마통",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0A1628",
+    "theme_color": "#C8A84B",
+    "description": "AI 기반 경마 시뮬레이터 — 서울·부산경남·제주 경마장 실제 도면 기반 모의레이스",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
