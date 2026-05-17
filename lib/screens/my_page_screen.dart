@@ -1,0 +1,631 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/race_provider.dart';
+import '../utils/app_theme.dart';
+
+class MyPageScreen extends StatelessWidget {
+  const MyPageScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF050D1A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildHeader(),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 32),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildProfileCard(context),
+                    const SizedBox(height: 20),
+                    _buildSubscriptionSection(context),
+                    const SizedBox(height: 20),
+                    _buildMenuSection(context),
+                    const SizedBox(height: 20),
+                    _buildLegalSection(context),
+                    const SizedBox(height: 20),
+                    _buildAppInfo(),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      color: const Color(0xFF0A1628),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A2A3A),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF3A5A7A)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('👤', style: TextStyle(fontSize: 16)),
+                SizedBox(width: 6),
+                Text('마이페이지',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15, fontWeight: FontWeight.w900)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileCard(BuildContext context) {
+    return Consumer<RaceProvider>(
+      builder: (_, provider, __) => Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0C1A2E), Color(0xFF071220)],
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+              color: const Color(0xFFFFD700).withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 60, height: 60,
+              decoration: BoxDecoration(
+                gradient: AppTheme.goldGradient,
+                shape: BoxShape.circle,
+              ),
+              child: const Center(
+                child: Text('🏇', style: TextStyle(fontSize: 28)),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    provider.isPremium ? '프리미엄 회원' : '일반 회원',
+                    style: TextStyle(
+                        color: provider.isPremium
+                            ? const Color(0xFFFFD700)
+                            : Colors.white.withValues(alpha: 0.6),
+                        fontSize: 11, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text('경마통 사용자',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      _statBadge('사용', provider.isPremium ? '무제한' : '무료 ${provider.remainingFree}회'),
+                      const SizedBox(width: 8),
+                      _statBadge('레이스', '시뮬레이션'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (!provider.isPremium)
+              GestureDetector(
+                onTap: () => _showUpgradeDialog(context, provider),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    gradient: AppTheme.goldGradient,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text('업그레이드',
+                      style: TextStyle(
+                          color: Color(0xFF1A1A1A),
+                          fontSize: 10, fontWeight: FontWeight.w900)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statBadge(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text('$label: $value',
+          style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.6),
+              fontSize: 9.5)),
+    );
+  }
+
+  Widget _buildSubscriptionSection(BuildContext context) {
+    return Consumer<RaceProvider>(
+      builder: (_, provider, __) {
+        if (provider.isPremium) {
+          return Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFFFFD700).withValues(alpha: 0.12),
+                  const Color(0xFF0C1A2E),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.4)),
+            ),
+            child: const Row(
+              children: [
+                Text('👑', style: TextStyle(fontSize: 28)),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('프리미엄 구독 활성',
+                          style: TextStyle(
+                              color: Color(0xFFFFD700),
+                              fontSize: 14, fontWeight: FontWeight.w900)),
+                      SizedBox(height: 3),
+                      Text('전 레이스 무제한 AI 시뮬레이션 이용 가능',
+                          style: TextStyle(
+                              color: Colors.white, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C1A2E),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF1A2A3A)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('💡 프리미엄으로 업그레이드',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              _benefitRow('✅', '전 레이스 무제한 AI 시뮬레이션'),
+              _benefitRow('✅', '23개 API 실시간 스탯 분석'),
+              _benefitRow('✅', '고배당 복병마 조합 추천'),
+              _benefitRow('✅', '경주별 상세 AI 인사이트'),
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () => _showUpgradeDialog(context, provider),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    gradient: AppTheme.goldGradient,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    '👑  월 9,900원으로 시작하기',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: Color(0xFF1A1A1A),
+                        fontSize: 14, fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _benefitRow(String icon, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Text(icon, style: const TextStyle(fontSize: 12)),
+          const SizedBox(width: 6),
+          Text(text,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7), fontSize: 11)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMenuSection(BuildContext context) {
+    final menus = [
+      ('🔔', '공지사항', '최신 업데이트 및 서비스 안내', () => _showNoticeSheet(context)),
+      ('⭐', '앱 평점 남기기', '경마통에 별점을 주세요!', null),
+      ('📤', '친구에게 공유', '경마통을 친구에게 추천하세요', null),
+      ('📧', '문의하기', '서비스 관련 문의 및 버그 신고', null),
+    ];
+
+    return _menuGroup('⚙️ 앱 설정', menus, context);
+  }
+
+  Widget _buildLegalSection(BuildContext context) {
+    final menus = [
+      ('📜', '이용약관', '서비스 이용약관 확인', () => _showTermsSheet(context)),
+      ('🔒', '개인정보처리방침', '개인정보 수집 및 이용 안내', () => _showPrivacySheet(context)),
+      ('⚖️', '법적 고지', '책임의 한계 및 법적 고지사항', () => _showLegalNoticeSheet(context)),
+    ];
+
+    return _menuGroup('📋 약관 및 정책', menus, context);
+  }
+
+  Widget _menuGroup(String title, List<(String, String, String, VoidCallback?)> items, BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(
+                  gradient: AppTheme.goldGradient,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(title,
+                  style: const TextStyle(
+                      color: AppTheme.textWhite,
+                      fontSize: 13, fontWeight: FontWeight.w800)),
+            ],
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C1A2E),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF1A2A3A)),
+          ),
+          child: Column(
+            children: items.asMap().entries.map((e) {
+              final i = e.key;
+              final (emoji, label, sub, onTap) = e.value;
+              return GestureDetector(
+                onTap: onTap,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 13),
+                  decoration: BoxDecoration(
+                    border: i < items.length - 1
+                        ? const Border(
+                            bottom: BorderSide(
+                                color: Color(0xFF1A2A3A), width: 0.7))
+                        : null,
+                  ),
+                  child: Row(
+                    children: [
+                      Text(emoji, style: const TextStyle(fontSize: 18)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(label,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                            Text(sub,
+                                style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.4),
+                                    fontSize: 10.5)),
+                          ],
+                        ),
+                      ),
+                      if (onTap != null)
+                        Icon(Icons.chevron_right,
+                            color: Colors.white.withValues(alpha: 0.3),
+                            size: 18),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAppInfo() {
+    return Center(
+      child: Column(
+        children: [
+          const Text('🏇', style: TextStyle(fontSize: 32)),
+          const SizedBox(height: 6),
+          const Text('경마통',
+              style: TextStyle(
+                  color: Color(0xFFFFD700),
+                  fontSize: 16, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text('버전 1.0.0  ·  AI 모의 레이스',
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.35), fontSize: 11)),
+          const SizedBox(height: 4),
+          Text('© 2025 경마통. All rights reserved.',
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.25), fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
+  void _showUpgradeDialog(BuildContext context, RaceProvider provider) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0C1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('👑 프리미엄 업그레이드',
+            style: TextStyle(color: Color(0xFFFFD700),
+                fontSize: 16, fontWeight: FontWeight.w900)),
+        content: Text('월 9,900원으로 전 레이스 무제한 이용이 가능합니다.\n지금 업그레이드 하시겠습니까?',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.8),
+                fontSize: 12, height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('취소',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
+          ),
+          TextButton(
+            onPressed: () {
+              provider.setPremium(true);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('👑 프리미엄이 활성화되었습니다!'),
+                  backgroundColor: Color(0xFF1A3A1A),
+                ),
+              );
+            },
+            child: const Text('구독하기',
+                style: TextStyle(
+                    color: Color(0xFFFFD700), fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNoticeSheet(BuildContext context) {
+    _showInfoSheet(context, '🔔 공지사항', [
+      _NoticeItem('v1.0.0 서비스 출시', '2025.05.17',
+          '경마통 AI 모의 레이스 서비스가 출시되었습니다. 23개 API 데이터 기반 AI 분석으로 더욱 정확한 레이스 예측을 제공합니다.'),
+      _NoticeItem('서울/부산경남/제주 전 경마장 지원', '2025.05.17',
+          '국내 3개 경마장의 모든 경주를 지원합니다. 각 경마장별 트랙 특성이 AI 시뮬레이션에 반영됩니다.'),
+      _NoticeItem('개인정보처리방침 안내', '2025.05.01',
+          '서비스 이용 전 개인정보처리방침을 반드시 확인해 주시기 바랍니다.'),
+    ]);
+  }
+
+  void _showTermsSheet(BuildContext context) {
+    _showTextSheet(context, '📜 이용약관',
+      '''제1조 (목적)
+본 약관은 경마통(이하 "서비스")이 제공하는 AI 모의 레이스 서비스의 이용과 관련하여 서비스와 이용자 간의 권리, 의무 및 책임사항을 규정함을 목적으로 합니다.
+
+제2조 (서비스 내용)
+① 경마통은 KRA 공식 데이터를 기반으로 AI 분석 정보 및 모의 레이스 시뮬레이션을 제공합니다.
+② 본 서비스는 정보 제공 목적으로만 운영되며, 실제 경마 결과와 일치하지 않을 수 있습니다.
+③ 프리미엄 서비스는 월 9,900원의 구독료가 부과됩니다.
+
+제3조 (이용자 의무)
+① 이용자는 서비스를 통해 제공되는 정보를 불법 도박 등 부정한 목적으로 이용해서는 안 됩니다.
+② 이용자는 타인의 정보를 무단으로 수집하거나 이용해서는 안 됩니다.
+
+제4조 (책임의 한계)
+① 경마통이 제공하는 AI 분석 정보는 참고용이며, 실제 투표 결과에 대한 책임을 지지 않습니다.
+② 서비스 장애, 데이터 지연 등에 의한 손해에 대해 책임을 지지 않습니다.
+
+제5조 (지식재산권)
+서비스 내 모든 콘텐츠(AI 분석, UI 디자인 등)의 지식재산권은 경마통에 귀속됩니다.''');
+  }
+
+  void _showPrivacySheet(BuildContext context) {
+    _showTextSheet(context, '🔒 개인정보처리방침',
+      '''1. 수집하는 개인정보 항목
+- 서비스 이용 기록 (경주 조회, 시뮬레이션 실행)
+- 구독 결제 정보 (결제 처리 목적)
+- 기기 정보 (앱 최적화 목적)
+
+2. 개인정보의 수집 및 이용 목적
+- AI 분석 서비스 제공 및 개선
+- 구독 서비스 관리
+- 고객 문의 대응
+
+3. 개인정보의 보유 및 이용 기간
+- 서비스 이용 기간 동안 보유
+- 관련 법령에 따라 일정 기간 보관 후 파기
+
+4. 개인정보의 제3자 제공
+- 원칙적으로 이용자의 개인정보를 제3자에게 제공하지 않습니다.
+- 법령의 규정에 의한 경우 예외로 합니다.
+
+5. 개인정보 보호 책임자
+- 담당: 경마통 개발팀
+- 이메일: pizon8113@gmail.com
+
+6. 이용자의 권리
+이용자는 언제든지 개인정보 열람, 정정, 삭제를 요청할 수 있습니다.''');
+  }
+
+  void _showLegalNoticeSheet(BuildContext context) {
+    _showTextSheet(context, '⚖️ 법적 고지',
+      '''■ 서비스 목적
+경마통은 KRA(한국마사회) 공식 API 데이터를 활용한 AI 분석 정보 제공 서비스입니다. 본 서비스는 교육 및 오락 목적의 정보 제공 서비스이며, 실제 "마권 구매"와는 무관합니다.
+
+■ 면책 조항
+① 본 서비스에서 제공하는 AI 예측 정보는 통계적 분석에 기반한 참고 자료입니다.
+② 실제 경마 결과는 예측과 다를 수 있으며, 이로 인한 손해에 대해 경마통은 책임지지 않습니다.
+③ 만 19세 미만은 경마 관련 서비스 이용이 제한될 수 있습니다.
+
+■ 도박 중독 예방
+경마 도박 중독 상담: 국번없이 1336 (24시간)
+한국도박문제관리센터: www.kcgp.or.kr
+
+■ 데이터 출처
+- 한국마사회(KRA) 공식 Open API
+- 실시간 경주 데이터 제공''');
+  }
+
+  void _showInfoSheet(BuildContext context, String title, List<_NoticeItem> items) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0C1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        maxChildSize: 0.95,
+        minChildSize: 0.4,
+        expand: false,
+        builder: (_, ctrl) => Column(
+          children: [
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(title,
+                  style: const TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 16, fontWeight: FontWeight.w900)),
+            ),
+            Expanded(
+              child: ListView(
+                controller: ctrl,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                children: items.map((n) => Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF071220),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF1A2A3A)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(n.title,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13, fontWeight: FontWeight.w800)),
+                          ),
+                          Text(n.date,
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.4),
+                                  fontSize: 10)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(n.content,
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.6),
+                              fontSize: 11, height: 1.5)),
+                    ],
+                  ),
+                )).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showTextSheet(BuildContext context, String title, String content) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0C1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.80,
+        maxChildSize: 0.95,
+        minChildSize: 0.4,
+        expand: false,
+        builder: (_, ctrl) => Column(
+          children: [
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(title,
+                  style: const TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 16, fontWeight: FontWeight.w900)),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                controller: ctrl,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                child: Text(content,
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.75),
+                        fontSize: 12, height: 1.7)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NoticeItem {
+  final String title;
+  final String date;
+  final String content;
+  const _NoticeItem(this.title, this.date, this.content);
+}
