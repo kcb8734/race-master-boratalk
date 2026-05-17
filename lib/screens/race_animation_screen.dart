@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:async';
 import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
@@ -614,8 +615,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   late double _boost200;
   late double _spurt100;
 
-  // 게이트뷰 페이드아웃: _zoomAnim (AnimationController) 으로 안정적으로 처리
-  // JS loop 의존 제거 → 브라우저 throttle과 무관
+  // 게이트뷰 Widget 오버레이 opacity (0.0~1.0)
+  // START 탭 후 Timer로 16ms마다 감소 → CSS Opacity transition (브라우저 compositor)
+  double _gateOpacity = 1.0;
 
   // 경주 방향 — 모든 경주장 CCW
   bool get _isCW   => false; // 항상 CCW
@@ -909,14 +911,25 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _gameActive = true;
     _phase = _Phase.racing;
 
-    // ★ 게이트뷰 페이드아웃: JS loop 의존 제거 → AnimationController로 처리
-    // _zoomAnim: 0.0→1.0 forward (역방향 사용: 1.0에서 시작해서 0.0으로)
-    // 실제로는 _zoomAnim.value를 (1.0 - value)로 사용
-    _zoomAnim.value = 0.0;
-    _zoomAnim.animateTo(1.0, duration: const Duration(milliseconds: 800));
-
     // 브라우저 네이티브 setTimeout 게임루프 시작
     _scheduleNext();
+
+    // 게이트뷰 페이드아웃: dart:async Timer로 16ms마다 opacity 감소
+    // - Flutter AnimationController / JS loop 완전 독립
+    // - setState로 Widget 레벨 opacity 갱신 → CSS compositor가 처리
+    _gateOpacity = 1.0;
+    const steps = 50; // 800ms / 16ms = 50 steps
+    const stepDt = 1.0 / steps;
+    var tick = 0;
+    Timer.periodic(const Duration(milliseconds: 16), (t) {
+      tick++;
+      if (!mounted || tick >= steps) {
+        t.cancel();
+        if (mounted) setState(() => _gateOpacity = 0.0);
+        return;
+      }
+      if (mounted) setState(() => _gateOpacity = 1.0 - (stepDt * tick));
+    });
 
     if (mounted) setState(() {});
   }
@@ -951,37 +964,56 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
           // ── 레이스 캔버스 ──
           // _renderTick: JS setTimeout 루프에서 직접 트리거 (Flutter 스케줄러 우회)
           // _gatePulse / _glowAnim: 게이트뷰 펄스 + 부스터 글로우 (AnimationController)
+          // ── 레이스 트랙 캔버스 ──
+          // 항상 트랙을 그림 (게이트뷰는 망의 Widget로 오버레이)
           Positioned.fill(
             child: AnimatedBuilder(
-              // _zoomAnim 추가: 게이트뷰 페이드아웃을 AnimationController로 안정적으로 처리
-              // _renderTick: JS 루프에서 물리연산 결과 트리거
-              animation: Listenable.merge([_gatePulse, _glowAnim, _zoomAnim, _renderTick]),
+              animation: Listenable.merge([_glowAnim, _renderTick]),
               builder: (_, __) => CustomPaint(
                 painter: _RacePainter(
-                  horses:     _horses,
-                  distance:   widget.race.distance,
-                  raceNo:     widget.race.raceNo,
-                  venueCode:  widget.race.venueCode,
-                  venueName:  _venueName,
-                  startP:     _startP,
-                  goalP:      _goalP,
-                  boost400:   _boost400,
-                  boost200:   _boost200,
-                  spurt100:   _spurt100,
-                  frameIdx:   _frameIdx,
-                  glowVal:    _glowAnim.value,
-                  gatePulse:  _gatePulse.value,
-                  // 게이트뷰 페이드아웃: _zoomAnim.value 0→1.0 → zoomVal 1.0→0.0
-                  // JS loop 의존 없이 AnimationController가 안정적으로 처리
-                  zoomVal:    1.0 - _zoomAnim.value,
-                  phase:      _phase,
-                  ranking:    _ranking,
-                  isJeju:     _isJeju,
-                  isCW:       _isCW,
+                  horses:    _horses,
+                  distance:  widget.race.distance,
+                  raceNo:    widget.race.raceNo,
+                  venueCode: widget.race.venueCode,
+                  venueName: _venueName,
+                  startP:    _startP,
+                  goalP:     _goalP,
+                  boost400:  _boost400,
+                  boost200:  _boost200,
+                  spurt100:  _spurt100,
+                  frameIdx:  _frameIdx,
+                  glowVal:   _glowAnim.value,
+                  gatePulse: 0.0, // 게이트뷰가 Widget로 이전되므로 미사용
+                  ranking:   _ranking,
+                  isJeju:    _isJeju,
+                  isCW:      _isCW,
                 ),
               ),
             ),
           ),
+
+          // ── 게이트뷰 Widget 오버레이 ──
+          // 대기 중: 불투명(opacity:1), START 탭 후: AnimatedOpacity로 0.8초 페이드아웃
+          // Canvas saveLayer 의존 완전 제거 → 브라우저 compositor가 처리
+          if (_phase == _Phase.waiting || _gateOpacity > 0.01)
+            AnimatedOpacity(
+              opacity: _gateOpacity,
+              duration: Duration.zero, // 수동 제어 (값이 입힙되면 즉시 적용)
+              child: AnimatedBuilder(
+                animation: _gatePulse,
+                builder: (_, __) => CustomPaint(
+                  painter: _GatePainter(
+                    horses:    _horses,
+                    distance:  widget.race.distance,
+                    raceNo:    widget.race.raceNo,
+                    venueCode: widget.race.venueCode,
+                    venueName: _venueName,
+                    gatePulse: _gatePulse.value,
+                    isJeju:    _isJeju,
+                  ),
+                ),
+              ),
+            ),
 
           // ── 암전 오버레이 ──
           if (_phase == _Phase.finishing)
@@ -1188,8 +1220,7 @@ class _RacePainter extends CustomPainter {
   final String       venueName;
   final double       startP, goalP, boost400, boost200, spurt100;
   final int          frameIdx;
-  final double       glowVal, gatePulse, zoomVal;
-  final _Phase       phase;
+  final double       glowVal, gatePulse;
   final List<_Horse> ranking;
   final bool         isJeju; // 제주 전용 트랙 여부
   final bool         isCW;   // 항상 false (CCW)
@@ -1208,8 +1239,6 @@ class _RacePainter extends CustomPainter {
     required this.frameIdx,
     required this.glowVal,
     required this.gatePulse,
-    required this.zoomVal,
-    required this.phase,
     required this.ranking,
     required this.isJeju,
     required this.isCW,
@@ -1259,19 +1288,9 @@ class _RacePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final fullTr = _trackRect(size);
-
-    if (phase == _Phase.waiting) {
-      // ── 대기 중: 게이트뷰만 ──
-      _paintGateView(canvas, size, fullTr, 1.0);
-    } else {
-      // ── 레이스 중 / finishing / result ──
-      // 트랙 즘시 표시 (alpha 제한 없음)
-      _paintFullTrack(canvas, size, fullTr);
-      // 게이트뷰 페이드아웃 오버레이 (0.8초 동안)
-      if (zoomVal > 0.01) {
-        _paintGateView(canvas, size, fullTr, zoomVal);
-      }
-    }
+    // 항상 트랙만 그림
+    // 게이트뷰는 Widget 레벨 AnimatedOpacity로 처리 (canvas 블렌딩 문제 완전 제거)
+    _paintFullTrack(canvas, size, fullTr);
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -2741,6 +2760,38 @@ class _RacePainter extends CustomPainter {
       centered ? pos.dx - tp.width  / 2 : pos.dx,
       centered ? pos.dy - tp.height / 2 : pos.dy,
     ));
+  }
+
+  @override
+  bool shouldRepaint(_RacePainter old) => true;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  게이트뷰 전용 Painter (Widget 레벨 AnimatedOpacity 오버레이용)
+//  _RacePainter를 extend해서 게이트뷰 메서드만 재사용
+// ══════════════════════════════════════════════════════════════════════
+class _GatePainter extends _RacePainter {
+  _GatePainter({
+    required super.horses,
+    required super.distance,
+    required super.raceNo,
+    required super.venueCode,
+    required super.venueName,
+    required super.gatePulse,
+    required super.isJeju,
+  }) : super(
+    startP:   0, goalP:  1, boost400: 0,
+    boost200: 0, spurt100: 0,
+    frameIdx: 0, glowVal:  0,
+    ranking:  const [],
+    isCW:     false,
+  );
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final fullTr = _trackRect(size);
+    // opacity는 Widget 레벨(AnimatedOpacity)이 처리하므로 항상 1.0으로 그림
+    _paintGateView(canvas, size, fullTr, 1.0);
   }
 
   @override
