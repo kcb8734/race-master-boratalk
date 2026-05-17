@@ -81,9 +81,12 @@ jobs:
       #  /deployments API 호출 실패 → npx wrangler@3 pages deploy 로 대체
       - name: ⑧ Deploy to Cloudflare Pages
         run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
           npx wrangler@3 pages deploy build/web \
             --project-name=race-master-boratalk \
             --branch=main \
+            --commit-hash="${COMMIT_SHA}" \
+            --commit-message="deploy ${COMMIT_SHA}" \
             --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
