@@ -929,89 +929,92 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A1628),
-      body: Stack(
-        children: [
-          // ── 레이스 캔버스 ──
-          // _renderTick: JS setTimeout 루프에서 직접 트리거 (Flutter 스케줄러 우회)
-          // _gatePulse / _glowAnim: 게이트뷰 펄스 + 부스터 글로우 (AnimationController)
-          // ── 레이스 트랙 캔버스 ──
-          // 항상 트랙을 그림 (게이트뷰는 망의 Widget로 오버레이)
-          Positioned.fill(
-            child: AnimatedBuilder(
-              animation: Listenable.merge([_glowAnim, _renderTick]),
-              builder: (_, __) => CustomPaint(
-                painter: _RacePainter(
-                  horses:    _horses,
-                  distance:  widget.race.distance,
-                  raceNo:    widget.race.raceNo,
-                  venueCode: widget.race.venueCode,
-                  venueName: _venueName,
-                  startP:    _startP,
-                  goalP:     _goalP,
-                  boost400:  _boost400,
-                  boost200:  _boost200,
-                  spurt100:  _spurt100,
-                  frameIdx:  _frameIdx,
-                  glowVal:   _glowAnim.value,
-                  gatePulse: 0.0, // 게이트뷰가 Widget로 이전되므로 미사용
-                  ranking:   _ranking,
-                  isJeju:    _isJeju,
-                  isCW:      _isCW,
-                ),
-              ),
-            ),
-          ),
-
-          // ── 게이트뷰 Widget 오버레이 ──
-          // 대기 중: 불투명(opacity:1), START 탭 후: AnimatedOpacity로 0.8초 페이드아웃
-          // Canvas saveLayer 의존 완전 제거 → 브라우저 compositor가 처리
-          if (_phase == _Phase.waiting || _gateOpacity > 0.01)
-            AnimatedOpacity(
-              opacity: _gateOpacity,
-              duration: Duration.zero, // 수동 제어 (값이 입힙되면 즉시 적용)
+      body: SizedBox.expand(
+        child: Stack(
+          fit: StackFit.expand, // ★ Stack 자체가 화면 전체를 채우도록 강제
+          children: [
+            // ── 레이스 트랙 캔버스 (항상 전체화면) ──
+            Positioned.fill(
               child: AnimatedBuilder(
-                animation: _gatePulse,
+                animation: Listenable.merge([_glowAnim, _renderTick]),
                 builder: (_, __) => CustomPaint(
-                  painter: _GatePainter(
+                  size: size, // ★ 명시적 size 전달 → paint() 에서 정확한 크기 사용
+                  painter: _RacePainter(
                     horses:    _horses,
                     distance:  widget.race.distance,
                     raceNo:    widget.race.raceNo,
                     venueCode: widget.race.venueCode,
                     venueName: _venueName,
-                    gatePulse: _gatePulse.value,
+                    startP:    _startP,
+                    goalP:     _goalP,
+                    boost400:  _boost400,
+                    boost200:  _boost200,
+                    spurt100:  _spurt100,
+                    frameIdx:  _frameIdx,
+                    glowVal:   _glowAnim.value,
+                    gatePulse: 0.0,
+                    ranking:   _ranking,
                     isJeju:    _isJeju,
+                    isCW:      _isCW,
                   ),
                 ),
               ),
             ),
 
-          // ── 암전 오버레이 ──
-          if (_phase == _Phase.finishing)
+            // ── 게이트뷰 Widget 오버레이 (전체화면 덮기) ──
+            // saveLayer 없이 Widget opacity로만 처리
+            if (_phase == _Phase.waiting || _gateOpacity > 0.01)
+              Positioned.fill( // ★ Positioned.fill → 부모 크기 상속
+                child: AnimatedOpacity(
+                  opacity: _gateOpacity,
+                  duration: Duration.zero,
+                  child: AnimatedBuilder(
+                    animation: _gatePulse,
+                    builder: (_, __) => CustomPaint(
+                      size: size, // ★ 명시적 size 전달
+                      painter: _GatePainter(
+                        horses:    _horses,
+                        distance:  widget.race.distance,
+                        raceNo:    widget.race.raceNo,
+                        venueCode: widget.race.venueCode,
+                        venueName: _venueName,
+                        gatePulse: _gatePulse.value,
+                        isJeju:    _isJeju,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // ── 암전 오버레이 (전체화면) ──
+            if (_phase == _Phase.finishing)
+              Positioned.fill(
+                child: AnimatedBuilder(
+                  animation: _fadeAnim,
+                  builder: (_, __) => ColoredBox(
+                    color: Colors.black.withValues(alpha: _fadeAnim.value * 0.92),
+                  ),
+                ),
+              ),
+
+            // ── 상단 HUD + 이벤트 배너 ──
             AnimatedBuilder(
-              animation: _fadeAnim,
-              builder: (_, __) => Container(
-                color: Colors.black.withValues(alpha: _fadeAnim.value * 0.92),
+              animation: _renderTick,
+              builder: (_, __) => Stack(
+                children: [
+                  _buildHUD(size),
+                  if (_phase == _Phase.racing) _buildEventBanner(),
+                ],
               ),
             ),
 
-          // ── 상단 HUD + 배너 (JS 루프 트리거로 실시간 갱신) ──
-          // _renderTick 구독: JS setTimeout마다 value++ → 즉시 리빌드
-          AnimatedBuilder(
-            animation: _renderTick,
-            builder: (_, __) => Stack(
-              children: [
-                _buildHUD(size),
-                if (_phase == _Phase.racing) _buildEventBanner(),
-              ],
-            ),
-          ),
+            // ── 스타트 버튼 ──
+            if (_phase == _Phase.waiting) _buildStartButton(size),
 
-          // ── 스타트 버튼 ──
-          if (_phase == _Phase.waiting) _buildStartButton(size),
-
-          // ── 결과 팝업 ──
-          if (_phase == _Phase.result) _buildResult(size),
-        ],
+            // ── 결과 팝업 ──
+            if (_phase == _Phase.result) _buildResult(size),
+          ],
+        ),
       ),
     );
   }
