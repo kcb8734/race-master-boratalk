@@ -120,8 +120,9 @@ class _TGJeju {
     final hw  = tr.width  * 0.38;   // 가로 반폭 (코너 반지름)
     final vr  = tr.height * 0.43;   // 세로 반높이
 
-    // clusterOff 클램핑: 트랙 너비(tw=16)의 절반 이내로 제한
-    final clamp = (hw * 0.35).clamp(0.0, 14.0);
+    // ★ clusterOff 클램핑: hw*0.08 이내 (트랙 폭의 8% = 약 ±4px)
+    // 과도한 오프셋은 말이 트랙 안/밖으로 벗어나는 원인
+    final clamp = (hw * 0.08).clamp(0.0, 5.0);
     final safeOff = clusterOff.clamp(-clamp, clamp);
 
     Offset result;
@@ -294,8 +295,8 @@ class _TG {
     final hw = tr.width  * 0.42;  // 가로 반폭 (코너 반지름)
     final hr = tr.height * 0.44;  // 세로 반높이 (직선 절반)
 
-    // clusterOff 클램핑: 트랙 폭 이내
-    final clamp = (hw * 0.30).clamp(0.0, 12.0);
+    // ★ clusterOff 클램핑: hw*0.08 이내 (트랙 폭의 8% = 약 ±4px)
+    final clamp = (hw * 0.08).clamp(0.0, 5.0);
     final safeOff = clusterOff.clamp(-clamp, clamp);
 
     Offset result;
@@ -567,36 +568,34 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   // 렌더 트리거: ValueNotifier → AnimatedBuilder 즉시 리빌드
   final ValueNotifier<int> _renderTick = ValueNotifier<int>(0);
 
-  // 기타 애니메이션 컨트롤러 (게이트뷰 펄스 / 글로우 / 결승 암전)
-  late AnimationController _glowAnim;  // 부스터 글로우 펄스
-  late AnimationController _zoomAnim;  // 스타트 줌 아웃 (미사용, 유지)
-  late AnimationController _fadeAnim;  // 결승 암전
-  late AnimationController _gatePulse; // 게이트 뷰 펄스 애니
+  // 애니메이션 컨트롤러
+  late AnimationController _glowAnim;    // 부스터 글로우 펄스
+  late AnimationController _zoomAnim;    // 미사용, dispose용 유지
+  late AnimationController _fadeAnim;    // 결승 암전
+  late AnimationController _gatePulse;  // 게이트뷰 펄스
+  late AnimationController _gateAnim;   // ★ 게이트뷰 페이드아웃 (Timer 대체)
 
   late List<_Horse>    _horses;
   final List<_Horse>   _ranking = [];
   _Phase _phase = _Phase.waiting;
 
-  double _elapsed  = 0.0;
-  int    _frameIdx = 0;
-  double _frameTmr = 0.0;
-  static const double _fps = 1 / 16.0; // 초당 ~14프레임
+  double _elapsed   = 0.0;
+  int    _frameIdx  = 0;
+  double _frameTmr  = 0.0;
+  static const double _fps = 1 / 14.0; // 초당 14프레임 (0.071s 간격)
+  DateTime? _lastTickTime; // ★ 실제 경과시간 측정용
 
   final Random _rng = Random(42);
 
   // 레이스 파라미터
-  late double _startP;    // 출발 진행률
-  late double _goalP;     // 결승선 진행률 (완주 = startP + 1)
-  late double _baseSec;   // 기준 속도(30초 = 1바퀴)
+  late double _startP;
+  late double _goalP;
+  late double _baseSec;
 
-  // 직선 구간 경계 (결승선 기준 역산)
   late double _boost400;
   late double _boost200;
   late double _spurt100;
 
-  // 게이트뷰 Widget 오버레이 opacity (0.0~1.0)
-  // START 탭 후 Timer로 16ms마다 감소 → CSS Opacity transition (브라우저 compositor)
-  double _gateOpacity = 1.0;
 
   // 경주 방향 — 모든 경주장 CCW
   bool get _isCW   => false; // 항상 CCW
@@ -637,6 +636,13 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1800),
     )..repeat(reverse: true);
+
+    // ★ 게이트뷰 페이드아웃 컨트롤러 (1.0→0.0, 600ms)
+    _gateAnim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+      value: 1.0, // 초기값: 완전 불투명
+    );
   }
 
   void _calcParams() {
@@ -713,8 +719,17 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     if (!_gameActive || _phase != _Phase.racing) return;
 
     try {
-    // dt: Timer.periodic 16ms 고정값 사용 (Flutter Web에서는 정확한 연산)
-    const double realDt = 0.016;
+    // ★ 실제 경과시간(DateTime) 기반 dt → 고정 16ms 대신 실측값 사용
+    final now = DateTime.now();
+    final double realDt;
+    if (_lastTickTime == null) {
+      realDt = 0.016; // 첫 tick은 기본값
+    } else {
+      final dtMs = now.difference(_lastTickTime!).inMicroseconds / 1000.0;
+      // 최소 8ms, 최대 50ms로 클램핑 (이상값 방어)
+      realDt = (dtMs / 1000.0).clamp(0.008, 0.050);
+    }
+    _lastTickTime = now;
 
     _elapsed += realDt;
 
@@ -752,11 +767,14 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         // 코너(Zone2): 감속 + 레인 위치에 따른 미세 변동
         final laneF = curMaxL > 1 ? h.gridLane / (curMaxL - 1.0) : 0.5;
         speedMult *= 0.84 + laneF * 0.04 + _rng.nextDouble() * 0.04;
-        // 코너 → clusterOff (렌더링용): 레인 → 오프셋 매핑
-        h.targetClOff = (h.gridLane - curMaxL / 2.0) * 2.5;
+        // ★ 코너 clusterOff: 트랙 너비 안에 머물도록 스케일 대폭 축소
+        // gridLane 0=안쪽, curMaxL-1=바깥쪽 → 오프셋 범위 ±3픽셀 이내
+        h.targetClOff = (h.gridLane - curMaxL / 2.0) * 0.4;
       } else {
+        // ★ 직선 clusterOff: 레인 간격 축소 (이전 1.8~3.5 → 0.5~0.8)
+        // 트랙 너비가 좁으므로 큰 오프셋은 트랙 밖/안으로 벗어남
         h.targetClOff = (h.gridLane - curMaxL / 2.0) *
-            (curMaxL > 4 ? 1.8 : curMaxL > 2 ? 2.5 : 3.5);
+            (curMaxL > 4 ? 0.5 : curMaxL > 2 ? 0.6 : 0.8);
       }
 
       // ── 2단계: Zone3(400m~200m) 부스터 ────────────────────────────────
@@ -887,24 +905,22 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     if (_phase != _Phase.waiting) return;
     if (_gameActive) return; // 중복 방지
 
+    // ★ 게이트뷰를 즉시 숨기고(opacity=0) 레이스 시작
+    // AnimationController로 600ms 페이드아웃 → Timer 중복 실행 완전 제거
+    _gateAnim.animateTo(0.0).then((_) {
+      // 페이드아웃 완료 후 게이트뷰 Widget 자체를 트리에서 제거 (성능)
+      if (mounted) setState(() {});
+    });
+
     // ★ phase와 gameActive를 setState 안에서 원자적으로 변경
     setState(() {
       _gameActive = true;
       _phase = _Phase.racing;
+      _lastTickTime = null; // dt 초기화
     });
 
     // 게임루프 시작 (dart:async Timer.periodic)
     _startGameTimer();
-
-    // 게이트뷰 페이드아웃 (800ms, 50 steps)
-    _gateOpacity = 1.0;
-    var tick = 0;
-    Timer.periodic(const Duration(milliseconds: 16), (t) {
-      tick++;
-      final done = tick >= 50;
-      if (mounted) setState(() => _gateOpacity = done ? 0.0 : 1.0 - tick / 50.0);
-      if (done) t.cancel();
-    });
   }
 
   @override
@@ -917,6 +933,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _zoomAnim.dispose();
     _fadeAnim.dispose();
     _gatePulse.dispose();
+    _gateAnim.dispose(); // ★ 추가
     super.dispose();
   }
 
@@ -961,30 +978,36 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
               ),
             ),
 
-            // ── 게이트뷰 Widget 오버레이 (전체화면 덮기) ──
-            // saveLayer 없이 Widget opacity로만 처리
-            if (_phase == _Phase.waiting || _gateOpacity > 0.01)
-              Positioned.fill( // ★ Positioned.fill → 부모 크기 상속
-                child: AnimatedOpacity(
-                  opacity: _gateOpacity,
-                  duration: Duration.zero,
-                  child: AnimatedBuilder(
-                    animation: _gatePulse,
-                    builder: (_, __) => CustomPaint(
-                      size: size, // ★ 명시적 size 전달
-                      painter: _GatePainter(
-                        horses:    _horses,
-                        distance:  widget.race.distance,
-                        raceNo:    widget.race.raceNo,
-                        venueCode: widget.race.venueCode,
-                        venueName: _venueName,
-                        gatePulse: _gatePulse.value,
-                        isJeju:    _isJeju,
+            // ── 게이트뷰 Widget 오버레이 ──
+            // _gateAnim: 1.0(대기)→0.0(페이드아웃완료)
+            // AnimatedBuilder로 _gateAnim 구독 → opacity 즉시 반영
+            AnimatedBuilder(
+              animation: _gateAnim,
+              builder: (_, __) {
+                final op = _gateAnim.value;
+                if (op <= 0.01) return const SizedBox.shrink(); // 완전 투명 시 Widget 제거
+                return Positioned.fill(
+                  child: Opacity(
+                    opacity: op,
+                    child: AnimatedBuilder(
+                      animation: _gatePulse,
+                      builder: (_, __) => CustomPaint(
+                        size: size,
+                        painter: _GatePainter(
+                          horses:    _horses,
+                          distance:  widget.race.distance,
+                          raceNo:    widget.race.raceNo,
+                          venueCode: widget.race.venueCode,
+                          venueName: _venueName,
+                          gatePulse: _gatePulse.value,
+                          isJeju:    _isJeju,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
+            ),
 
             // ── 암전 오버레이 (전체화면) ──
             if (_phase == _Phase.finishing)
@@ -1022,8 +1045,10 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   // ── HUD ──
   Widget _buildHUD(Size size) {
     final showTime = (_phase == _Phase.racing || _phase == _Phase.finishing);
-    final mins = (_elapsed ~/ 60).toString().padLeft(2, '0');
-    final secs = (_elapsed % 60).toStringAsFixed(1).padLeft(4, '0');
+    // ★ 타이머 표시: 정수 초 단위 (예: 01:23) — 소수점 제거로 "초 이하 단위" 오해 방지
+    final totalSec = _elapsed.floor();
+    final mins = (totalSec ~/ 60).toString().padLeft(2, '0');
+    final secs = (totalSec % 60).toString().padLeft(2, '0');
 
     return Positioned(
       top: 0, left: 0, right: 0,
