@@ -727,13 +727,14 @@ class _MarqueePainter extends CustomPainter {
     if (textW <= 0) return;
 
     // ── 오른쪽에서 왼쪽으로 흐르는 마퀴 스크롤 ──
-    // progress 0.0: 텍스트 오른쪽 끝에서 시작
-    // progress 1.0: 텍스트 왼쪽으로 textW 만큼 이동 완료 → 다시 처음
+    // progress 0.0→1.0 에 따라 왼쪽으로 textW 만큼 이동 → 무한 반복
+    // ★ 수정: Dart에서 -scrollX % textW 는 음수 피연산자로 인해 양수 반환
+    //         올바른 표현: -(scrollX % textW) → 항상 0 ~ -textW 범위 음수
     final scrollX = progress * textW;
     final ty = (size.height - tp.height) / 2;
 
-    // 첫 번째 복사본
-    final x0 = -scrollX % textW;
+    // 첫 번째 복사본 (x0: 0 → -(textW-ε) 범위, 왼쪽으로 이동)
+    final x0 = -(scrollX % textW);
     tp.paint(canvas, Offset(x0, ty));
 
     // 두 번째 복사본 (첫 번째 복사본 뒤에 이어붙여 끊김 방지)
