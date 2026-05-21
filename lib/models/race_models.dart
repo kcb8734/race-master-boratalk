@@ -75,10 +75,27 @@ class HorseEntry {
   final double formStat;      // 컨디션스탯(0~100)
   final double trackFitStat;  // 주로적성스탯(0~100)
   final double baseScore;     // 기본 AI 점수
-  double userBonus;           // 유저 배당 가점(-5~+5)
+  double userBonus;           // 유저 배당 가점(-5~+5)  ← UserGValue
   final String recentRecord;  // 최근 성적
   final double odds;          // 배당률
   bool isCancelled;           // 출전취소 여부
+
+  // ── KRA API 원시 파라미터 (데이터 매핑 엔진용) ────────────
+  /// 경주마 고유등록번호 (예: "KRA20190001234")
+  final String horseRegNo;
+
+  /// 통산 승률 (0.0~1.0) — KRA API: rcWinRate 또는 winCnt/rcCnt
+  final double rcWins;
+
+  /// 담당 기수 통산 승률 (0.0~1.0) — KRA API: jockeyWinRate
+  final double jockeyRcWins;
+
+  /// 부담중량 (kg, 통상 50~60kg) — KRA API: wgBudam
+  final double wgBudam;
+
+  /// 후반 G1F(마지막 1펄롱=200m) 성적 점수 (0.0~1.0 정규화)
+  /// kG1fBoostThreshold(0.65) 이상이면 Zone4 가속도 +25% 버프 대상
+  final double g1fRating;
 
   HorseEntry({
     required this.gateNo,
@@ -97,29 +114,49 @@ class HorseEntry {
     required this.recentRecord,
     required this.odds,
     this.isCancelled = false,
+    // API 원시 파라미터 (기본값: 미제공 시 중립값)
+    this.horseRegNo   = '',
+    this.rcWins       = 0.0,
+    this.jockeyRcWins = 0.0,
+    this.wgBudam      = 55.0,
+    this.g1fRating    = 0.5,
   });
 
-  /// 최종 AI 점수 = 기본점수 + (유저가점 * 배당가중치)
+  /// 최종 AI 점수 = 기본점수 + (유저가점(UserGValue) * 배당가중치)
   double get finalScore => baseScore + (userBonus * 2.5);
 
-  HorseEntry copyWith({double? userBonus, bool? isCancelled}) {
+  HorseEntry copyWith({
+    double? userBonus,
+    bool? isCancelled,
+    // API 원시 필드도 copyWith 지원
+    String? horseRegNo,
+    double? rcWins,
+    double? jockeyRcWins,
+    double? wgBudam,
+    double? g1fRating,
+  }) {
     return HorseEntry(
-      gateNo: gateNo,
-      horseName: horseName,
-      jockeyName: jockeyName,
-      trainerName: trainerName,
-      weight: weight,
+      gateNo:       gateNo,
+      horseName:    horseName,
+      jockeyName:   jockeyName,
+      trainerName:  trainerName,
+      weight:       weight,
       weightChange: weightChange,
-      rating: rating,
-      speedStat: speedStat,
-      staminaStat: staminaStat,
-      formStat: formStat,
+      rating:       rating,
+      speedStat:    speedStat,
+      staminaStat:  staminaStat,
+      formStat:     formStat,
       trackFitStat: trackFitStat,
-      baseScore: baseScore,
-      userBonus: userBonus ?? this.userBonus,
+      baseScore:    baseScore,
+      userBonus:    userBonus    ?? this.userBonus,
       recentRecord: recentRecord,
-      odds: odds,
-      isCancelled: isCancelled ?? this.isCancelled,
+      odds:         odds,
+      isCancelled:  isCancelled  ?? this.isCancelled,
+      horseRegNo:   horseRegNo   ?? this.horseRegNo,
+      rcWins:       rcWins       ?? this.rcWins,
+      jockeyRcWins: jockeyRcWins ?? this.jockeyRcWins,
+      wgBudam:      wgBudam      ?? this.wgBudam,
+      g1fRating:    g1fRating    ?? this.g1fRating,
     );
   }
 }

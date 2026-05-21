@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
+import '../models/race_horse_data.dart';
 import '../utils/horse_cap_colors.dart';
 
 
@@ -520,7 +521,8 @@ class _Horse {
   late double staminaNorm; // 0~1
   late double speedNorm;   // 0~1
   late double formNorm;    // 0~1
-  late double userBonus;   // -5~+5
+  late double userBonus;   // -5~+5  ← UserGValue
+  late double g1fNorm;     // 0~1  후반 G1F 성적 (Zone4 가속도 버프 판정용)
 
   _Horse({
     required this.entry,
@@ -535,6 +537,7 @@ class _Horse {
     speedNorm   = (entry.speedStat   / 100.0).clamp(0.0, 1.0);
     formNorm    = (entry.formStat    / 100.0).clamp(0.0, 1.0);
     userBonus   = entry.userBonus;
+    g1fNorm     = entry.g1fRating.clamp(0.0, 1.0);
     legPhase    = Random().nextDouble() * 2 * pi;
     headPhase   = Random().nextDouble() * 2 * pi;
     gridSegment = (prog * 50).floor();
@@ -669,37 +672,95 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
   void _initHorses() {
     final n = widget.horses.isEmpty ? 10 : widget.horses.length;
+
+    // ── 더미 엔트리 생성 (실제 API 데이터 없을 때) ──────────────────────
+    // 더미는 API 필드(rcWins, jockeyRcWins, wgBudam, g1fRating)를 포함
     final entries = widget.horses.isEmpty
-        ? List.generate(n, (i) => HorseEntry(
-            gateNo: i + 1,
-            horseName: '${i + 1}번마',
-            jockeyName: '기수${i + 1}',
-            trainerName: '',
-            weight: 440 + _rng.nextInt(40),
-            weightChange: _rng.nextInt(7) - 3,
-            rating: 60 + _rng.nextDouble() * 35,
-            speedStat:   40 + _rng.nextDouble() * 55,
-            staminaStat: 40 + _rng.nextDouble() * 55,
-            formStat:    40 + _rng.nextDouble() * 55,
-            trackFitStat:40 + _rng.nextDouble() * 55,
-            baseScore:   50 + _rng.nextDouble() * 40,
-            recentRecord: '',
-            odds: 3 + _rng.nextDouble() * 25,
-          ))
+        ? List.generate(n, (i) {
+            final rcW     = 0.05 + _rng.nextDouble() * 0.35; // 5~40% 승률
+            final jocW    = 0.05 + _rng.nextDouble() * 0.30; // 5~35% 기수 승률
+            final wgB     = 52.0 + _rng.nextDouble() * 8.0;  // 52~60kg 부담중량
+            final wgChg   = _rng.nextInt(7) - 3;             // -3~+3kg 체중변동
+            final g1f     = 0.30 + _rng.nextDouble() * 0.60; // 0.30~0.90 G1F
+            final cond    = widget.race.trackCondition;
+
+            // ── baseSpeed 공식 (DTO와 동일 로직) ──
+            final speedS  = (rcW * 0.5 * 100.0
+                             + jocW * 0.3 * 100.0
+                             + (60.0 - wgB) * 0.2).clamp(0.0, 100.0);
+
+            // ── stamina 공식 ──
+            final staminaS = (100.0
+                              - wgChg.abs() * 1.5
+                              - trackConditionPenalty(cond) * 100.0)
+                             .clamp(20.0, 100.0);
+
+            return HorseEntry(
+              gateNo:       i + 1,
+              horseName:    '${i + 1}번마',
+              jockeyName:   '기수${i + 1}',
+              trainerName:  '',
+              weight:       440 + _rng.nextInt(40),
+              weightChange: wgChg,
+              rating:       60 + _rng.nextDouble() * 35,
+              speedStat:    speedS,
+              staminaStat:  staminaS,
+              formStat:     40 + _rng.nextDouble() * 55,
+              trackFitStat: 40 + _rng.nextDouble() * 55,
+              baseScore:    50 + _rng.nextDouble() * 40,
+              recentRecord: '',
+              odds:         3 + _rng.nextDouble() * 25,
+              // API 원시 파라미터
+              horseRegNo:   'DUMMY${(i + 1).toString().padLeft(4, '0')}',
+              rcWins:       rcW,
+              jockeyRcWins: jocW,
+              wgBudam:      wgB,
+              g1fRating:    g1f,
+            );
+          })
         : widget.horses;
 
-    // 출발 레인: gateNo → Zone1(16레인) 중 균등 배분
-    // gateNo 1 = 가장 안쪽(0번 레인), 번호 커질수록 바깥쪽
+    // ── 출발 레인: gateNo → Zone1(16레인) 중 균등 배분 ─────────────────
     final totalEntries = entries.length;
     _horses = entries.asMap().entries.map((e) {
-      final h   = e.value;
-      final statAvg = (h.speedStat + h.staminaStat + h.formStat) / 300.0;
+      final h = e.value;
+
+      // ── baseSpeed 계산 ─────────────────────────────────────────────────
+      // API 데이터 보유 여부에 따라 공식 적용
+      final double speedS;
+      final double staminaS;
+
+      if (h.rcWins > 0.0 || h.jockeyRcWins > 0.0) {
+        // ★ KRA API 기반 baseSpeed 공식
+        //   rcWins(0~1)*50 + jockeyRcWins(0~1)*30 + (60-wgBudam)*0.2
+        speedS  = (h.rcWins * 50.0
+                   + h.jockeyRcWins * 30.0
+                   + (60.0 - h.wgBudam) * 0.2).clamp(0.0, 100.0);
+
+        // ★ KRA API 기반 stamina 공식
+        //   100 - |weightChange|*1.5 - trackConditionPenalty*100
+        staminaS = (100.0
+                    - h.weightChange.abs() * 1.5
+                    - trackConditionPenalty(widget.race.trackCondition) * 100.0)
+                   .clamp(20.0, 100.0);
+      } else {
+        // API 데이터 없음 → 기존 스탯 그대로 사용
+        speedS   = h.speedStat;
+        staminaS = h.staminaStat;
+      }
+
+      // ── statAvg 기반 baseSpeed (prog/s 단위 정규화) ───────────────────
+      // speedS(0~100) + staminaS(0~100) + formStat(0~100) → 0.0~1.0 평균
+      final statAvg = (speedS + staminaS + h.formStat) / 300.0;
+      // prog/s: 0.90~1.10 범위의 기준 속도
       final base = (1.0 / _baseSec) * (0.90 + statAvg * 0.20)
                    + (_rng.nextDouble() * 0.003 - 0.0015);
-      // 출발 레인: gateNo 기반, 총 말 수에 맞게 스케일
+
+      // ── 출발 레인 배정 ────────────────────────────────────────────────
       final initLane = ((h.gateNo - 1) * (_GridRailEngine.kZone1Lanes - 1) ~/
                         (totalEntries > 1 ? totalEntries - 1 : 1))
                        .clamp(0, _GridRailEngine.kZone1Lanes - 1);
+
       return _Horse(
         entry:     h,
         prog:      _startP,
@@ -764,15 +825,24 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       double speedMult = blockMult;
 
       if (inCorner) {
-        // 코너(Zone2): 감속 + 레인 위치에 따른 미세 변동
+        // ── Zone2(코너): 8→4 격자 압축 구간 ──────────────────────────────
+        // ① 기본 감속 + 레인 외측 미세 변동
         final laneF = curMaxL > 1 ? h.gridLane / (curMaxL - 1.0) : 0.5;
         speedMult *= 0.84 + laneF * 0.04 + _rng.nextDouble() * 0.04;
-        // ★ 코너 clusterOff: 트랙 너비 안에 머물도록 스케일 대폭 축소
-        // gridLane 0=안쪽, curMaxL-1=바깥쪽 → 오프셋 범위 ±3픽셀 이내
+
+        // ② ★ trackCondition 페널티 — 코너 압축(8→4레인) 시 주로상태 저항 적용
+        //    computeCornerTrackPenalty: 양호=1.0, 불량=~0.88, 매우불량=~0.82
+        //    외측 레인(laneF≈1)은 코너 반경 증가로 추가 페널티 ×1.3 적용
+        final trackMult = computeCornerTrackPenalty(
+          widget.race.trackCondition,
+          laneF,
+        );
+        speedMult *= trackMult;
+
+        // ③ 코너 clusterOff: 트랙 너비 안에 머물도록 스케일 대폭 축소
         h.targetClOff = (h.gridLane - curMaxL / 2.0) * 0.4;
       } else {
         // ★ 직선 clusterOff: 레인 간격 축소 (이전 1.8~3.5 → 0.5~0.8)
-        // 트랙 너비가 좁으므로 큰 오프셋은 트랙 밖/안으로 벗어남
         h.targetClOff = (h.gridLane - curMaxL / 2.0) *
             (curMaxL > 4 ? 0.5 : curMaxL > 2 ? 0.6 : 0.8);
       }
@@ -780,6 +850,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       // ── 2단계: Zone3(400m~200m) 부스터 ────────────────────────────────
       if (inBoost) {
         final bf   = ((p - _boost400) / (_boost200 - _boost400)).clamp(0.0, 1.0);
+        // ★ userBonus = UserGValue 실시간 합산 (-5~+5 → -1~+1 정규화)
         final user = (h.userBonus / 5.0).clamp(-1.0, 1.0);
         final stat = (h.speedNorm + h.formNorm) * 0.5;
         speedMult  *= 1.12 + bf * 0.15 * stat + bf * 0.08 * user;
@@ -792,13 +863,30 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
       // ── 3단계: Zone4(스퍼트 100m~GOAL) 스테미나 소진 ──────────────────
       if (inSpurt) {
-        final sf    = ((p - _spurt100) / (_goalP - _spurt100)).clamp(0.0, 1.0);
-        final stam  = h.staminaNorm;
-        final user  = (h.userBonus / 5.0).clamp(-1.0, 1.0);
-        final fade  = (1.0 - stam) * sf * 0.22;
+        final sf   = ((p - _spurt100) / (_goalP - _spurt100)).clamp(0.0, 1.0);
+        final stam = h.staminaNorm;
+        final user = (h.userBonus / 5.0).clamp(-1.0, 1.0);
+        final fade = (1.0 - stam) * sf * 0.22;
         final boost = stam * sf * 0.08 + user * sf * 0.06;
-        speedMult  *= (1.0 - fade + boost).clamp(0.6, 1.18);
+        speedMult *= (1.0 - fade + boost).clamp(0.6, 1.18);
         h.spurtFading = (stam < 0.5);
+      }
+
+      // ── Zone4 후반 400m~GOAL: G1F 우수마 가속도 +25% 버프 ─────────────
+      // inBoost = _boost400 ~ _boost200 (400m~200m 직선 부스터 구간과 동일)
+      // 스펙: 후반 400m 직선 주로 격자 2레인 압축 구역 = _boost400 ~ _goalP
+      final inZone4Straight = (p >= _boost400); // 400m~GOAL 전체 구간
+      if (inZone4Straight) {
+        // ★ G1F 우수마 가속도 버프 적용
+        // computeG1fBoostMult: g1fNorm >= 0.65면 구간 진행도 비례로 최대 +25%
+        final zoneFactor =
+            ((p - _boost400) / (_goalP - _boost400)).clamp(0.0, 1.0);
+        final g1fMult = computeG1fBoostMult(h.g1fNorm, zoneFactor);
+        speedMult *= g1fMult;
+        // 우수마 글로우 이펙트 유지 (boostGlow 이미 설정 → 추가 강화만)
+        if (g1fMult > 1.0 && !h.boostActive) {
+          h.boostGlow = (h.boostGlow + (g1fMult - 1.0) * 0.5).clamp(0, 1);
+        }
       }
 
       // ── 지체 누적 (양옆 모두 막힌 경우 stuckTimer 증가) ──────────────
