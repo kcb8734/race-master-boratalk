@@ -2903,24 +2903,11 @@ class _RacePainter extends CustomPainter {
     canvas.drawPath(innerPath, Paint()..color = const Color(0xFF1A5A1A));
     _drawGrassStripesBusan(canvas, cx, cy, hwGrass, hr);
 
-    // ━━━━ ② 트랙 단색 베이스 (코너/직선 모두 연속) ━━━━
+    // ━━━━ ② 트랙 균일 색상 (코너/직선 완전 동일) ━━━━
+    // 직선 전용 Rect 하이라이트 제거 → trackRing 전체에 동일 색상 적용
+    // 코너(cy±hr±ry 범위)와 직선이 동일한 주황-갈색으로 연속 표현
     canvas.drawPath(trackRing,
-        Paint()..color = const Color(0xFFC08840)..style = PaintingStyle.fill);
-
-    // ━━━━ ③ 직선 구간 하이라이트 ━━━━
-    canvas.save();
-    canvas.clipPath(trackRing);
-    // 우직선 (cx+hwGrass ~ cx+hw)
-    canvas.drawRect(
-      Rect.fromLTRB(cx + hwGrass, cy - hr, cx + hw, cy + hr),
-      Paint()..color = const Color(0xFFD9A058).withValues(alpha: 0.60),
-    );
-    // 좌직선 (cx-hw ~ cx-hwGrass)
-    canvas.drawRect(
-      Rect.fromLTRB(cx - hw, cy - hr, cx - hwGrass, cy + hr),
-      Paint()..color = const Color(0xFFD9A058).withValues(alpha: 0.60),
-    );
-    canvas.restore();
+        Paint()..color = const Color(0xFFD4A055)..style = PaintingStyle.fill);
 
     // ━━━━ ④ 더트 텍스처 (트랙 전체, 코너 포함) ━━━━
     final rng = Random(44444);
