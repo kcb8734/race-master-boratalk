@@ -417,67 +417,61 @@ enum _Seg { topStr, cornerR, botStr, cornerL }
 //    2200m: 좌직선 약9%   (좌직선 상단부)
 // ──────────────────────────────────────────────────────────────────────────
 class _TGBusan {
-  // 부산경남 트랙 구간 거리(m) — CW 기준 (도면 기반)
-  static const double dRight  = 600.0; // 우직선 (아래→위, 1000~1600m 출발선)
-  static const double dCornT  = 300.0; // 상단 반원 코너 (우→좌, 비대칭)
-  static const double dLeft   = 400.0; // 좌직선 (위→아래, GOAL+1800~2200m)
-  static const double dCornB  = 300.0; // 하단 반원 코너 (좌→우)
-  static const double total   = dRight + dCornT + dLeft + dCornB; // = 1600m
+  // ══════════════════════════════════════════════════════════════════════════
+  // 부산경남 트랙 — 도면 기반 CW 세로형 오벌
+  // 구간0=우직선(↑600m) / 구간1=상단코너(300m) / 구간2=좌직선(↓400m) / 구간3=하단코너(300m)
+  // ══════════════════════════════════════════════════════════════════════════
+  static const double dRight  = 600.0;
+  static const double dCornT  = 300.0;
+  static const double dLeft   = 400.0;
+  static const double dCornB  = 300.0;
+  static const double total   = 1600.0;
 
-  // 구간 진행률 경계 (CW 기준)
-  static double get p2 => dRight / total;                          // 상단코너 시작 = 0.375
-  static double get p3 => (dRight + dCornT) / total;               // 좌직선 시작   = 0.5625
-  static double get p4 => (dRight + dCornT + dLeft) / total;       // 하단코너 시작 = 0.8125
+  // ── 구간 경계 진행률 ──
+  static double get p2 => dRight / total;               // 0.375
+  static double get p3 => (dRight + dCornT) / total;    // 0.5625
+  static double get p4 => (dRight + dCornT + dLeft) / total; // 0.8125
 
-  // ── GOAL 고정 위치 ──
-  // 도면 기준: 좌직선 하단부 85% 지점 = 화면 좌측 하단, 하단코너 진입 전
-  // goalP = p3 + (p4-p3)*0.85 = 0.5625 + 0.25*0.85 = 0.7750
-  static double get goalP => p3 + (p4 - p3) * 0.85;
+  // ── 공유 렌더 파라미터 ★ toPoint/_busanOvalPath/_drawBusanTrack 모두 동일값 ──
+  static const double kHwFrac = 0.38; // 코너 반지름 비율 (tr.width 기준)
+  static const double kHrFrac = 0.44; // 직선 반높이 비율 (tr.height 기준)
 
-  // ── 출발 진행률 (GOAL 역산, CW 기준) ──
-  //  부산경남 경주거리: 1000, 1200, 1300, 1400, 1500, 1600, 1800, 1900, 2000, 2200m
-  //  goalP=0.775 기준 역산 (total=1600m):
-  //    1000m: 0.775 - 0.625 = 0.150  → 우직선 약40%
-  //    1200m: 0.775 - 0.750 = 0.025  → 우직선 약7%
-  //    1300m: 0.775 - 0.8125 → (0.775-0.8125+10)%1 = 0.9625 → 하단코너약95%~우직선전
-  //    1400m: 0.775 - 0.875  → 0.900 → 하단코너 약81%
-  //    1500m: 0.775 - 0.9375 → 0.8375 → 하단코너 약25%~중앙
-  //    1600m: 0.775 - 1.0    → (0.775-1.0+10)%1 = 0.775 = goalP (1바퀴)
-  //  → 1300~1600m가 하단코너에 걸림: 위치 보정 필요
+  // ── GOAL: 좌직선 하단 75% ──
+  // goalP = 0.5625 + (0.8125-0.5625)*0.75 = 0.5625 + 0.1875 = 0.7500
+  static double get goalP => p3 + (p4 - p3) * 0.75;
+
+  // ── 출발 진행률 (도면 실측 기반 직접 매핑) ──
+  // goalP = 0.750, total = 1600m
+  // CW: 구간0(우직선 0~0.375), 구간1(상단코너 0.375~0.5625),
+  //     구간2(좌직선 0.5625~0.8125), 구간3(하단코너 0.8125~1.0)
   //
-  //  ★ 도면 기준 실제 위치 재설계 (우직선에 1000~1600m, 좌직선에 1800~2200m):
-  //    우직선 = 구간0 (p=0~0.375), 길이 600m
-  //    1000m 출발 → GOAL까지 1000m → startP = goalP - 1000/1600
-  //    → 0.775 - 0.625 = 0.150 → 우직선 40% ✓
-  //    1200m → 0.775 - 0.750 = 0.025 → 우직선 7% ✓
-  //    1300m → 0.775 - 0.8125 = -0.0375 → %1 = 0.9625 → 하단코너95% (우직선 직전) ✓
-  //    1400m → 0.775 - 0.875  = -0.100  → %1 = 0.900  → 하단코너 73% ✓ (코너 진입부)
-  //    1500m → 0.775 - 0.9375 = -0.1625 → %1 = 0.8375 → 하단코너 25% ✓
-  //    1600m → 0.775 - 1.000  = -0.225  → %1 = 0.775  = goalP (1바퀴) ✓
-  //    1800m → 0.775 - 1.125  = -0.350  → %1 = 0.650  → 좌직선 35% ✓
-  //    1900m → 0.775 - 1.1875 = -0.4125 → %1 = 0.5875 → 좌직선 10% ✓
-  //    2000m → 0.775 - 1.250  = -0.475  → %1 = 0.525  → 상단코너 말단 (좌직선진입)
-  //    2200m → 0.775 - 1.375  = -0.600  → %1 = 0.400  → 상단코너 중간
-  //  → 1900m/2000m/2200m는 상단코너 걸림 문제 → 좌직선 범위 확장 필요
+  // 우직선 출발선 (구간0, 아래→위: p클수록아래/p작을수록위):
+  //   1600m: 우직선 최하단 → p=0.010 (막 올라온 직후)
+  //   1500m: 우직선 12%   → p=0.045
+  //   1400m: 우직선 25%   → p=0.095
+  //   1300m: 우직선 40%   → p=0.150
+  //   1200m: 우직선 53%   → p=0.200
+  //   1000m: 우직선 79%   → p=0.295 (상단부)
   //
-  //  ★★ 실용적 해결: 거리별 직접 지정 (도면 시각 위치 직접 매핑)
+  // 좌직선 출발선 (구간2, 위→아래: p클수록아래):
+  //   2200m: 좌직선 7%    → p=0.580
+  //   2000m: 좌직선 19%   → p=0.610
+  //   1900m: 좌직선 29%   → p=0.635
+  //   1800m: 좌직선 39%   → p=0.660
   static double startP(int distM) {
-    // 도면 기준 각 거리의 화면상 위치를 직접 지정 (p값 = 0~1)
-    // CW 기준: 구간0=우직선(0~0.375), 구간1=상단코너(0.375~0.5625),
-    //          구간2=좌직선(0.5625~0.8125), 구간3=하단코너(0.8125~1.0)
     switch (distM) {
-      // ── 우직선 출발 (구간0: 0~0.375) ──
-      case 1000: return 0.275;  // 우직선 73% 위치 (상단부)
-      case 1200: return 0.190;  // 우직선 51% 위치 (중상단)
-      case 1300: return 0.130;  // 우직선 35% 위치 (중단)
-      case 1400: return 0.075;  // 우직선 20% 위치 (중하단)
-      case 1500: return 0.030;  // 우직선 8%  위치 (하단부)
-      case 1600: return 0.975;  // 하단코너 86% (우직선 직전)
-      // ── 좌직선 출발 (구간2: 0.5625~0.8125) ──
-      case 1800: return 0.650;  // 좌직선 35% 위치 (상단부)
-      case 1900: return 0.615;  // 좌직선 21% 위치
-      case 2000: return 0.580;  // 좌직선 7%  위치 (상단 근처)
-      case 2200: return 0.500;  // 상단코너 말단 ~ 좌직선 직전
+      // 우직선 (구간0: 0~0.375, 아래→위)
+      case 1600: return 0.010; // 우직선 최하단
+      case 1500: return 0.045; // 우직선 12%
+      case 1400: return 0.095; // 우직선 25%
+      case 1300: return 0.150; // 우직선 40%
+      case 1200: return 0.200; // 우직선 53%
+      case 1000: return 0.295; // 우직선 79% (특별경주)
+      // 좌직선 (구간2: 0.5625~0.8125, 위→아래)
+      case 2200: return 0.580; // 좌직선 7%
+      case 2000: return 0.610; // 좌직선 19%
+      case 1900: return 0.635; // 좌직선 29%
+      case 1800: return 0.660; // 좌직선 39%
       default:
         final ratio = distM.clamp(1000, 2400) / total;
         return (goalP - ratio + 10.0) % 1.0;
@@ -491,42 +485,31 @@ class _TGBusan {
   //   구간2: 좌직선 위→아래 (cx-hw, cy-hr) → (cx-hw, cy+hr) ← GOAL 구간
   //   구간3: 하단코너 CW (중심: cx, cy+hr), ang: π → 0
   //
-  // ★ 부산경남 비율: 우직선이 좌직선보다 길어서 hw/hr 비율이 서울과 다름
-  //   hw = tr.width * 0.38 (서울보다 좁은 코너)
-  //   hr = tr.height * 0.46 (서울보다 긴 직선)
+  // ── 진행률 → 화면 좌표 ★ kHwFrac/kHrFrac 사용 (busanOvalPath/_drawBusanTrack 완전 동기화) ──
   static Offset toPoint(double p, Rect tr, {double clusterOff = 0}) {
-    final pp = p % 1.0;
-    final cx = tr.center.dx;
-    final cy = tr.center.dy;
-    final hw = tr.width  * 0.38;  // 부산경남: 코너 반지름 (서울 0.42보다 작음)
-    final hr = tr.height * 0.46;  // 부산경남: 직선 길이 더 김
+    final pp  = p % 1.0;
+    final cx  = tr.center.dx;
+    final cy  = tr.center.dy;
+    final hw  = tr.width  * kHwFrac; // 0.38
+    final hr  = tr.height * kHrFrac; // 0.44
+    final cV  = (hw * 0.08).clamp(0.0, 5.0);
+    final off = clusterOff.clamp(-cV, cV);
 
-    final clampV = (hw * 0.08).clamp(0.0, 5.0);
-    final safeOff = clusterOff.clamp(-clampV, clampV);
-
-    Offset result;
     if (pp < p2) {
-      // 구간0: 우직선 아래→위
       final f = pp / p2;
-      result = Offset(cx + hw - safeOff, cy + hr - f * hr * 2);
+      return Offset(cx + hw - off, cy + hr - f * hr * 2);
     } else if (pp < p3) {
-      // 구간1: 상단코너 CW, ang: 0 → -π
-      final f   = (pp - p2) / (p3 - p2);
-      final ang = -(f * pi);
-      final r = hw - safeOff;
-      result = Offset(cx + cos(ang) * r, cy - hr + sin(ang) * r);
+      final f = (pp - p2) / (p3 - p2);
+      final a = -(f * pi);
+      return Offset(cx + cos(a) * (hw - off), cy - hr + sin(a) * (hw - off));
     } else if (pp < p4) {
-      // 구간2: 좌직선 위→아래
       final f = (pp - p3) / (p4 - p3);
-      result = Offset(cx - hw + safeOff, cy - hr + f * hr * 2);
+      return Offset(cx - hw + off, cy - hr + f * hr * 2);
     } else {
-      // 구간3: 하단코너 CW, ang: π → 0
-      final f   = (pp - p4) / (1.0 - p4);
-      final ang = pi - f * pi;
-      final r = hw - safeOff;
-      result = Offset(cx + cos(ang) * r, cy + hr + sin(ang) * r);
+      final f = (pp - p4) / (1.0 - p4);
+      final a = pi - f * pi;
+      return Offset(cx + cos(a) * (hw - off), cy + hr + sin(a) * (hw - off));
     }
-    return result;
   }
 
   // 진행률 → 진행 방향각 (부산경남 CW)
@@ -2776,12 +2759,13 @@ class _RacePainter extends CustomPainter {
     return path;
   }
 
-  // ── 부산경남 2단 레인 트랙 (hw=0.38, hr=0.46) ──
+  // ── 부산경남 2단 레인 트랙 ──
+  // ★ hw = kHwFrac(0.38)*width, hr = kHrFrac(0.44)*height — toPoint 와 완전 동일
   void _drawBusanTrack(Canvas canvas, Size size, Rect tr) {
     final cx  = tr.center.dx;
     final cy  = tr.center.dy;
-    final hw  = tr.width  * _TGBusan.p2;   // 0.375 * width (코너 반지름)
-    final hr  = tr.height * 0.44;           // 세로 반높이
+    final hw  = tr.width  * _TGBusan.kHwFrac;  // 0.38
+    final hr  = tr.height * _TGBusan.kHrFrac;  // 0.44
 
     // 레인 두께 / 갭
     const twOuter = 11.0;
@@ -2871,30 +2855,30 @@ class _RacePainter extends CustomPainter {
     // ⑥ 코너 하이라이트
     _drawCornerHighlight(canvas, cx, cy, hw, hr);
 
-    // ⑦ 내측 텍스트 (부산경남 전용)
+    // ── ⑦ 내측 텍스트 (부산경남 전용) ──
     _txt(canvas, '${distance}m 레이스',
-        Offset(cx, cy - hr * 0.3),
-        Colors.white.withValues(alpha: 0.5), 10, centered: true);
+        Offset(cx, cy - hr * 0.25),
+        Colors.white.withValues(alpha: 0.50), 10, centered: true);
     _txt(canvas, '부산경남 경마공원',
-        Offset(cx, cy + hr * 0.3),
+        Offset(cx, cy + hr * 0.25),
         Colors.white.withValues(alpha: 0.35), 9, centered: true);
     _txt(canvas, '↻ CW', Offset(cx, cy),
-        const Color(0xFF81C784).withValues(alpha: 0.4), 10, bold: true, centered: true);
+        const Color(0xFF81C784).withValues(alpha: 0.40), 10, bold: true, centered: true);
 
-    // ⑧ 직선 레이블
-    // 우직선(오른쪽): 1000~1600m, 좌직선(왼쪽): GOAL + 1800~2200m
-    _txt(canvas, '우직선 600m',
-        Offset(tr.right + 6, cy),
-        Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
-    _txt(canvas, '↑1000~1600m',
-        Offset(tr.right + 6, cy - 14),
-        Colors.white.withValues(alpha: 0.25), 6.5, centered: false);
-    _txt(canvas, '좌직선 400m',
-        Offset(tr.left - 74, cy),
-        Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
-    _txt(canvas, 'GOAL+1800~2200m',
-        Offset(tr.left - 74, cy + 12),
-        Colors.white.withValues(alpha: 0.25), 6.0, centered: false);
+    // ── ⑧ 직선 레이블 ──
+    // CW: 우직선(오른쪽 아래→위) → 상단코너 → 좌직선(왼쪽 위→아래, GOAL) → 하단코너
+    _txt(canvas, '우직선  600m',
+        Offset(tr.right + 6, cy - 6),
+        Colors.white.withValues(alpha: 0.40), 7.5);
+    _txt(canvas, '↑1600~1000m',
+        Offset(tr.right + 6, cy + 8),
+        Colors.white.withValues(alpha: 0.28), 6.5);
+    _txt(canvas, '좌직선  400m',
+        Offset(tr.left - 76, cy - 6),
+        Colors.white.withValues(alpha: 0.40), 7.5);
+    _txt(canvas, 'GOAL·1800~2200m',
+        Offset(tr.left - 80, cy + 8),
+        Colors.white.withValues(alpha: 0.28), 6.0);
   }
 
   // 부산경남 잔디 줄무늬 (내측)
@@ -3065,8 +3049,8 @@ class _RacePainter extends CustomPainter {
   // ── 부산경남: 우직선 오른쪽 바깥 브라켓 안내 마커 (1000~1600m) ──
   void _drawBusanRightStraightMarkers(Canvas canvas, Rect tr) {
     final cx = tr.center.dx;
-    // 부산경남 hw = tr.width * p2(=0.375)
-    final hw = tr.width * _TGBusan.p2;
+    // ★ toPoint/_drawBusanTrack 과 동일한 hw (kHwFrac=0.38)
+    final hw = tr.width * _TGBusan.kHwFrac;
     const outerOffX = 40.0; // 트랙 오른쪽 바깥 여백
 
     // 우직선 출발선 목록 (화면 아래→위 순: 1500→1200→1300→1400→1000)
