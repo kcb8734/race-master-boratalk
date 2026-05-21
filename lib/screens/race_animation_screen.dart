@@ -2809,119 +2809,139 @@ class _RacePainter extends CustomPainter {
   }
 
   // ── 부산경남 2단 레인 트랙 ──
+  //
+  // [핵심 렌더링 전략]
+  // ① PathOperation.difference 로 레인 링 생성
+  // ② 단색 베이스 컬러로 채우기 → 코너/직선 색상 완전 연속
+  //    (RadialGradient 제거: tr 중심 기준이라 코너는 항상 어두운 끝부분만 보임)
+  // ③ 더트 텍스처(점) + 직선 하이라이트 별도 레이어로 입체감 부여
+  // ④ 마지막에 경계선 stroke
+  //
   // ★ hw = kHwFrac(0.38)*width, hr = kHrFrac(0.38)*height — toPoint 와 완전 동일
   // ★ _busanOvalPath hr 인자는 항상 hr(직선반높이)로 고정, hw만 줄여서 레인 계층 생성
   void _drawBusanTrack(Canvas canvas, Size size, Rect tr) {
     final cx  = tr.center.dx;
     final cy  = tr.center.dy;
-    final hw  = tr.width  * _TGBusan.kHwFrac;  // 0.38
-    final hr  = tr.height * _TGBusan.kHrFrac;  // 0.38 (kHrFrac 변경 반영)
+    final hw  = tr.width  * _TGBusan.kHwFrac;
+    final hr  = tr.height * _TGBusan.kHrFrac;
+    final ry  = hw * _TGBusan.kCornRyFrac; // 코너 세로 반지름
 
-    // 레인 두께 / 갭 (hw 기준 비율로 계산 — 화면 크기에 무관하게 일정)
-    final twOuter = (hw * 0.13).clamp(8.0, 14.0);  // 외측 레인 두께
-    final twInner = (hw * 0.13).clamp(8.0, 14.0);  // 내측 레인 두께
-    final gap     = (hw * 0.08).clamp(4.0, 8.0);   // 레인 간 잔디 갭
+    // 레인 두께 / 갭
+    final twOuter = (hw * 0.13).clamp(8.0, 14.0);
+    final twInner = (hw * 0.13).clamp(8.0, 14.0);
+    final gap     = (hw * 0.08).clamp(4.0, 8.0);
 
-    // hw 계층 (직선부): hw만 줄이고, hr은 항상 고정
-    final hwOO = hw;                         // 외측 바깥 경계
-    final hwOI = hw - twOuter;               // 외측 안쪽 경계
-    final hwIO = hw - twOuter - gap;         // 내측 바깥 경계
-    final hwII = hw - twOuter - gap - twInner; // 내측 안쪽 경계 (잔디 외곽)
-    final hwGrass = hwII - (hwII * 0.15).clamp(2.0, 6.0); // 잔디 내부
+    // hw 계층 (hr 항상 고정)
+    final hwOO    = hw;
+    final hwOI    = hw - twOuter;
+    final hwIO    = hw - twOuter - gap;
+    final hwII    = hw - twOuter - gap - twInner;
+    final hwGrass = hwII - (hwII * 0.15).clamp(2.0, 6.0);
 
-    // ① 내측 잔디 (hr 고정)
-    final grassPath = _busanOvalPath(cx, cy, hwGrass, hr);
+    // ━━━━ 오벌 경로 생성 ━━━━
+    final outerOPath = _busanOvalPath(cx, cy, hwOO, hr); // 외측 바깥
+    final outerIPath = _busanOvalPath(cx, cy, hwOI, hr); // 외측 안쪽 (= 갭 바깥)
+    final gapIPath   = _busanOvalPath(cx, cy, hwIO, hr); // 갭 안쪽  (= 내측 바깥)
+    final innerIPath = _busanOvalPath(cx, cy, hwII, hr); // 내측 안쪽 (= 잔디 바깥)
+    final grassPath  = _busanOvalPath(cx, cy, hwGrass, hr);
+
+    // 링(레인) 경로: outer - inner
+    final outerRing = Path.combine(PathOperation.difference, outerOPath, outerIPath);
+    final gapRing   = Path.combine(PathOperation.difference, outerIPath, gapIPath);
+    final innerRing = Path.combine(PathOperation.difference, gapIPath,  innerIPath);
+
+    // ━━━━ ① 내측 잔디 ━━━━
     canvas.drawPath(grassPath, Paint()..color = const Color(0xFF1A5A1A));
     _drawGrassStripesBusan(canvas, cx, cy, hwGrass, hr);
 
-    // ② 내측 레인 (hr 고정, hw만 줄임)
-    final innerOPath = _busanOvalPath(cx, cy, hwIO, hr);
-    final innerIPath = _busanOvalPath(cx, cy, hwII, hr);
-    final innerClip  = Path.combine(PathOperation.difference, innerOPath, innerIPath);
+    // ━━━━ ② 내측 레인 — 단색 베이스 먼저, 텍스처 나중 ━━━━
+    // 단색 베이스: 코너/직선 구분 없이 동일한 더트색으로 연속 채우기
+    canvas.drawPath(innerRing,
+        Paint()..color = const Color(0xFFB8863A)..style = PaintingStyle.fill);
+
+    // 직선 구간만 밝은 하이라이트 (좌/우 직선 세로 띠)
     canvas.save();
-    canvas.clipPath(innerClip);
-    canvas.drawPath(innerOPath, Paint()
-      ..shader = RadialGradient(
-        colors: [const Color(0xFFC49050), const Color(0xFFA87030)],
-        center: Alignment.center, radius: 1.2,
-      ).createShader(tr));
-    // 내측 레인 더트 텍스처
+    canvas.clipPath(innerRing);
+    canvas.drawRect(
+      Rect.fromLTRB(cx - hwIO, cy - hr, cx - hwII, cy + hr),
+      Paint()..color = const Color(0xFFCFA05A).withValues(alpha: 0.55),
+    );
+    canvas.drawRect(
+      Rect.fromLTRB(cx + hwII, cy - hr, cx + hwIO, cy + hr),
+      Paint()..color = const Color(0xFFCFA05A).withValues(alpha: 0.55),
+    );
+    canvas.restore();
+
+    // 더트 텍스처 (내측 레인 전체, 코너 포함)
     final rng2 = Random(44444);
-    for (int i = 0; i < 180; i++) {
+    canvas.save();
+    canvas.clipPath(innerRing);
+    for (int i = 0; i < 200; i++) {
       final t2 = rng2.nextDouble();
-      final pt = _TGBusan.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 6.0);
-      final gs = 0.6 + rng2.nextDouble() * 1.5;
+      final pt = _TGBusan.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 5.0);
+      final gs = 0.5 + rng2.nextDouble() * 1.4;
       canvas.drawOval(
         Rect.fromCenter(center: pt, width: gs * 2, height: gs),
         Paint()..color = Color.lerp(const Color(0xFFDDBA88), const Color(0xFF8B6035),
-            rng2.nextDouble())!.withValues(alpha: 0.25 + rng2.nextDouble() * 0.35),
+            rng2.nextDouble())!.withValues(alpha: 0.20 + rng2.nextDouble() * 0.30),
       );
     }
     canvas.restore();
 
-    // ③ 두 레인 사이 잔디 갭 (hr 고정)
-    final gapOPath = _busanOvalPath(cx, cy, hwOI, hr);
-    final gapIPath = _busanOvalPath(cx, cy, hwIO, hr);
-    final gapPath  = Path.combine(PathOperation.difference, gapOPath, gapIPath);
-    canvas.drawPath(gapPath, Paint()..color = const Color(0xFF1A5A1A).withValues(alpha: 0.9));
+    // ━━━━ ③ 잔디 갭 ━━━━
+    canvas.drawPath(gapRing,
+        Paint()..color = const Color(0xFF1A5A1A).withValues(alpha: 0.92));
 
-    // ④ 외측 레인 (hr 고정)
-    final outerOPath = _busanOvalPath(cx, cy, hwOO, hr);
-    final outerIPath = _busanOvalPath(cx, cy, hwOI, hr);
-    final outerClip  = Path.combine(PathOperation.difference, outerOPath, outerIPath);
+    // ━━━━ ④ 외측 레인 — 단색 베이스 먼저 ━━━━
+    canvas.drawPath(outerRing,
+        Paint()..color = const Color(0xFFC89448)..style = PaintingStyle.fill);
+
+    // 직선 구간 하이라이트
     canvas.save();
-    canvas.clipPath(outerClip);
-    canvas.drawPath(outerOPath, Paint()
-      ..shader = RadialGradient(
-        colors: [const Color(0xFFD4A060), const Color(0xFFB08040)],
-        center: Alignment.center, radius: 1.2,
-      ).createShader(tr));
-    // 외측 레인 더트 텍스처
+    canvas.clipPath(outerRing);
+    canvas.drawRect(
+      Rect.fromLTRB(cx - hwOO, cy - hr, cx - hwOI, cy + hr),
+      Paint()..color = const Color(0xFFDFAA60).withValues(alpha: 0.55),
+    );
+    canvas.drawRect(
+      Rect.fromLTRB(cx + hwOI, cy - hr, cx + hwOO, cy + hr),
+      Paint()..color = const Color(0xFFDFAA60).withValues(alpha: 0.55),
+    );
+    canvas.restore();
+
+    // 더트 텍스처 (외측 레인 전체, 코너 포함)
     final rng4 = Random(55555);
-    for (int i = 0; i < 200; i++) {
+    canvas.save();
+    canvas.clipPath(outerRing);
+    for (int i = 0; i < 220; i++) {
       final t4 = rng4.nextDouble();
-      final pt4 = _TGBusan.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 8.0 + 3.0));
-      final gs = 0.7 + rng4.nextDouble() * 1.8;
+      final pt4 = _TGBusan.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 7.0 + 4.0));
+      final gs = 0.6 + rng4.nextDouble() * 1.7;
       canvas.drawOval(
         Rect.fromCenter(center: pt4, width: gs * 2, height: gs),
         Paint()..color = Color.lerp(const Color(0xFFDDBB88), const Color(0xFF8C6035),
-            rng4.nextDouble())!.withValues(alpha: 0.28 + rng4.nextDouble() * 0.38),
+            rng4.nextDouble())!.withValues(alpha: 0.22 + rng4.nextDouble() * 0.32),
       );
     }
     canvas.restore();
 
-    // ⑤ 3중 경계선
-    canvas.drawPath(outerOPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.75)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.8);
-    canvas.drawPath(gapOPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.45)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.2);
-    canvas.drawPath(gapIPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.45)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.2);
-    canvas.drawPath(innerIPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.55)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.5);
+    // ━━━━ ⑤ 경계선 stroke ━━━━
+    final strokePaint = Paint()..style = PaintingStyle.stroke;
 
-    // ⑥ 코너 하이라이트 (타원형 — toPoint 와 동기화)
-    final ry = hw * _TGBusan.kCornRyFrac;
-    canvas.drawArc(
-      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2.5, height: ry * 2.5),
-      0, pi, false,
-      Paint()..color = const Color(0xFFFFAA00).withValues(alpha: 0.08)..style = PaintingStyle.fill,
-    );
-    canvas.drawArc(
-      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2.5, height: ry * 2.5),
-      pi, pi, false,
-      Paint()..color = const Color(0xFFFFAA00).withValues(alpha: 0.08)..style = PaintingStyle.fill,
-    );
-    _txt(canvas, '코너', Offset(cx, cy + hr + ry * 0.5),
-        Colors.white.withValues(alpha: 0.35), 8, centered: true);
-    _txt(canvas, '코너', Offset(cx, cy - hr - ry * 0.5),
-        Colors.white.withValues(alpha: 0.35), 8, centered: true);
+    canvas.drawPath(outerOPath, strokePaint
+      ..color = Colors.white.withValues(alpha: 0.80)
+      ..strokeWidth = 2.0);
+    canvas.drawPath(outerIPath, strokePaint
+      ..color = Colors.white.withValues(alpha: 0.50)
+      ..strokeWidth = 1.3);
+    canvas.drawPath(gapIPath, strokePaint
+      ..color = Colors.white.withValues(alpha: 0.50)
+      ..strokeWidth = 1.3);
+    canvas.drawPath(innerIPath, strokePaint
+      ..color = Colors.white.withValues(alpha: 0.60)
+      ..strokeWidth = 1.6);
 
-    // ── ⑦ 내측 텍스트 (부산경남 전용) ──
+    // ━━━━ ⑥ 내측 텍스트 ━━━━
     _txt(canvas, '${distance}m 레이스',
         Offset(cx, cy - hr * 0.25),
         Colors.white.withValues(alpha: 0.50), 10, centered: true);
@@ -2930,9 +2950,13 @@ class _RacePainter extends CustomPainter {
         Colors.white.withValues(alpha: 0.35), 9, centered: true);
     _txt(canvas, '↻ CW', Offset(cx, cy),
         const Color(0xFF81C784).withValues(alpha: 0.40), 10, bold: true, centered: true);
+    // 코너 레이블 (ry 활용 — 코너 중심 바깥쪽)
+    _txt(canvas, '상단코너', Offset(cx, cy - hr - ry * 0.6),
+        Colors.white.withValues(alpha: 0.30), 7.5, centered: true);
+    _txt(canvas, '하단코너', Offset(cx, cy + hr + ry * 0.6),
+        Colors.white.withValues(alpha: 0.30), 7.5, centered: true);
 
-    // ── ⑧ 직선 레이블 ──
-    // CW: 우직선(오른쪽 아래→위) → 상단코너 → 좌직선(왼쪽 위→아래, GOAL) → 하단코너
+    // ━━━━ ⑦ 직선 레이블 ━━━━
     _txt(canvas, '우직선  600m',
         Offset(tr.right + 6, cy - 6),
         Colors.white.withValues(alpha: 0.40), 7.5);
