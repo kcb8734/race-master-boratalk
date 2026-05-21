@@ -328,6 +328,18 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
   // ── START 버튼 ──
   Widget _buildStartButton(RaceProvider provider) {
     final canSim = provider.canSimulate;
+    // ── 라이프사이클 잠금 상태 체크 ──
+    final lockState = provider.raceLockFor(widget.race);
+    final isLocked = lockState != RaceLockState.active;
+
+    // 잠금 상태별 버튼 표시 정보
+    final (lockIcon, lockLabel, lockColor) = switch (lockState) {
+      RaceLockState.seasonOff    => ('🚫', '시즌 오프 — 모의 레이스 제한',  const Color(0xFFFF3B30)),
+      RaceLockState.dataPending  => ('⏳', '데이터 업데이트 대기 중',        const Color(0xFFFFAA00)),
+      RaceLockState.raceLocked   => ('🏁', '경주 종료 — 모의 레이서 비활성', const Color(0xFF7A7A9A)),
+      RaceLockState.active       => ('', '', Colors.transparent),
+    };
+
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -344,8 +356,36 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 무료 잔여 횟수
-          if (!provider.isPremium)
+          // ── 라이프사이클 잠금 배너 (잠금 상태일 때만) ──
+          if (isLocked)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: lockColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: lockColor.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(lockIcon, style: const TextStyle(fontSize: 13)),
+                    const SizedBox(width: 6),
+                    Text(
+                      lockLabel,
+                      style: TextStyle(
+                        color: lockColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          // 무료 잔여 횟수 (잠금 해제 + 비프리미엄 시)
+          if (!isLocked && !provider.isPremium)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
@@ -380,30 +420,71 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
           AnimatedBuilder(
             animation: _pulseCtrl,
             builder: (_, __) => GestureDetector(
-              onTap: canSim
-                  ? () {
-                      provider.incrementSimCount();
-                      Navigator.push(
-                        context,
-                        PageRouteBuilder(
-                          pageBuilder: (c, a1, a2) => RaceSplashScreen(
-                            race: widget.race,
-                            horses: List.from(
-                                provider.horses.where((h) => !h.isCancelled)),
-                          ),
-                          transitionsBuilder: (c, a1, a2, child) =>
-                              FadeTransition(opacity: a1, child: child),
-                          transitionDuration:
-                              const Duration(milliseconds: 500),
-                        ),
-                      );
-                    }
-                  : () => _showPremiumDialog(),
+              onTap: () {
+                // ── 1순위: 라이프사이클 잠금 체크 ──
+                if (lockState == RaceLockState.seasonOff) {
+                  _showLifecycleLockDialog(
+                    icon: '🚫',
+                    title: '시즌 오프',
+                    message:
+                        '금주 실시간 경주 스케줄이 모두 종료되었습니다.\n'
+                        '다음 주 경주 데이터 업데이트 전까지\n'
+                        '모의 레이스가 제한됩니다.',
+                    accentColor: const Color(0xFFFF3B30),
+                  );
+                  return;
+                }
+                if (lockState == RaceLockState.dataPending) {
+                  _showLifecycleLockDialog(
+                    icon: '⏳',
+                    title: '데이터 미확정',
+                    message:
+                        '이번 주 실시간 경주 데이터가 아직\n'
+                        '업데이트되지 않았습니다.\n\n'
+                        '매주 목요일 오후 5시 이후\n'
+                        '순차 업데이트 예정',
+                    accentColor: const Color(0xFFFFAA00),
+                  );
+                  return;
+                }
+                if (lockState == RaceLockState.raceLocked) {
+                  _showLifecycleLockDialog(
+                    icon: '🏁',
+                    title: '경주 종료',
+                    message:
+                        '당일 실시간 경주가 종료되어\n'
+                        '모의 레이서 가동이 종료되었습니다.',
+                    accentColor: const Color(0xFF7A7A9A),
+                  );
+                  return;
+                }
+                // ── 2순위: 프리미엄 여부 체크 ──
+                if (!canSim) {
+                  _showPremiumDialog();
+                  return;
+                }
+                // ── 정상 진입 ──
+                provider.incrementSimCount();
+                Navigator.push(
+                  context,
+                  PageRouteBuilder(
+                    pageBuilder: (c, a1, a2) => RaceSplashScreen(
+                      race: widget.race,
+                      horses: List.from(
+                          provider.horses.where((h) => !h.isCancelled)),
+                    ),
+                    transitionsBuilder: (c, a1, a2, child) =>
+                        FadeTransition(opacity: a1, child: child),
+                    transitionDuration:
+                        const Duration(milliseconds: 500),
+                  ),
+                );
+              },
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 18),
                 decoration: BoxDecoration(
-                  gradient: canSim
+                  gradient: (!isLocked && canSim)
                       ? LinearGradient(
                           colors: [
                             const Color(0xFFFFD700),
@@ -416,9 +497,9 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                           end: Alignment.bottomRight,
                         )
                       : null,
-                  color: canSim ? null : const Color(0xFF1A2A3A),
+                  color: (!isLocked && canSim) ? null : const Color(0xFF1A2A3A),
                   borderRadius: BorderRadius.circular(20),
-                  boxShadow: canSim
+                  boxShadow: (!isLocked && canSim)
                       ? [
                           BoxShadow(
                             color: const Color(0xFFFFD700).withValues(
@@ -433,18 +514,26 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(canSim ? '🏁' : '🔒',
-                        style: const TextStyle(fontSize: 24)),
+                    Text(
+                      isLocked
+                          ? lockIcon
+                          : (canSim ? '🏁' : '🔒'),
+                      style: const TextStyle(fontSize: 24),
+                    ),
                     const SizedBox(width: 12),
                     Text(
-                      canSim
-                          ? 'AI 모의 레이스  START'
-                          : '프리미엄 구독 후 이용',
+                      isLocked
+                          ? lockLabel
+                          : (canSim
+                              ? 'AI 모의 레이스  START'
+                              : '프리미엄 구독 후 이용'),
                       style: TextStyle(
-                        color: canSim
-                            ? const Color(0xFF1A1A1A)
-                            : const Color(0xFF5A7A9A),
-                        fontSize: 18,
+                        color: isLocked
+                            ? lockColor.withValues(alpha: 0.8)
+                            : (canSim
+                                ? const Color(0xFF1A1A1A)
+                                : const Color(0xFF5A7A9A)),
+                        fontSize: isLocked ? 14 : 18,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.8,
                       ),
@@ -455,6 +544,100 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── 라이프사이클 잠금 팝업 ──
+  void _showLifecycleLockDialog({
+    required String icon,
+    required String title,
+    required String message,
+    required Color accentColor,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 340),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1F35),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: accentColor.withValues(alpha: 0.5), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: accentColor.withValues(alpha: 0.2),
+                blurRadius: 30,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 아이콘
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: accentColor.withValues(alpha: 0.4), width: 1.5),
+                ),
+                child: Center(
+                  child: Text(icon, style: const TextStyle(fontSize: 30)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // 제목
+              Text(
+                title,
+                style: TextStyle(
+                  color: accentColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 메시지
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: 13,
+                  height: 1.6,
+                ),
+              ),
+              const SizedBox(height: 24),
+              // 확인 버튼
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: accentColor.withValues(alpha: 0.15),
+                    foregroundColor: accentColor,
+                    side: BorderSide(color: accentColor.withValues(alpha: 0.5)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: const Text(
+                    '확인',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

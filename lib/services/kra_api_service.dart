@@ -184,6 +184,81 @@ class KraApiService {
     }).whereType<HorseEntry>().toList();
   }
 
+  // ── API4_3: 경주기록정보 (결과 + 배당) ──
+  static Future<KraRaceResult?> fetchRaceResult(
+      String venueCode, DateTime date, String raceNo) async {
+    final dateStr = _formatDate(date);
+    final meetCode = _venueToMeet(venueCode);
+
+    try {
+      // 결과: API4_3 — 경주결과 + 기록
+      final resultUri = Uri.parse(
+        '$_baseUrl/API4_3?serviceKey=$_serviceKey'
+        '&numOfRows=20&pageNo=1&meet=$meetCode&rc_date=$dateStr&rc_no=$raceNo&_type=json',
+      );
+      if (kDebugMode) debugPrint('[KRA API4_3] $resultUri');
+
+      final resp = await http.get(resultUri).timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
+        final items = _extractItems(data);
+        if (items != null && items.isNotEmpty) {
+          return _parseRaceResult(items, venueCode, date, raceNo);
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[KRA API4_3] Error: $e');
+    }
+    return null;
+  }
+
+  // ── API4_3 결과 파싱 ──
+  static KraRaceResult _parseRaceResult(
+      List<dynamic> items, String venueCode, DateTime date, String raceNo) {
+    final results = <HorseResult>[];
+
+    for (final item in items) {
+      try {
+        final ord = int.tryParse(item['ord']?.toString() ?? '0') ?? 0;
+        final chulNo = int.tryParse(item['chulNo']?.toString() ?? '1') ?? 1;
+        final hrName = item['hrName']?.toString() ?? '미정';
+        final jkName = item['jkName']?.toString() ?? '미정';
+        final rcTime = item['rcTime']?.toString() ?? '';
+        final diffTime = item['diffTime']?.toString() ?? '';
+
+        // 배당 파싱
+        final winOdds = double.tryParse(item['winOdds']?.toString() ?? '0') ?? 0.0;
+        final plcOdds1 = double.tryParse(item['plcOdds1']?.toString() ?? '0') ?? 0.0;
+        final plcOdds2 = double.tryParse(item['plcOdds2']?.toString() ?? '0') ?? 0.0;
+        final showOdds = double.tryParse(item['showOdds']?.toString() ?? '0') ?? 0.0;
+        final weight = int.tryParse(item['hrWeight']?.toString() ?? '0') ?? 0;
+
+        results.add(HorseResult(
+          rank: ord,
+          gateNo: chulNo,
+          horseName: hrName,
+          jockeyName: jkName,
+          raceTime: rcTime,
+          timeDiff: diffTime,
+          winOdds: winOdds,
+          placeOdds1: plcOdds1,
+          placeOdds2: plcOdds2,
+          showOdds: showOdds,
+          weight: weight,
+        ));
+      } catch (_) {}
+    }
+
+    results.sort((a, b) => a.rank.compareTo(b.rank));
+    return KraRaceResult(
+      raceNo: raceNo,
+      raceDate: _formatDate(date),
+      venueCode: venueCode,
+      venueName: _meetToVenueName(_venueToMeet(venueCode)),
+      horses: results,
+    );
+  }
+
   // ── 이번 주 경주 있는 요일 스캔 (API187) ──
   static Future<List<DayTab>> scanWeeklyRaceDays() async {
     final now = DateTime.now();

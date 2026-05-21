@@ -194,3 +194,59 @@ class HorsePosition {
     this.hasSpurted = false,
   });
 }
+
+// ──────────────────────────────────────────────────────────────
+// API4_3 경주기록정보 모델 (경주결과 + 배당 조회)
+// ──────────────────────────────────────────────────────────────
+
+/// 개별 말의 경주결과 + 배당
+class HorseResult {
+  final int rank;           // 착순
+  final int gateNo;         // 마번(게이트번호)
+  final String horseName;   // 말이름
+  final String jockeyName;  // 기수이름
+  final String raceTime;    // 주파기록 (예: "1:24.5")
+  final String timeDiff;    // 착차 (예: "+1.5" 또는 "동착")
+  final double winOdds;     // 단승 배당 (win)
+  final double placeOdds1;  // 연승 배당1 (place)
+  final double placeOdds2;  // 연승 배당2 (place)
+  final double showOdds;    // 복승 배당 (show)
+  final int weight;         // 마체중
+
+  const HorseResult({
+    required this.rank,
+    required this.gateNo,
+    required this.horseName,
+    required this.jockeyName,
+    required this.raceTime,
+    required this.timeDiff,
+    required this.winOdds,
+    required this.placeOdds1,
+    required this.placeOdds2,
+    required this.showOdds,
+    required this.weight,
+  });
+}
+
+/// API4_3 경주결과 전체 (1경주 단위)
+class KraRaceResult {
+  final String raceNo;       // 경주번호
+  final String raceDate;     // 경주일자 (YYYYMMDD)
+  final String venueCode;    // 경주장코드
+  final String venueName;    // 경주장명
+  final List<HorseResult> horses; // 착순 정렬된 결과
+
+  const KraRaceResult({
+    required this.raceNo,
+    required this.raceDate,
+    required this.venueCode,
+    required this.venueName,
+    required this.horses,
+  });
+
+  /// 1~3착 (Win/Place 배당 대상)
+  List<HorseResult> get top3 => horses.where((h) => h.rank >= 1 && h.rank <= 3).toList();
+
+  /// 1착마
+  HorseResult? get winner => horses.isNotEmpty && horses.first.rank == 1 ? horses.first : null;
+}

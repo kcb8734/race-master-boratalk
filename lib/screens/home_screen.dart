@@ -7,6 +7,7 @@ import '../widgets/day_tab_bar.dart';
 import '../widgets/venue_selector.dart';
 import '../widgets/race_list_card.dart';
 import 'race_dashboard_screen.dart';
+import 'race_result_screen.dart';
 import 'ai_analysis_screen.dart';
 import 'race_info_screen.dart';
 import 'my_page_screen.dart';
@@ -227,6 +228,9 @@ class _HomeContent extends StatelessWidget {
           // ── 자동 스크롤 광고 배너
           _buildScrollingBanner(),
 
+          // ── 라이프사이클 공지 배너 (Null / 시즌오프)
+          _buildLifecycleBanner(context),
+
           // ── 요일 탭 바
           const DayTabBar(),
 
@@ -365,6 +369,50 @@ class _HomeContent extends StatelessWidget {
     );
   }
 
+  // ── 라이프사이클 공지 배너 ─────────────────────────────────────
+  Widget _buildLifecycleBanner(BuildContext context) {
+    return Consumer<RaceProvider>(
+      builder: (_, provider, __) {
+        final lock = provider.globalLockState;
+
+        // 정상 활성 상태 → 배너 없음
+        if (lock == RaceLockState.active &&
+            provider.dataStatus == DataStatus.available) {
+          return const SizedBox.shrink();
+        }
+
+        // 시즌오프 배너
+        if (lock == RaceLockState.seasonOff) {
+          return _LifecycleBanner(
+            icon: '🚫',
+            color: const Color(0xFFFF3B30),
+            title: '시즌 오프 기간',
+            message: '금주 실시간 경주 스케줄이 모두 종료되었습니다.',
+            sub: '다음 주 목요일 오후 5시 이후 경주 데이터 업데이트 예정',
+            badgeText: 'SEASON OFF',
+            badgeColor: const Color(0xFFFF3B30),
+          );
+        }
+
+        // 데이터 미확정 배너
+        if (lock == RaceLockState.dataPending ||
+            provider.dataStatus == DataStatus.nullPending) {
+          return const _LifecycleBanner(
+            icon: '⏳',
+            color: Color(0xFFFFAA00),
+            title: '데이터 업데이트 대기 중',
+            message: '이번 주 실시간 경주 데이터가 아직 업데이트되지 않았습니다.',
+            sub: '매주 목요일 오후 5시 이후 순차 업데이트 예정',
+            badgeText: 'DATA PENDING',
+            badgeColor: Color(0xFFFFAA00),
+          );
+        }
+
+        return const SizedBox.shrink();
+      },
+    );
+  }
+
   // ── 경주 목록 헤더
   Widget _buildRaceListLabel(BuildContext context) {
     return Consumer<RaceProvider>(
@@ -487,6 +535,45 @@ class _HomeContent extends StatelessWidget {
               return RaceListCard(
                 race: race,
                 onEnter: () async {
+                  // ── 라이프사이클 잠금 체크 ──────────────────────
+                  final lockState = provider.raceLockFor(race);
+
+                  if (lockState == RaceLockState.seasonOff) {
+                    if (!ctx.mounted) return;
+                    _showLockDialogStatic(
+                      ctx,
+                      icon: '🚫',
+                      title: '시즌 오프',
+                      message: '금주 실시간 경주 스케줄이 모두 종료되었습니다.\n'
+                          '다음 주 경주 데이터 업데이트 전까지\n모의 레이스가 제한됩니다.',
+                    );
+                    return;
+                  }
+
+                  if (lockState == RaceLockState.dataPending) {
+                    if (!ctx.mounted) return;
+                    _showLockDialogStatic(
+                      ctx,
+                      icon: '⏳',
+                      title: '데이터 미확정',
+                      message: '이번 주 실시간 경주 데이터가 아직\n업데이트되지 않았습니다.\n\n'
+                          '매주 목요일 오후 5시 이후 순차 업데이트 예정',
+                    );
+                    return;
+                  }
+
+                  if (lockState == RaceLockState.raceLocked) {
+                    if (!ctx.mounted) return;
+                    _showLockDialogStatic(
+                      ctx,
+                      icon: '🏁',
+                      title: '경주 종료',
+                      message: '당일 실시간 경주가 종료되어\n모의 레이서 가동이 종료되었습니다.',
+                    );
+                    return;
+                  }
+
+                  // ── 정상 진입 ──────────────────────────────────
                   await provider.selectRace(race);
                   if (!ctx.mounted) return;
                   Navigator.push(
@@ -502,16 +589,16 @@ class _HomeContent extends StatelessWidget {
                   );
                 },
                 onViewResult: () {
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                          '제${race.raceNo}경주 실제 결과 (API 연결 후 제공)'),
-                      backgroundColor: AppTheme.navyCard,
-                      action: SnackBarAction(
-                        label: '확인',
-                        textColor: AppTheme.goldPrimary,
-                        onPressed: () {},
-                      ),
+                  // ── 경주결과 조회 (시즌오프 중에도 항상 허용) ──
+                  Navigator.push(
+                    ctx,
+                    PageRouteBuilder(
+                      pageBuilder: (cc, a1, a2) =>
+                          RaceResultScreen(race: race),
+                      transitionsBuilder: (cc, a1, a2, child) =>
+                          FadeTransition(opacity: a1, child: child),
+                      transitionDuration:
+                          const Duration(milliseconds: 300),
                     ),
                   );
                 },
@@ -520,6 +607,21 @@ class _HomeContent extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  // ── 라이프사이클 잠금 팝업 (StatelessWidget용 정적 헬퍼) ─────────
+  static void _showLockDialogStatic(
+    BuildContext context, {
+    required String icon,
+    required String title,
+    required String message,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.75),
+      builder: (_) => _LockDialog(icon: icon, title: title, message: message),
     );
   }
 }
@@ -665,6 +767,185 @@ class _PremiumBottomSheet extends StatelessWidget {
           Text(text,
               style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
         ],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// _LifecycleBanner — Null/시즌오프 공지 배너
+// ──────────────────────────────────────────────────────────────
+class _LifecycleBanner extends StatelessWidget {
+  final String icon;
+  final Color color;
+  final String title;
+  final String message;
+  final String sub;
+  final String badgeText;
+  final Color badgeColor;
+
+  const _LifecycleBanner({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.message,
+    required this.sub,
+    required this.badgeText,
+    required this.badgeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(icon, style: const TextStyle(fontSize: 22)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                            color: badgeColor.withValues(alpha: 0.5)),
+                      ),
+                      child: Text(
+                        badgeText,
+                        style: TextStyle(
+                            color: badgeColor,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.5),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  message,
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.75),
+                      fontSize: 11,
+                      height: 1.4),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  sub,
+                  style: TextStyle(
+                      color: color.withValues(alpha: 0.7),
+                      fontSize: 10,
+                      height: 1.3),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// _LockDialog — 모의레이서 잠금 팝업
+// ──────────────────────────────────────────────────────────────
+class _LockDialog extends StatelessWidget {
+  final String icon;
+  final String title;
+  final String message;
+
+  const _LockDialog({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A1628),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFF1E3A5A), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.6),
+              blurRadius: 32,
+              spreadRadius: 4,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(icon, style: const TextStyle(fontSize: 44)),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.70),
+                  fontSize: 13,
+                  height: 1.6),
+            ),
+            const SizedBox(height: 20),
+            GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                      colors: [Color(0xFF1A3A5A), Color(0xFF0D2040)]),
+                  borderRadius: BorderRadius.circular(12),
+                  border:
+                      Border.all(color: const Color(0xFF2A5A8A), width: 1),
+                ),
+                child: const Text(
+                  '확인',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
