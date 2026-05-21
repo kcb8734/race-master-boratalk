@@ -2166,7 +2166,9 @@ class _RacePainter extends CustomPainter {
         const Color(0xFF81C784).withValues(alpha: 0.4), 10, bold: true, centered: true);
 
     // ── ⑧ 직선 레이블 ──
-    _txt(canvas, '우직선 400m',
+    // 우직선: 1200m/1300m/1400m 경주의 출발선이 위치하는 구간
+    // → 1300m을 기준 레이블로 표시 (사용자 요청: 400m → 1300m 변경)
+    _txt(canvas, '1300m',
         Offset(tr.right + 8, cy),
         Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
     _txt(canvas, '좌직선 600m',
@@ -2256,6 +2258,8 @@ class _RacePainter extends CustomPainter {
     _txt(canvas, 'GOAL', goalTag, Colors.white, 10, bold: true, centered: true);
 
     // ③ 현재 경주 출발선 (황금색 강조)
+    // 1200m/1300m/1400m 경주는 이미 _drawSeoulAllStartLines에서 황금색으로 표시됨
+    // → 추가 강조 라인 그리기 (굵게)
     final spp  = startP % 1.0;
     final spt  = _TG.toPoint(spp, tr);
     final sang = _TG.toAngle(spp);
@@ -2265,48 +2269,148 @@ class _RacePainter extends CustomPainter {
         Paint()..color = Colors.white..strokeWidth = 3.0);
     canvas.drawLine(spt + Offset(snx, sny), spt - Offset(snx, sny),
         Paint()..color = const Color(0xFFFFD700)..strokeWidth = 2.0);
+
+    // ④ 1200m/1300m/1400m 경주: 우직선 바깥에 스타트라인 안내 마커 그룹 표시
+    // (GOAL에서 UP 방향으로 출발하는 3개 경주의 출발선을 트랙 오른쪽 바깥에 강조)
+    _drawRightStraightStartMarkers(canvas, tr);
+  }
+
+  // ── 우직선(오른쪽) 1200m/1300m/1400m 출발선 마커 (바깥 안내선) ──
+  // 서울/부산경남 우직선(화면 우측)에 위치한 단거리 출발선 그룹 표시
+  // CCW 기준: 우직선 위→아래 진행 → 모두 UP(위) 방향으로 GOAL을 향해 출발
+  void _drawRightStraightStartMarkers(Canvas canvas, Rect tr) {
+    // 우직선 바깥쪽 좌표 기준점
+    final cx = tr.center.dx;
+    final hw = tr.width  * 0.42;
+
+    // 1200m/1300m/1400m 각 출발선의 트랙 상 진행률 계산
+    // _TG.startP(d) 사용 (GOAL 역산)
+    final dists = [1200, 1300, 1400];
+
+    // 출발선 그룹 연결선 (세로 브라켓) — 1200m 상단 ~ 1400m 하단 연결
+    final p1200 = _TG.startP(1200);
+    final p1400 = _TG.startP(1400);
+    final pt1200 = _TG.toPoint(p1200 % 1.0, tr);
+    final pt1400 = _TG.toPoint(p1400 % 1.0, tr);
+
+    // 우직선 진행방향(아래=+y) 수직 = 가로(±x 방향)
+    // 우직선 바깥쪽: x 증가 방향 → Offset(+값, 0)
+    const outerOffX = 38.0; // 트랙 바깥으로 얼마나 떨어뜨릴지
+
+    // 브라켓 연결선 (1200m 위 ~ 1400m 아래, 트랙 오른쪽 바깥)
+    final bracketX = cx + hw + outerOffX;
+    canvas.drawLine(
+      Offset(bracketX, pt1200.dy),
+      Offset(bracketX, pt1400.dy),
+      Paint()..color = Colors.white.withValues(alpha: 0.22)..strokeWidth = 1.0,
+    );
+
+    // 각 거리 출발선: 가로 눈금선 + 레이블
+    for (final d in dists) {
+      final sp = _TG.startP(d);
+      final pt = _TG.toPoint(sp % 1.0, tr);
+      final isCurrent = (d == distance);
+
+      // 트랙 바깥으로 가로선 (우직선은 진행방향=아래, 법선=±x)
+      final lineColor = isCurrent
+          ? const Color(0xFFFFD700)
+          : Colors.white.withValues(alpha: 0.30);
+      final lineW = isCurrent ? 2.0 : 1.0;
+
+      // 트랙 경계에서 브라켓까지 눈금선
+      canvas.drawLine(
+        Offset(cx + hw, pt.dy),
+        Offset(bracketX + 6, pt.dy),
+        Paint()..color = lineColor..strokeWidth = lineW,
+      );
+
+      // 레이블: 브라켓 오른쪽에 "Xm" 표시
+      final labelColor = isCurrent
+          ? const Color(0xFFFFD700)
+          : Colors.white.withValues(alpha: 0.50);
+      final labelSize = isCurrent ? 8.5 : 7.5;
+
+      if (isCurrent) {
+        // 현재 경주: 박스 배경 + 강조
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(bracketX + 8, pt.dy - 8, 40, 16),
+            const Radius.circular(3),
+          ),
+          Paint()..color = const Color(0xFF1A3A1A).withValues(alpha: 0.85),
+        );
+      }
+      _txt(canvas, '${d}m',
+          Offset(bracketX + 28, pt.dy),
+          labelColor, labelSize, bold: isCurrent, centered: true);
+    }
   }
 
   // 서울/부산경남 전체 출발선 (1200~2300m, 흐리게)
+  // [수정] 1200m/1300m/1400m 출발선: 우직선 오른쪽 바깥에 명확히 표시
+  //        → 모두 UP 방향(우직선 위→아래 진행의 역방향)으로 출발, GOAL을 향해 레이스
   void _drawSeoulAllStartLines(Canvas canvas, Rect tr) {
     const allDists = [1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300];
+    // 우직선에 위치하는 단거리 경주 (1200m/1300m/1400m)
+    const rightStraightDists = {1200, 1300, 1400};
     const tw = 20.0;
 
     for (final d in allDists) {
       final bool isCurrent = (d == distance);
+      final bool isRightStr = rightStraightDists.contains(d);
       final sp = _TG.startP(d);
       final pt  = _TG.toPoint(sp, tr);
       final ang = _TG.toAngle(sp);
       final nx  = -sin(ang) * tw;
       final ny  =  cos(ang) * tw;
 
+      // ── 1200m/1300m/1400m: 트랙 횡단선 강화 + 좌측 라벨 표시 ──
+      // 우직선 진행방향: 아래(+y), 법선: ±x
+      // 횡단선: 트랙 폭 전체를 가로지르는 선
       final lineColor = isCurrent
           ? const Color(0xFFFFD700)
-          : Colors.white.withValues(alpha: 0.18);
-      canvas.drawLine(pt + Offset(nx, ny), pt - Offset(nx, ny),
-          Paint()..color = lineColor..strokeWidth = isCurrent ? 2.5 : 0.8);
+          : isRightStr
+              ? Colors.white.withValues(alpha: 0.28)   // 단거리선: 조금 밝게
+              : Colors.white.withValues(alpha: 0.18);
+      final lineW = isCurrent ? 2.5 : (isRightStr ? 1.2 : 0.8);
 
+      canvas.drawLine(pt + Offset(nx, ny), pt - Offset(nx, ny),
+          Paint()..color = lineColor..strokeWidth = lineW);
+
+      // ── 라벨 위치 결정 ──
+      // 우직선(1200m/1300m/1400m): 트랙 왼쪽(안쪽)에 라벨 표시
+      // - 횡단선의 법선 nx < 0 방향(왼쪽=트랙 안쪽)
+      //   이므로 labelOff = (nx * 2.1, ny * 2.1) = 왼쪽 방향
+      // → 스크린샷과 동일하게 트랙 왼편 안쪽에 거리 마커 표시
       final labelOff = Offset(nx * 2.1, ny * 2.1);
+
       if (isCurrent) {
+        // 현재 경주 출발선: 황금색 강조 + START Xm 박스
         canvas.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromCenter(center: pt + labelOff + const Offset(0, -2), width: 64, height: 16),
+            Rect.fromCenter(center: pt + labelOff + const Offset(0, -2), width: 68, height: 16),
             const Radius.circular(3),
           ),
           Paint()..color = const Color(0xFF0A2A0A).withValues(alpha: 0.88),
         );
         _txt(canvas, 'START ${d}m', pt + labelOff,
             const Color(0xFFFFD700), 8.0, bold: true, centered: true);
+        // 구간 안내 + UP 방향 표시
         final seg = _TG.segment(sp);
         final segLabel = switch (seg) {
-          _Seg.topStr  => '우직선',
+          _Seg.topStr  => isRightStr ? '좌착선' : '우직선',
           _Seg.botStr  => '좌직선',
           _Seg.cornerR => '하단코너',
           _Seg.cornerL => '상단코너',
         };
         _txt(canvas, segLabel, pt + labelOff + const Offset(0, 12),
             Colors.white.withValues(alpha: 0.55), 6.5, centered: true);
+      } else if (isRightStr) {
+        // 1200m/1300m/1400m (비현재): 트랙 안쪽 왼편에 거리 마커
+        _txt(canvas, '${d}m', pt + labelOff,
+            Colors.white.withValues(alpha: 0.45), 7.5, centered: true);
       } else {
+        // 나머지 거리 (1600m 이상): 기존 스타일
         _txt(canvas, '${d}m', pt + labelOff,
             Colors.white.withValues(alpha: 0.36), 7.0, centered: true);
       }
