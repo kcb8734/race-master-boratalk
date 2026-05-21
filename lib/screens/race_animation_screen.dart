@@ -217,22 +217,34 @@ class _TGJeju {
 //  서울/부산경남 트랙 기하학 (_TG) — 실제 도면 기반 세로형 오벌 CW
 //
 //  [서울경마장 도면 기준 — 2단 트랙(내측/외측 겸용)]
-//    - 우측 직선(백스트래치): ≈ 400m  (아래→위, CW 구간0)
-//    - 상단 반원 코너: ≈ 350m (우→좌, CW 구간1, 1800~2000m 출발선)
-//    - 좌측 직선(메인스트래치): ≈ 600m (위→아래, GOAL+1200~1700m 출발선)
-//    - 하단 반원 코너: ≈ 350m (좌→우, CW 구간3)
+//    - 우직선(백스트래치):     ≈ 400m  (아래→위, CW 구간0) ← 1000/1200/1300/1400m 출발선
+//    - 상단 반원 코너:         ≈ 350m  (우→좌, CW 구간1)  ← 2000/2300m 출발선
+//    - 좌직선(메인스트래치):   ≈ 600m  (위→아래, CW 구간2) ← GOAL(하단85%) + 1700~1900m 출발선
+//    - 하단 반원 코너:         ≈ 350m  (좌→우, CW 구간3)  ← 1600m 출발선(코너 센터)
 //    - 총 1주: ≈ 1700m (내측 기준)
 //
 //  CW 시계방향 진행 (실제 서울/부산경남 경주 방향):
-//    구간0 (0→p2):   우직선   아래→위  (2300m 출발선 일부)
-//    구간1 (p2→p3):  상단코너 우→좌   (1800~2000m 출발선)
-//    구간2 (p3→p4):  좌직선   위→아래  (GOAL + 1200~1700m 출발선) ★
-//    구간3 (p4→1.0): 하단코너 좌→우
+//    구간0 (0→p2):   우직선   아래→위  (1000/1200/1300/1400m 출발선) ★
+//    구간1 (p2→p3):  상단코너 우→좌   (2000/2300m 출발선)
+//    구간2 (p3→p4):  좌직선   위→아래  (GOAL 하단85% + 1700~1900m 출발선) ★
+//    구간3 (p4→1.0): 하단코너 좌→우   (1600m 출발선 코너 중앙)
 //
-//  GOAL 위치: 좌직선 진입 직후 상단부 (~5% 지점) = 화면 좌측 상단 코너 바로 후
-//    → CW 진행: p3(좌직선 시작=화면 상단) → p4(좌직선 끝=화면 하단)
-//    → GOAL은 좌직선 상단부(화면 좌측 상단, 상단코너 바로 후)
-//    → 모든 경주 거리는 이 GOAL에서 역산
+//  GOAL 위치: 좌직선 하단부 (~85% 지점) = 화면 좌측 하단, 하단코너 진입 전
+//    → 도면 기준: 좌직선 하단 결승선 (실제 서울 경마장 메인스트레치 하단)
+//    → CW 진행: p3(좌직선 시작=상단) → p4(좌직선 끝=하단)
+//    → GOAL은 p3+(p4-p3)*0.85 = 좌직선 85% 지점 ≈ 화면 좌측 하단부
+//
+//  출발선 거리별 위치 (도면 기준):
+//    1000m: 우직선 65%   (특별 경주 전용, 우상단 바깥 표시) ← 우직선 구간0
+//    1200m: 우직선 15%   (우직선 하단부)                    ← 우직선 구간0
+//    1300m: 우직선 30%   (우직선 중하단)                    ← 우직선 구간0
+//    1400m: 우직선 50%   (우직선 중간)                      ← 우직선 구간0
+//    1600m: 하단코너 50% (코너 센터, 화면 하단 중앙)         ← 하단코너 구간3
+//    1700m: 좌직선 85%   (GOAL과 동일선상, 1바퀴)           ← 좌직선 구간2
+//    1800m: 좌직선 67%   (좌직선 중하단)                    ← 좌직선 구간2
+//    1900m: 좌직선 49%   (좌직선 중간)                      ← 좌직선 구간2
+//    2000m: 좌직선 31%   (좌직선 중상단)                    ← 좌직선 구간2
+//    2300m: 상단코너 57% (상단코너 중간)                    ← 상단코너 구간1
 //
 //  2단 트랙 구조:
 //    - 내측 레인 (innerR): clusterOff < 0 → 안쪽
@@ -242,36 +254,36 @@ class _TG {
   // 서울/부산경남 트랙 구간 거리(m) — CW 기준
   static const double dRight  = 400.0; // 우직선 (아래→위, CW 구간0)
   static const double dCornT  = 350.0; // 상단 반원 코너 (우→좌, CW 구간1)
-  static const double dLeft   = 600.0; // 좌직선 (위→아래, GOAL+1200~1700m, CW 구간2)
-  static const double dCornB  = 350.0; // 하단 반원 코너 (좌→우, CW 구간3)
+  static const double dLeft   = 600.0; // 좌직선 (위→아래, GOAL+1700~1900m, CW 구간2)
+  static const double dCornB  = 350.0; // 하단 반원 코너 (좌→우, 1600m 출발, CW 구간3)
   static const double total   = dRight + dCornT + dLeft + dCornB; // ≈1700m
 
   // 구간 진행률 경계 (CW 기준)
-  static double get p2 => dRight / total;                          // 상단코너 시작 ≈0.235
-  static double get p3 => (dRight + dCornT) / total;               // 좌직선 시작  ≈0.441
-  static double get p4 => (dRight + dCornT + dLeft) / total;       // 하단코너 시작 ≈0.794
+  static double get p2 => dRight / total;                          // 상단코너 시작 ≈0.2353
+  static double get p3 => (dRight + dCornT) / total;               // 좌직선 시작  ≈0.4412
+  static double get p4 => (dRight + dCornT + dLeft) / total;       // 하단코너 시작 ≈0.7941
 
   // ── GOAL 고정 위치 ──
-  // 좌직선 진입 직후 상단부 (~5% 지점) = 화면 좌측 상단, 상단코너 바로 후
-  // CW 진행: p3(좌직선 시작=화면 상단) → p4(좌직선 끝=화면 하단)
-  // GOAL은 좌직선 상단부(화면 좌측 상단, 상단코너 바로 후)
-  static double get goalP => p3 + (p4 - p3) * 0.05; // 좌직선 5% ≈ 화면 좌측 상단
+  // 도면 기준: 좌직선 하단부 85% 지점 = 화면 좌측 하단, 하단코너 진입 전
+  // CW 진행: p3(좌직선 시작=상단) → p4(좌직선 끝=하단)
+  // GOAL = p3 + (p4-p3)*0.85 ≈ 0.4412 + 0.3529*0.85 ≈ 0.7412
+  static double get goalP => p3 + (p4 - p3) * 0.85; // 좌직선 85% ≈ 화면 좌측 하단
 
   // ── 출발 진행률 (GOAL 역산, CW 기준) ──
-  //  서울 경주거리: 1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300m
-  //
-  //  CW 기준 각 거리의 트랙 상 위치 (GOAL에서 역산):
-  //    1200m: 좌직선 88% (startP≈0.7529)
-  //    1300m: 좌직선 72% (startP≈0.6941)
-  //    1400m: 좌직선 55% (startP≈0.6353)
-  //    1600m: 좌직선 22% (startP≈0.5176)
-  //    1700m: 좌직선 5%  (startP≈0.4588) = GOAL과 동일선
-  //    1800m: 상단코너 80% (startP≈0.4000)
-  //    1900m: 상단코너 51% (startP≈0.3412)
-  //    2000m: 상단코너 23% (startP≈0.2824)
-  //    2300m: 우직선 45%   (startP≈0.1059)
+  //  서울 경주거리: 1000, 1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300m
+  //  총 트랙 1700m 기준 각 위치 (goalP=0.7412 기준 역산):
+  //    1000m: goalP - 1000/1700 ≈ 0.1529  → 우직선 65%  (특별 경주 전용)
+  //    1200m: goalP - 1200/1700 ≈ 0.0353  → 우직선 15%
+  //    1300m: goalP - 1300/1700 ≈ (0.9647+1.0)%1 ≈ 0.9647 → 우직선 가장 하단
+  //    1400m: goalP - 1400/1700 ≈ 0.8882  → 우직선 중단~하단
+  //    1600m: goalP - 1600/1700 ≈ 0.7647→반전→ 하단코너 약50%
+  //    1700m: goalP - 1700/1700 = goalP   → 좌직선 85% (GOAL과 동일, 1바퀴)
+  //    1800m: goalP - 1800/1700 ≈ 0.6824  → 좌직선 67%
+  //    1900m: goalP - 1900/1700 ≈ 0.6235  → 좌직선 49%
+  //    2000m: goalP - 2000/1700 ≈ 0.5647  → 좌직선 31%
+  //    2300m: goalP - 2300/1700 ≈ 0.3882  → 상단코너 약57%
   static double startP(int distM) {
-    final ratio = distM.clamp(1200, 2400) / total;
+    final ratio = distM.clamp(1000, 2400) / total;
     return (goalP - ratio + 10.0) % 1.0;
   }
 
@@ -669,7 +681,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       _spurt100 = _goalP - 100.0 / _TGJeju.total;
     } else {
       // 서울/부산경남 트랙 파라미터 (세로형 오벌, _TG 기반, CW)
-      // 모든 거리 동일: startP → goalP = startP + dist/total (prog 증가)
+      // 경주거리: 1000m(특별) / 1200~2300m (일반)
+      // startP → goalP = startP + dist/total (prog 증가, 통일)
       _startP   = _TG.startP(widget.race.distance);
       _goalP    = _startP + widget.race.distance / _TG.total;
       _baseSec  = 30.0;
@@ -1957,10 +1970,10 @@ class _RacePainter extends CustomPainter {
       Paint()..color = const Color(0xFFFFD700).withValues(alpha: 0.4)..strokeWidth = 1.5,
     );
 
-    // 방향 텍스트 (모든 경주장 CCW)
-    const dirText  = '시계 반대 방향 ←';
-    final dirLabel = isJeju ? 'CCW (제주)' : 'CCW (서울·부산경남)';
-    const dirColor = Color(0xFF81C784);
+    // 방향 텍스트 — 서울·부산경남: CW(시계방향), 제주: CCW(반시계방향)
+    final dirText  = isJeju ? '시계 반대 방향 ←' : '시계 방향 →';
+    final dirLabel = isJeju ? 'CCW (제주)' : 'CW (서울·부산경남)';
+    final dirColor = isJeju ? const Color(0xFF81C784) : const Color(0xFF64B5F6);
 
     _txt(canvas, dirText,
         Offset(w * 0.5, top + barH * 0.32),
@@ -1969,8 +1982,8 @@ class _RacePainter extends CustomPainter {
         Offset(w * 0.5, top + barH * 0.68),
         dirColor.withValues(alpha: 0.65), 9.5, centered: true);
 
-    // 미니 오벌 (좌측) — 항상 CCW
-    _paintMiniOval(canvas, Offset(w * 0.12, top + barH * 0.5), 20, false);
+    // 미니 오벌 (좌측) — 제주: CCW, 서울·부산경남: CW
+    _paintMiniOval(canvas, Offset(w * 0.12, top + barH * 0.5), 20, !isJeju);
 
     // 마번 순서 안내 (우측)
     // 제주: 왼쪽=1번 / 서울·부산경남: 오른쪽=1번
@@ -2175,14 +2188,20 @@ class _RacePainter extends CustomPainter {
         const Color(0xFF81C784).withValues(alpha: 0.4), 10, bold: true, centered: true);
 
     // ── ⑧ 직선 레이블 ──
-    // CW 우직선: 아래→위 (2300m 출발선 일부)
-    // CW 좌직선: 위→아래 (1200~1700m 출발선 + GOAL)
+    // CW 우직선: 아래→위 ← 1000m(특별)/1200/1300/1400m 출발선
+    // CW 좌직선: 위→아래 ← GOAL(하단85%) + 1700~2000m 출발선
     _txt(canvas, '우직선 400m',
         Offset(tr.right + 6, cy),
         Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
+    _txt(canvas, '↑1000~1400m',
+        Offset(tr.right + 6, cy - 14),
+        Colors.white.withValues(alpha: 0.25), 6.5, centered: false);
     _txt(canvas, '좌직선 600m',
         Offset(tr.left - 74, cy),
         Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
+    _txt(canvas, 'GOAL+1700~2000m',
+        Offset(tr.left - 74, cy + 12),
+        Colors.white.withValues(alpha: 0.25), 6.0, centered: false);
   }
 
   void _drawGrassStripes(Canvas canvas, double cx, double cy, double hw, double hr) {
@@ -2215,8 +2234,9 @@ class _RacePainter extends CustomPainter {
         Colors.white.withValues(alpha: 0.35), 8, centered: true);
   }
 
-  // ── 거리 마커 ──
+  // ── 거리 마커 (GOAL 기준 역산 잔여거리 표시) ──
   void _drawMarkers(Canvas canvas, Size size, Rect tr) {
+    // distance가 1000m인 경우에도 200/400/600/800m 마커 표시
     final dists = [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800];
     final gp = _TG.goalP;
     for (final d in dists) {
@@ -2238,39 +2258,48 @@ class _RacePainter extends CustomPainter {
   }
 
   // ── 서울/부산경남 전체 출발선 + GOAL ──
-  // 도면 기준: GOAL=좌직선 하단부, 출발선 1200~2300m 전체 표시
+  // 도면 기준:
+  //   GOAL = 좌직선 하단부 85% (화면 좌측 하단, 하단코너 바로 전)
+  //   1000m(특별)/1200/1300/1400m = 우직선
+  //   1600m = 하단코너 센터
+  //   1700~2000m = 좌직선
+  //   2300m = 상단코너
   void _drawStartFinishLines(Canvas canvas, Size size, Rect tr) {
     // ① 모든 출발선 (흐리게)
     _drawSeoulAllStartLines(canvas, tr);
 
     // ② GOAL 결승선 (체크무늬 + 빨간 표지판)
-    // 서울/부산경남 CW: GOAL = 좌직선 5% (좌직선 상단부, 상단코너 바로 후)
+    // 도면 기준: 좌직선 하단 85% = 화면 좌측 하단, 하단코너 진입 전
     const tw = 26.0;
-    final gppRaw = _TG.goalP; // 모든 거리 공통 GOAL 위치
-    final gpp  = gppRaw % 1.0;
+    final gpp  = _TG.goalP % 1.0;
     final gpt  = _TG.toPoint(gpp, tr);
     final gang = _TG.toAngle(gpp);
-    final gnx  = -sin(gang) * (tw + 8);
-    final gny  =  cos(gang) * (tw + 8);
+    // GOAL은 좌직선 → gang=π/2 → gnx=cos(π/2)*체크폭, gny=-sin(π/2)*체크폭
+    // 좌직선 바깥(왼쪽)이 레이블 위치 → -sin(gang) = -1 방향 (x 감소)
+    final gnx  = -sin(gang) * (tw + 8); // 좌직선: sin(π/2)=1 → gnx=-(tw+8) (왼쪽 바깥)
+    final gny  =  cos(gang) * (tw + 8); // 좌직선: cos(π/2)=0 → gny=0
 
+    // 체크무늬 결승선
     for (int i = 0; i < 10; i++) {
       final ptA = gpt + Offset(gnx, gny) * (1 - i / 10.0 * 2);
       final ptB = gpt + Offset(gnx, gny) * (1 - (i + 1) / 10.0 * 2);
       canvas.drawLine(ptA, ptB, Paint()
         ..color = i.isEven ? Colors.white : Colors.red
-        ..strokeWidth = 5.0
+        ..strokeWidth = 5.5
         ..strokeCap = StrokeCap.butt);
     }
-    final goalTag = gpt + Offset(gnx * 2.6, gny * 2.6);
+    // GOAL 표지판 (좌직선 바깥 왼쪽에 배치)
+    final goalTag = gpt + Offset(gnx * 2.8, gny * 2.8);
     canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromCenter(center: goalTag, width: 50, height: 20), const Radius.circular(4)),
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: goalTag, width: 50, height: 20),
+        const Radius.circular(4),
+      ),
       Paint()..color = Colors.red,
     );
     _txt(canvas, 'GOAL', goalTag, Colors.white, 10, bold: true, centered: true);
 
-    // ③ 현재 경주 출발선 (황금색 강조)
-    // CW: 1200~1700m는 좌직선, 1800~2000m는 상단코너, 2300m는 우직선
-    // _drawSeoulAllStartLines에서 황금색으로 표시 → 추가 강조 라인 그리기 (굵게)
+    // ③ 현재 경주 출발선 강조 (황금색 굵은선)
     final spp  = startP % 1.0;
     final spt  = _TG.toPoint(spp, tr);
     final sang = _TG.toAngle(spp);
@@ -2281,90 +2310,167 @@ class _RacePainter extends CustomPainter {
     canvas.drawLine(spt + Offset(snx, sny), spt - Offset(snx, sny),
         Paint()..color = const Color(0xFFFFD700)..strokeWidth = 2.0);
 
-    // ④ 1200m/1300m/1400m/1600m 경주: 좌직선 바깥에 스타트라인 안내 마커 표시
-    _drawLeftStraightStartMarkers(canvas, tr);
+    // ④ 1600m: 하단코너 코너 마커 추가 시각화
+    if (distance == 1600) {
+      _draw1600CornerMarker(canvas, tr);
+    }
+
+    // ⑤ 우직선 바깥 스타트라인 안내 마커 (1000/1200/1300/1400m 경주)
+    _drawRightStraightStartMarkers(canvas, tr);
   }
 
-  // ── CW: 좌직선(왼쪽) 1200m/1300m/1400m/1600m 출발선 마커 (바깥 안내선) ──
-  // 서울/부산경남 CW 기준: 1200~1600m 출발선은 모두 좌직선(화면 좌측)에 위치
-  // CW 진행: 좌직선 위→아래 → GOAL을 향해 아래 방향으로 레이스
-  void _drawLeftStraightStartMarkers(Canvas canvas, Rect tr) {
-    // 좌직선 바깥쪽 좌표 기준점
+  // ── 1600m 하단코너 출발선 특별 마커 ──
+  // 하단코너 중앙부(50% 지점)에 아치형 마커 표시
+  void _draw1600CornerMarker(Canvas canvas, Rect tr) {
+    final cx = tr.center.dx;
+    final cy = tr.center.dy;
+    final hw = tr.width  * 0.42;
+    final hr = tr.height * 0.44;
+
+    final sp  = _TG.startP(1600);
+    final pt  = _TG.toPoint(sp % 1.0, tr);
+    final ang = _TG.toAngle(sp % 1.0);
+    final nx  = -sin(ang) * 30.0;
+    final ny  =  cos(ang) * 30.0;
+
+    // 코너 중앙 마커 (외측 호 방향으로 표지선)
+    canvas.drawLine(pt + Offset(nx, ny), pt - Offset(nx, ny),
+        Paint()
+          ..color = const Color(0xFFFFD700).withValues(alpha: 0.85)
+          ..strokeWidth = 2.5);
+
+    // 코너 안쪽 아치 표시 (코너임을 시각적으로 강조)
+    final arcCenter = Offset(cx, cy + hr);
+    canvas.drawArc(
+      Rect.fromCenter(center: arcCenter, width: hw * 1.6, height: hw * 1.6),
+      pi * 0.85, pi * 0.3, false,
+      Paint()
+        ..color = const Color(0xFFFFD700).withValues(alpha: 0.40)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0,
+    );
+
+    // "하단코너 1600m" 레이블 (코너 안쪽)
+    _txt(canvas, '1600m', pt + Offset(nx * 2.2, ny * 2.2),
+        const Color(0xFFFFD700).withValues(alpha: 0.90), 8.0,
+        bold: true, centered: true);
+    _txt(canvas, '하단코너', pt + Offset(nx * 2.2, ny * 2.2 + 12),
+        Colors.white.withValues(alpha: 0.60), 6.5, centered: true);
+  }
+
+  // ── CW: 우직선(오른쪽) 1000/1200/1300/1400m 출발선 바깥 안내 마커 ──
+  // 도면 기준: 1000m(특별경주)/1200/1300/1400m 출발선은 우직선(화면 우측)에 위치
+  // CW 진행: 우직선 아래→위 → 상단코너 → 좌직선 위→아래 → GOAL
+  // 마커는 우직선 바깥(오른쪽)에 표시 — 도면과 동일
+  void _drawRightStraightStartMarkers(Canvas canvas, Rect tr) {
     final cx = tr.center.dx;
     final hw = tr.width  * 0.42;
+    const outerOffX = 40.0; // 트랙 오른쪽 바깥으로 떨어뜨릴 거리
 
-    // CW 기준 좌직선 단거리 경주: 1200m/1300m/1400m/1600m
-    final dists = [1200, 1300, 1400, 1600];
+    // 우직선에 위치하는 출발선 (아래쪽부터 순서: 1200→1300→1400→1000)
+    // CW 우직선: 아래→위 진행 → 1200m(하단부, 큰 y), 1400m(중단), 1000m(상단, 작은 y)
+    final dists = [1200, 1300, 1400, 1000]; // 화면 아래→위 순
 
-    // 출발선 그룹 연결선 (세로 브라켓) — 1200m 하단 ~ 1600m 상단 연결
-    final p1200 = _TG.startP(1200);
-    final p1600 = _TG.startP(1600);
+    // 브라켓 연결선: 1200m(하단) ~ 1400m(중단) 그룹 (통상 경주 구간)
+    final p1200  = _TG.startP(1200);
+    final p1400  = _TG.startP(1400);
     final pt1200 = _TG.toPoint(p1200 % 1.0, tr);
-    final pt1600 = _TG.toPoint(p1600 % 1.0, tr);
+    final pt1400 = _TG.toPoint(p1400 % 1.0, tr);
+    final bracketX = cx + hw + outerOffX;
 
-    // 좌직선 바깥쪽: x 감소 방향 → 좌측 바깥으로
-    const outerOffX = 38.0; // 트랙 바깥으로 얼마나 떨어뜨릴지
-
-    // 브라켓 연결선 (1600m 위 ~ 1200m 아래, 트랙 왼쪽 바깥)
-    // CW 좌직선: p3=상단(cy-hr), p4=하단(cy+hr) → 1600m는 위쪽, 1200m는 아래쪽
-    final bracketX = cx - hw - outerOffX;
+    // 1200~1400m 브라켓 (통상 거리 그룹)
     canvas.drawLine(
-      Offset(bracketX, pt1600.dy), // 1600m: 위쪽 (더 작은 y)
       Offset(bracketX, pt1200.dy), // 1200m: 아래쪽 (더 큰 y)
+      Offset(bracketX, pt1400.dy), // 1400m: 위쪽 (더 작은 y)
       Paint()..color = Colors.white.withValues(alpha: 0.22)..strokeWidth = 1.0,
     );
 
-    // 각 거리 출발선: 가로 눈금선 + 레이블
+    // 1000m 별도 점선 마커 (특별경주 전용 — 브라켓 위쪽 따로 표시)
+    final p1000  = _TG.startP(1000);
+    final pt1000 = _TG.toPoint(p1000 % 1.0, tr);
+    canvas.drawLine(
+      Offset(cx + hw, pt1000.dy),
+      Offset(bracketX + 4, pt1000.dy),
+      Paint()
+        ..color = const Color(0xFF00BFFF).withValues(alpha: 0.45)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke,
+    );
+
+    // 각 거리 눈금선 + 레이블
     for (final d in dists) {
       final sp = _TG.startP(d);
       final pt = _TG.toPoint(sp % 1.0, tr);
-      final isCurrent = (d == distance);
+      final isCurrent  = (d == distance);
+      final is1000m    = (d == 1000);
 
       final lineColor = isCurrent
           ? const Color(0xFFFFD700)
-          : Colors.white.withValues(alpha: 0.30);
-      final lineW = isCurrent ? 2.0 : 1.0;
+          : is1000m
+              ? const Color(0xFF00BFFF).withValues(alpha: 0.50)
+              : Colors.white.withValues(alpha: 0.32);
+      final lineW = isCurrent ? 2.0 : (is1000m ? 1.4 : 1.0);
 
-      // 트랙 경계에서 브라켓까지 눈금선 (좌측 방향)
+      // 트랙 경계 → 브라켓까지 눈금선 (우측 방향)
       canvas.drawLine(
-        Offset(cx - hw, pt.dy),
-        Offset(bracketX - 6, pt.dy),
+        Offset(cx + hw, pt.dy),
+        Offset(bracketX + 6, pt.dy),
         Paint()..color = lineColor..strokeWidth = lineW,
       );
 
-      // 레이블: 브라켓 왼쪽에 "Xm" 표시
+      // 레이블
       final labelColor = isCurrent
           ? const Color(0xFFFFD700)
-          : Colors.white.withValues(alpha: 0.50);
-      final labelSize = isCurrent ? 8.5 : 7.5;
+          : is1000m
+              ? const Color(0xFF00BFFF).withValues(alpha: 0.80)
+              : Colors.white.withValues(alpha: 0.55);
+      final labelSize  = isCurrent ? 8.5 : (is1000m ? 8.0 : 7.5);
 
       if (isCurrent) {
         canvas.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromLTWH(bracketX - 48, pt.dy - 8, 40, 16),
+            Rect.fromLTWH(bracketX + 10, pt.dy - 8, 44, 16),
             const Radius.circular(3),
           ),
           Paint()..color = const Color(0xFF1A3A1A).withValues(alpha: 0.85),
         );
+      } else if (is1000m) {
+        // 1000m: 하늘색 배경 박스
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(bracketX + 10, pt.dy - 8, 50, 16),
+            const Radius.circular(3),
+          ),
+          Paint()..color = const Color(0xFF003A5A).withValues(alpha: 0.75),
+        );
       }
-      _txt(canvas, '${d}m',
-          Offset(bracketX - 28, pt.dy),
-          labelColor, labelSize, bold: isCurrent, centered: true);
+      _txt(canvas, is1000m ? '1000m(특)' : '${d}m',
+          Offset(bracketX + 32, pt.dy),
+          labelColor, labelSize, bold: isCurrent || is1000m, centered: true);
     }
   }
 
-  // 서울/부산경남 전체 출발선 (1200~2300m, 흐리게)
-  // CW 기준: 1200~1600m = 좌직선(좌측 바깥 마커), 1700m 이상 = 좌직선/코너/우직선
+  // 서울/부산경남 전체 출발선 (1000~2300m, 흐리게)
+  // 도면 기준:
+  //   · 우직선 (구간0): 1000m(특별경주), 1200m, 1300m, 1400m
+  //   · 하단코너 (구간3): 1600m (코너 센터)
+  //   · 좌직선 (구간2): GOAL + 1700m, 1800m, 1900m, 2000m
+  //   · 상단코너 (구간1): 2300m
   void _drawSeoulAllStartLines(Canvas canvas, Rect tr) {
-    const allDists = [1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300];
-    // CW: 좌직선에 위치하는 단거리 경주 (1200~1600m)
-    const leftStraightDists = {1200, 1300, 1400, 1600};
+    const allDists = [1000, 1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300];
+    // 우직선에 위치하는 경주 (우직선 바깥 마커 별도 표시)
+    const rightStraightDists = {1000, 1200, 1300, 1400};
+    // 좌직선에 위치하는 경주
+    const leftStraightDists  = {1700, 1800, 1900, 2000};
     const tw = 20.0;
 
     for (final d in allDists) {
-      final bool isCurrent = (d == distance);
-      final bool isLeftStr = leftStraightDists.contains(d);
-      final sp = _TG.startP(d);
+      final bool isCurrent   = (d == distance);
+      final bool isRightStr  = rightStraightDists.contains(d);
+      final bool isLeftStr   = leftStraightDists.contains(d);
+      final bool is1000m     = (d == 1000);
+      final bool is1600m     = (d == 1600);
+      final sp  = _TG.startP(d);
       final pt  = _TG.toPoint(sp, tr);
       final ang = _TG.toAngle(sp);
       final nx  = -sin(ang) * tw;
@@ -2373,10 +2479,20 @@ class _RacePainter extends CustomPainter {
       // 횡단선 색상 및 두께
       final lineColor = isCurrent
           ? const Color(0xFFFFD700)
-          : isLeftStr
-              ? Colors.white.withValues(alpha: 0.28)   // 좌직선 단거리: 조금 밝게
-              : Colors.white.withValues(alpha: 0.18);
-      final lineW = isCurrent ? 2.5 : (isLeftStr ? 1.2 : 0.8);
+          : is1000m
+              ? const Color(0xFF00BFFF).withValues(alpha: 0.55)  // 1000m: 하늘색 강조
+              : is1600m
+                  ? Colors.white.withValues(alpha: 0.38)          // 1600m 코너: 밝게
+                  : isRightStr
+                      ? Colors.white.withValues(alpha: 0.32)      // 우직선 단거리
+                      : isLeftStr
+                          ? Colors.white.withValues(alpha: 0.22)  // 좌직선 중거리
+                          : Colors.white.withValues(alpha: 0.16); // 코너/기타
+      final lineW = isCurrent ? 2.5
+          : is1000m  ? 1.8
+          : is1600m  ? 1.5
+          : isRightStr ? 1.3
+          : 0.9;
 
       canvas.drawLine(pt + Offset(nx, ny), pt - Offset(nx, ny),
           Paint()..color = lineColor..strokeWidth = lineW);
@@ -2388,7 +2504,7 @@ class _RacePainter extends CustomPainter {
         // 현재 경주 출발선: 황금색 강조 + START Xm 박스
         canvas.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromCenter(center: pt + labelOff + const Offset(0, -2), width: 68, height: 16),
+            Rect.fromCenter(center: pt + labelOff + const Offset(0, -2), width: 72, height: 16),
             const Radius.circular(3),
           ),
           Paint()..color = const Color(0xFF0A2A0A).withValues(alpha: 0.88),
@@ -2405,12 +2521,27 @@ class _RacePainter extends CustomPainter {
         };
         _txt(canvas, segLabel, pt + labelOff + const Offset(0, 12),
             Colors.white.withValues(alpha: 0.55), 6.5, centered: true);
-      } else if (isLeftStr) {
-        // 1200~1600m (비현재): 좌직선 안쪽에 거리 마커
+      } else if (is1000m) {
+        // 1000m 특별경주: 하늘색 강조 표시
+        _txt(canvas, '1000m', pt + labelOff,
+            const Color(0xFF00BFFF).withValues(alpha: 0.80), 7.5,
+            bold: true, centered: true);
+        _txt(canvas, '(특별)', pt + labelOff + const Offset(0, 10),
+            const Color(0xFF00BFFF).withValues(alpha: 0.55), 6.0, centered: true);
+      } else if (isRightStr) {
+        // 1200~1400m (우직선): 안쪽에 거리 표시
         _txt(canvas, '${d}m', pt + labelOff,
-            Colors.white.withValues(alpha: 0.45), 7.5, centered: true);
+            Colors.white.withValues(alpha: 0.50), 7.5, centered: true);
+      } else if (is1600m) {
+        // 1600m (하단코너): 코너 마커
+        _txt(canvas, '1600m', pt + labelOff,
+            Colors.white.withValues(alpha: 0.55), 7.5, centered: true);
+      } else if (isLeftStr) {
+        // 1700~2000m (좌직선): 안쪽에 거리 표시
+        _txt(canvas, '${d}m', pt + labelOff,
+            Colors.white.withValues(alpha: 0.40), 7.0, centered: true);
       } else {
-        // 1700m 이상: 기존 스타일
+        // 2300m (상단코너) 등 기타
         _txt(canvas, '${d}m', pt + labelOff,
             Colors.white.withValues(alpha: 0.36), 7.0, centered: true);
       }
