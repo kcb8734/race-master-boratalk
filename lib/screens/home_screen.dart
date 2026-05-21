@@ -540,13 +540,8 @@ class _HomeContent extends StatelessWidget {
 
                   if (lockState == RaceLockState.seasonOff) {
                     if (!ctx.mounted) return;
-                    _showLockDialogStatic(
-                      ctx,
-                      icon: '🚫',
-                      title: '시즌 오프',
-                      message: '금주 실시간 경주 스케줄이 모두 종료되었습니다.\n'
-                          '다음 주 경주 데이터 업데이트 전까지\n모의 레이스가 제한됩니다.',
-                    );
+                    // 시즌오프: 차단 대신 데모 모드로 진입 안내
+                    await _showSeasonOffDemoDialog(ctx, provider);
                     return;
                   }
 
@@ -622,6 +617,39 @@ class _HomeContent extends StatelessWidget {
       barrierDismissible: true,
       barrierColor: Colors.black.withValues(alpha: 0.75),
       builder: (_) => _LockDialog(icon: icon, title: title, message: message),
+    );
+  }
+
+  // ── 시즌오프 데모 모드 진입 다이얼로그 ───────────────────────
+  static Future<void> _showSeasonOffDemoDialog(
+    BuildContext context,
+    RaceProvider provider,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.8),
+      builder: (_) => const _SeasonOffDemoDialog(),
+    );
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+
+    // 가상 데이터 로드 후 대시보드 진입
+    await provider.loadDemoRaceForSeasonOff();
+    if (!context.mounted) return;
+
+    final demoRace = provider.selectedRace;
+    if (demoRace == null) return;
+
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (c, a1, a2) =>
+            RaceDashboardScreen(race: demoRace, isDemoMode: true),
+        transitionsBuilder: (c, a1, a2, child) =>
+            FadeTransition(opacity: a1, child: child),
+        transitionDuration: const Duration(milliseconds: 400),
+      ),
     );
   }
 }
@@ -943,6 +971,229 @@ class _LockDialog extends StatelessWidget {
                       fontWeight: FontWeight.w700),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// _SeasonOffDemoDialog — 시즌오프 체험 모드 진입 안내 다이얼로그
+// ──────────────────────────────────────────────────────────────
+class _SeasonOffDemoDialog extends StatelessWidget {
+  const _SeasonOffDemoDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 340),
+        padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A1628),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: const Color(0xFFFFD700).withValues(alpha: 0.45),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFFFD700).withValues(alpha: 0.12),
+              blurRadius: 32,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 아이콘
+            Container(
+              width: 68,
+              height: 68,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFD700).withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.4),
+                  width: 1.5,
+                ),
+              ),
+              child: const Center(
+                child: Text('🏇', style: TextStyle(fontSize: 32)),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 제목
+            const Text(
+              '체험 모의레이스',
+              style: TextStyle(
+                color: Color(0xFFFFD700),
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // 시즌오프 안내 배지
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: const Color(0xFFFF3B30).withValues(alpha: 0.4),
+                ),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('🚫', style: TextStyle(fontSize: 11)),
+                  SizedBox(width: 5),
+                  Text(
+                    'SEASON OFF',
+                    style: TextStyle(
+                      color: Color(0xFFFF3B30),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // 안내 메시지 박스
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFAA00).withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFFFAA00).withValues(alpha: 0.3),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('⚠️', style: TextStyle(fontSize: 14)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '현재 모의 레이스는 가상의 데이터로 구현되는 경주입니다.',
+                          style: TextStyle(
+                            color: const Color(0xFFFFAA00).withValues(alpha: 0.9),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '실제 경주 데이터가 아닌 시뮬레이션 전용 가상 말·기수 데이터를 사용합니다. '
+                    '앱의 기능과 구조를 체험하는 용도로만 활용해 주세요.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      fontSize: 11,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            Text(
+              '다음 주 목요일 오후 5시 이후 실제 경주 데이터 업데이트 예정',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.35),
+                fontSize: 10,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // 버튼 2개
+            Row(
+              children: [
+                // 취소
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(context, false),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A2A3A),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF2A4A6A)),
+                      ),
+                      child: Text(
+                        '취소',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // 체험 시작
+                Expanded(
+                  flex: 2,
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(context, true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFFD700), Color(0xFFB8960C)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFFD700).withValues(alpha: 0.3),
+                            blurRadius: 12,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text('🏁', style: TextStyle(fontSize: 16)),
+                          SizedBox(width: 6),
+                          Text(
+                            '체험 시작',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Color(0xFF1A1A1A),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

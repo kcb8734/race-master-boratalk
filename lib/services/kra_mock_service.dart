@@ -350,4 +350,86 @@ class KraMockService {
         '김영규', '박병두', '신기철', '이동훈', '최만호',
         '정재흥', '고석철', '박경율', '송상준', '권순일',
       ];
+
+  // ──────────────────────────────────────────────────────────────
+  // 시즌오프 전용 가상 경주 데이터 (체험 모드)
+  // ──────────────────────────────────────────────────────────────
+
+  /// 시즌오프 기간 체험용 가상 경주 1개 생성
+  static RaceInfo getDemoRace() {
+    return RaceInfo(
+      raceNo: 'DEMO',
+      raceName: '체험 모의경주',
+      startTime: '14:00',
+      distance: 1400,
+      condition: '체험 전용 경주',
+      grade: '체험등급',
+      venueCode: '1',
+      venueName: '서울(가상)',
+      raceDate: _formatDemoDate(),
+      totalHorses: 10,
+      trackCondition: '양호',
+      isFinished: false,
+      isUpcoming: false,
+    );
+  }
+
+  /// 체험 경주용 말 10두 생성
+  static List<HorseEntry> getDemoHorseEntries() {
+    final rng = Random(42); // 고정 시드 — 항상 동일한 데이터
+    final horseNames = [
+      '황금질주', '번개왕', '청운마', '천마', '대왕스피드',
+      '바람의왕', '폭풍마', '빛나는길', '영웅마', '스타레이서',
+    ];
+    final jockeyNames = [
+      '김용근', '조성곤', '박도영', '유현명', '최범현',
+      '이채택', '강민준', '문세영', '박준영', '이창섭',
+    ];
+    final trainerName = '체험조교사';
+
+    final entries = <HorseEntry>[];
+    for (int i = 0; i < 10; i++) {
+      final rating = 45.0 + rng.nextDouble() * 50.0;
+      final speedStat = (40.0 + rng.nextDouble() * 55.0 + rating * 0.05).clamp(0.0, 100.0);
+      final staminaStat = (38.0 + rng.nextDouble() * 55.0).clamp(0.0, 100.0);
+      final formStat = (35.0 + rng.nextDouble() * 58.0).clamp(0.0, 100.0);
+      final trackFitStat = (42.0 + rng.nextDouble() * 48.0).clamp(0.0, 100.0);
+      final baseScore = (speedStat * 0.35 + staminaStat * 0.25 +
+              formStat * 0.20 + trackFitStat * 0.10 + rating * 0.10)
+          .clamp(0.0, 100.0);
+      final odds = 1.8 + rng.nextDouble() * 28.0;
+      final weight = 480 + rng.nextInt(55);
+      final weightChange = rng.nextInt(9) - 4;
+
+      entries.add(HorseEntry(
+        gateNo: i + 1,
+        horseName: horseNames[i],
+        jockeyName: jockeyNames[i],
+        trainerName: trainerName,
+        weight: weight,
+        weightChange: weightChange,
+        rating: rating,
+        speedStat: speedStat,
+        staminaStat: staminaStat,
+        formStat: formStat,
+        trackFitStat: trackFitStat,
+        baseScore: baseScore,
+        recentRecord: _genDemoRecord(rng),
+        odds: double.parse(odds.toStringAsFixed(1)),
+      ));
+    }
+    return entries;
+  }
+
+  static String _genDemoRecord(Random rng) {
+    return List.generate(5, (_) {
+      final r = rng.nextInt(12) + 1;
+      return r <= 8 ? r.toString() : (r <= 10 ? '중' : '낙');
+    }).join('-');
+  }
+
+  static String _formatDemoDate() {
+    final now = DateTime.now();
+    return '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+  }
 }

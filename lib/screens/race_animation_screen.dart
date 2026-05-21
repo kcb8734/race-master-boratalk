@@ -550,11 +550,14 @@ class _Horse {
 class RaceAnimationScreen extends StatefulWidget {
   final RaceInfo race;
   final List<HorseEntry> horses;
+  /// 시즌오프 체험 모드 여부 — 결과 화면에 DEMO 배너 표시
+  final bool isDemoMode;
 
   const RaceAnimationScreen({
     super.key,
     required this.race,
     required this.horses,
+    this.isDemoMode = false,
   });
 
   @override
@@ -1290,6 +1293,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       raceTime: _raceElapsed,
       race: widget.race,
       venueName: _venueName,
+      isDemoMode: widget.isDemoMode,
       onHome: () => Navigator.pop(context),
     );
   }
@@ -2887,6 +2891,7 @@ class _RaceResultBoard extends StatefulWidget {
   final double raceTime;
   final RaceInfo race;
   final String venueName;
+  final bool isDemoMode;
   final VoidCallback onHome;
 
   const _RaceResultBoard({
@@ -2895,6 +2900,7 @@ class _RaceResultBoard extends StatefulWidget {
     required this.race,
     required this.venueName,
     required this.onHome,
+    this.isDemoMode = false,
   });
 
   @override
@@ -3012,6 +3018,8 @@ class _RaceResultBoardState extends State<_RaceResultBoard>
                   children: [
                     // 헤더 (고정)
                     _buildBoardHeader(),
+                    // 시즌오프 데모 안내 배너
+                    if (widget.isDemoMode) _buildDemoBadgeBanner(),
                     // 스크롤 영역 (포디엄 + 전체순위 + 통계)
                     Expanded(
                       child: SingleChildScrollView(
@@ -3034,6 +3042,53 @@ class _RaceResultBoardState extends State<_RaceResultBoard>
           ),    // AnimatedBuilder(_entryAnim) 닫기
         ),  // Positioned 닫기
       ],
+    );
+  }
+
+  // ── 시즌오프 데모 배지 배너 ──
+  Widget _buildDemoBadgeBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: const Color(0xFFFFAA00).withValues(alpha: 0.12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('⚠️', style: TextStyle(fontSize: 13)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '현 모의 레이스는 가상의 데이터로 구현되는 경주입니다. 앱 기능 체험 전용으로 실제 경주 결과와 무관합니다.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: const Color(0xFFFFAA00).withValues(alpha: 0.9),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                height: 1.4,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFF3B30).withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                  color: const Color(0xFFFF3B30).withValues(alpha: 0.45)),
+            ),
+            child: const Text(
+              'DEMO',
+              style: TextStyle(
+                color: Color(0xFFFF3B30),
+                fontSize: 8,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

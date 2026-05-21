@@ -8,11 +8,13 @@ import 'race_animation_screen.dart';
 class RaceSplashScreen extends StatefulWidget {
   final RaceInfo race;
   final List<HorseEntry> horses;
+  final bool isDemoMode;
 
   const RaceSplashScreen({
     super.key,
     required this.race,
     required this.horses,
+    this.isDemoMode = false,
   });
 
   @override
@@ -65,6 +67,7 @@ class _RaceSplashScreenState extends State<RaceSplashScreen>
           pageBuilder: (c, a1, a2) => RaceAnimationScreen(
             race: widget.race,
             horses: widget.horses,
+            isDemoMode: widget.isDemoMode,
           ),
           transitionsBuilder: (c, a1, a2, child) =>
               FadeTransition(opacity: a1, child: child),

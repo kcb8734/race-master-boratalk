@@ -9,7 +9,13 @@ import 'race_splash_screen.dart';
 
 class RaceDashboardScreen extends StatefulWidget {
   final RaceInfo race;
-  const RaceDashboardScreen({super.key, required this.race});
+  /// 시즌오프 체험 모드 여부 — true이면 가상 데이터 경주임을 상단 배너로 안내
+  final bool isDemoMode;
+  const RaceDashboardScreen({
+    super.key,
+    required this.race,
+    this.isDemoMode = false,
+  });
 
   @override
   State<RaceDashboardScreen> createState() => _RaceDashboardScreenState();
@@ -50,6 +56,8 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
           body: Column(
             children: [
               _buildHeader(context),
+              // 시즌오프 체험 모드 안내 배너
+              if (widget.isDemoMode) _buildDemoBanner(),
               if (provider.isLoadingHorses)
                 const Expanded(child: _LoadingPanel())
               else ...[
@@ -91,6 +99,72 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
           bottomNavigationBar: _buildStartButton(provider),
         );
       },
+    );
+  }
+
+  // ── 시즌오프 체험 모드 안내 배너 ──
+  Widget _buildDemoBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFAA00).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFAA00).withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Text('⚠️', style: TextStyle(fontSize: 18)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      '가상 체험 모드',
+                      style: TextStyle(
+                        color: Color(0xFFFFAA00),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                            color: const Color(0xFFFF3B30).withValues(alpha: 0.4)),
+                      ),
+                      child: const Text(
+                        'DEMO DATA',
+                        style: TextStyle(
+                          color: Color(0xFFFF3B30),
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '현 모의 레이스는 가상의 데이터로 구현되는 경주입니다. 앱 기능 체험 전용.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.65),
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -329,7 +403,10 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
   Widget _buildStartButton(RaceProvider provider) {
     final canSim = provider.canSimulate;
     // ── 라이프사이클 잠금 상태 체크 ──
-    final lockState = provider.raceLockFor(widget.race);
+    // 데모 모드(시즌오프 체험)는 seasonOff 잠금을 건너뜀
+    final lockState = widget.isDemoMode
+        ? RaceLockState.active
+        : provider.raceLockFor(widget.race);
     final isLocked = lockState != RaceLockState.active;
 
     // 잠금 상태별 버튼 표시 정보
@@ -463,8 +540,8 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                   _showPremiumDialog();
                   return;
                 }
-                // ── 정상 진입 ──
-                provider.incrementSimCount();
+                // ── 정상 진입 (데모 모드는 simCount 증가 제외) ──
+                if (!widget.isDemoMode) provider.incrementSimCount();
                 Navigator.push(
                   context,
                   PageRouteBuilder(
@@ -472,6 +549,7 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                       race: widget.race,
                       horses: List.from(
                           provider.horses.where((h) => !h.isCancelled)),
+                      isDemoMode: widget.isDemoMode,
                     ),
                     transitionsBuilder: (c, a1, a2, child) =>
                         FadeTransition(opacity: a1, child: child),

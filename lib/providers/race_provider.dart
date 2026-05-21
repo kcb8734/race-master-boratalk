@@ -67,6 +67,55 @@ class RaceProvider extends ChangeNotifier {
       (_freeLimitPerDay - _simCount).clamp(0, _freeLimitPerDay);
 
   // ─────────────────────────────────────────────────────────────
+  // 시즌오프 데모 모드
+  // ─────────────────────────────────────────────────────────────
+
+  /// 시즌오프 중 체험 모드 시작 — 가상 경주 데이터 1개 로드
+  Future<void> loadDemoRaceForSeasonOff() async {
+    _selectedRace = KraMockService.getDemoRace();
+    _isLoadingHorses = true;
+    _horses = [];
+    _insights = [];
+    notifyListeners();
+
+    // 고정 시드 가상 말 데이터 로드
+    await Future.delayed(const Duration(milliseconds: 300)); // 로딩 연출
+    _horses = KraMockService.getDemoHorseEntries();
+
+    if (_selectedRace != null) {
+      _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);
+    }
+    _isLoadingHorses = false;
+    notifyListeners();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 요일별 경주장 스케줄 — VenueScheduleRule 위임
+  // ─────────────────────────────────────────────────────────────
+
+  /// 현재 선택된 날짜·경주장 조합이 운영 가능한지 여부
+  bool get isSelectedVenueAvailable {
+    final day = selectedDay;
+    if (day == null) return true;
+    return VenueScheduleRule.isVenueActiveOnDate(day.date, _selectedVenue);
+  }
+
+  /// 선택된 날짜의 비활성화 이유 설명 (UI 안내문)
+  String get venueUnavailableReason {
+    final day = selectedDay;
+    if (day == null) return '';
+    return VenueScheduleRule.inactiveReason(day.date.weekday, _selectedVenue);
+  }
+
+  /// 현재 날짜에 활성화된 경주장 목록
+  List<VenueCode> get activeVenuesForSelectedDay {
+    final day = selectedDay;
+    if (day == null) return VenueCode.values;
+    final codes = VenueScheduleRule.activeVenueCodes(day.date.weekday);
+    return VenueCode.values.where((v) => codes.contains(v.code)).toList();
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // 라이프사이클 상태 판단
   // ─────────────────────────────────────────────────────────────
 
@@ -176,6 +225,18 @@ class RaceProvider extends ChangeNotifier {
     _selectedRace = null;
     _horses = [];
     _insights = [];
+
+    // 새 날짜에서 현재 선택된 경주장이 비활성이면 활성 경주장 중 첫 번째로 자동 전환
+    final newDay = _weekDays[index];
+    if (!VenueScheduleRule.isVenueActiveOnDate(newDay.date, _selectedVenue)) {
+      final activeCodes = VenueScheduleRule.activeVenueCodes(newDay.date.weekday);
+      final fallback = VenueCode.values.firstWhere(
+        (v) => activeCodes.contains(v.code),
+        orElse: () => _selectedVenue,
+      );
+      _selectedVenue = fallback;
+    }
+
     _loadRaces();
     notifyListeners();
   }

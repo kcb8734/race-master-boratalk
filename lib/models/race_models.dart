@@ -10,6 +10,58 @@ enum VenueCode {
   final String fullName;
 }
 
+// ──────────────────────────────────────────────────────────────
+// VenueScheduleRule — 요일별 경주장 운영 스케줄 규칙
+// ──────────────────────────────────────────────────────────────
+//   금요일(weekday=5): 제주·부산경남 O  /  서울 ✕
+//   토요일(weekday=6): 서울·제주 O      /  부산경남 ✕
+//   일요일(weekday=7): 서울·부산경남 O  /  제주 ✕
+//   기타 요일         : 모든 경주장 O   (월요일 특별경주 등 예외처리)
+// ──────────────────────────────────────────────────────────────
+class VenueScheduleRule {
+  // 해당 요일에 운영하는 경주장 코드 집합 반환
+  static Set<String> activeVenueCodes(int weekday) {
+    switch (weekday) {
+      case 5: // 금요일 — 제주(3) + 부산경남(2)
+        return {'2', '3'};
+      case 6: // 토요일 — 서울(1) + 제주(3)
+        return {'1', '3'};
+      case 7: // 일요일 — 서울(1) + 부산경남(2)
+        return {'1', '2'};
+      default: // 월~목 (특별경주) — 전 경주장 허용
+        return {'1', '2', '3'};
+    }
+  }
+
+  /// [weekday]에 [venueCode] 경주장이 운영 중인지 여부
+  static bool isVenueActive(int weekday, String venueCode) =>
+      activeVenueCodes(weekday).contains(venueCode);
+
+  /// [date] 날짜에 [venue]가 운영 중인지 여부
+  static bool isVenueActiveOnDate(DateTime date, VenueCode venue) =>
+      isVenueActive(date.weekday, venue.code);
+
+  /// 해당 요일에 비활성화된 경주장 목록 (UI 표시용)
+  static List<VenueCode> inactiveVenues(int weekday) => VenueCode.values
+      .where((v) => !activeVenueCodes(weekday).contains(v.code))
+      .toList();
+
+  /// 해당 요일의 비활성화 이유 설명 문자열
+  static String inactiveReason(int weekday, VenueCode venue) {
+    final dayName = _weekdayName(weekday);
+    final activeNames = activeVenueCodes(weekday)
+        .map((c) => VenueCode.values.firstWhere((v) => v.code == c).label)
+        .join('·');
+    return '$dayName 경주는 $activeNames 경주장에서만 운영됩니다.';
+  }
+
+  static String _weekdayName(int wd) {
+    const names = {1: '월요일', 2: '화요일', 3: '수요일', 4: '목요일',
+                   5: '금요일', 6: '토요일', 7: '일요일'};
+    return names[wd] ?? '해당 요일';
+  }
+}
+
 /// 요일 탭 정보
 class DayTab {
   final DateTime date;
