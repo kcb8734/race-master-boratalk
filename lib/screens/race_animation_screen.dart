@@ -74,44 +74,25 @@ class _TGJeju {
   // p3(좌직선 시작=아래) ~ p4(좌직선 끝=위) 중 85% = 화면 좌측 상단부
   static double get goalP => p3 + (p4 - p3) * 0.85; // =0.750
 
-  // ── 출발 진행률 (도면 실측 기반 직접 매핑) ──
+  // ── 출발 진행률 (goalP 역산 방식) ──
   //
-  //  [도면 기준 위치]
-  //    CCW: 구간0=우직선(위->아래), 구간1=하단코너, 구간2=좌직선(아래->위), 구간3=상단코너
+  //  [설계 원칙]
+  //    GOAL은 항상 goalP(좌직선 85%, ≈0.7497)로 고정
+  //    startP = (goalP - distM/total + N) % 1.0  (N은 양수 보정)
+  //    → 말이 startP에서 출발해 goalP까지 달리면 정확히 distM 이동
   //
-  //    1610m: GOAL 바로 아래 = 좌직선 85% = goalP (1바퀴 이상 경주)
-  //    1400m: 상단 좌 코너 진입 직후 = p4 + (1-p4)*0.05
-  //    1300m: 상단 센터 (코너 중간) = p4 + (1-p4)*0.40
-  //    1200m: 우상단 코너 끝 = p4 + (1-p4)*0.90
-  //    1110m: 우직선 상단 = p2*0.05
-  //    1000m: 우직선 중상단 = p2*0.28
-  //     900m: 우직선 중간 = p2*0.51
-  //     800m: 우직선 하단 = p2*0.74
-  //
-  //  [역산 검증] goalP=0.750 기준 (dist/total):
-  //    1610m: 1610/1400=1.150 -> goalP+0.150 -> goalP (1바퀴+150m)
-  //    1400m: 0.750-1.000=-0.250 -> 0.750 (1바퀴=상단코너 진입 직후)
-  //    1300m: 0.750-0.929=-0.179 -> 0.821 (상단코너 구간)
-  //    1200m: 0.750-0.857=-0.107 -> 0.893 (상단코너 끝/우직선 직전)
-  //    1110m: 0.750-0.793=-0.043 -> 0.957 (우직선 진입 직후)
-  //    1000m: 0.750-0.714=0.036  (우직선 초반)
-  //     900m: 0.750-0.643=0.107  (우직선 30%)
-  //     800m: 0.750-0.571=0.179  (우직선 50%)
+  //  [거리별 startP 및 위치 — goalP=0.7497 기준]
+  //    1610m: 0.5997 → 좌직선 13%  (1바퀴+210m = GOAL+1바퀴 뒤)
+  //    1400m: 0.7497 → 좌직선 85%  (GOAL과 동일, 1바퀴 완주)
+  //    1300m: 0.8212 → 상단코너 18% (18%지점 출발)
+  //    1200m: 0.8926 → 상단코너 51%
+  //    1110m: 0.9569 → 상단코너 80%
+  //    1000m: 0.0355 → 우직선 10%
+  //     900m: 0.1069 → 우직선 30%
+  //     800m: 0.1783 → 우직선 51%
   static double startP(int distM) {
-    switch (distM) {
-      case 1610: return goalP;                        // GOAL 위치 (좌직선 85%, 1바퀴+)
-      case 1400: return p4 + (1.0 - p4) * 0.05;      // 상단 좌 코너 진입 직후
-      case 1300: return p4 + (1.0 - p4) * 0.40;      // 상단 코너 중간 (센터)
-      case 1200: return p4 + (1.0 - p4) * 0.90;      // 우상단 코너 끝
-      case 1110: return p2 * 0.05;                    // 우직선 상단 (5%)
-      case 1000: return p2 * 0.28;                    // 우직선 중상단 (28%)
-      case  900: return p2 * 0.51;                    // 우직선 중간 (51%)
-      case  800: return p2 * 0.74;                    // 우직선 하단 (74%)
-      default:
-        // 미등록 거리: goalP 역산
-        final ratio = distM.clamp(800, 1700) / total;
-        return (goalP - ratio + 2.0) % 1.0;
-    }
+    final ratio = distM.clamp(800, 1700) / total;
+    return (goalP - ratio + 2.0) % 1.0;
   }
 
   // ── 진행률 → 화면 좌표 (세로형 CCW) ──
@@ -956,24 +937,28 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   void _calcParams() {
     if (_isJeju) {
       // 제주 전용 트랙 파라미터 (_TGJeju, total≈1400m, CCW)
+      //
+      // ★ 핵심 설계:
+      //   _goalP = _TGJeju.goalP (고정 좌직선 85% ≈0.7497) — 절대 불변
+      //   _startP = goalP - dist/total 역산 (말이 startP→goalP 달리면 정확히 dist이동)
+      //   말의 h.prog는 startP에서 단조증가, h.prog >= _goalP 시 완주
+      //
+      // CCW 진행: 우직선(0~p2) → 하단코너(p2~p3) → 좌직선(p3~p4) → 상단코너(p4~1)
+      //   GOAL = 좌직선 85% (p3~p4 구간 안)
+      //
+      // 가점부스터: 하단 우측 코너(p2) 진입 ~ 좌직선 진입(p3) 감속 구간
+      //   _boost400 = p2 (하단코너 시작)
+      //   _boost200 = p3 (하단코너 끝 = 좌직선 시작)
+      // 파이널스퍼트: 좌직선 진입(p3) ~ GOAL
+      //   _spurt100 = goalP - 150/total (GOAL 150m 전)
       _startP   = _TGJeju.startP(widget.race.distance);
-      _goalP    = _startP + widget.race.distance / _TGJeju.total;
+      _goalP    = _TGJeju.goalP;   // ★ 항상 고정 GOAL 위치 (0.7497)
       _baseSec  = 30.0;
-      // 제주 CCW: 구간3(상단코너 p4~1.0)=가점부스터, 구간0(우직선 시작~p2)=파이널스퍼트
-      // 구간 경계: p2=하단코너시작, p3=좌직선시작, p4=상단코너시작
-      // 부스터: 상단코너(p4~1.0) 진입 → goalP 기준으로 상단코너 시작점 계산
-      // 스퍼트: 상단코너 돌아 우직선 진입(0≡1.0) ~ 하단코너 진입(p2)
-      // 실제 레이스 진행: startP → goalP (단조증가)
-      // 상단코너는 [p4, 1.0) 구간 → 누적값으로 환산
-      final boostStart = _TGJeju.p4;  // 상단코너 시작
-      final boostEnd   = 1.0;          // 상단코너 끝 = 우직선 시작
-      // goalP에서 역산: 상단코너 구간이 goalP 이전에 몇 바퀴?
-      // 단순 근사: GOAL에서 (1-p4) 거리 전 = 부스터 시작
-      _boost400 = _goalP - (1.0 - boostStart);  // 상단코너 진입(부스터 ON)
-      _boost200 = _goalP - (1.0 - boostEnd);    // 상단코너 끝 = 우직선 시작(부스터 OFF)
-      // 스퍼트: 좌직선(p3) 진입부터 GOAL까지
-      // goalP에서 좌직선 구간(p4-p3) 이전
-      _spurt100 = _goalP - (boostStart - _TGJeju.p3); // 좌직선 진입점
+      // 가점부스터: 하단코너 진입(p2) ~ 좌직선 시작(p3)
+      _boost400 = _TGJeju.p2;      // 하단코너 진입 시 부스터 ON
+      _boost200 = _TGJeju.p3;      // 좌직선 진입 시 부스터 OFF
+      // 파이널스퍼트: GOAL 150m 전 ~ GOAL
+      _spurt100 = _goalP - 150.0 / _TGJeju.total; // GOAL 150m 전 스퍼트 ON
     } else if (_isBusan) {
       // 부산경남 전용 트랙 파라미터 (_TGBusan, total=1600m, CW)
       // startP: 도면 기반 직접 매핑
@@ -1158,8 +1143,12 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
       // ── Zone 판별 ──────────────────────────────────────────────────────
       final bool inCorner  = (seg == _Seg.cornerR || seg == _Seg.cornerL);
-      // ★ 부스터: 상단 우측 코너 진입(_boost400) ~ 좌직선 진입(_boost200) 구간
-      // ★ 스퍼트: 좌직선 진입(_spurt100=_boost200) ~ GOAL 까지
+      // ★ 부스터: 코너 진입(_boost400) ~ 직선 진입(_boost200) 구간
+      //   제주 CCW: 하단코너(p2) ~ 좌직선(p3)  [감속 + 병목]
+      //   서울/부산 CW: 상단코너(p2) ~ 좌직선(p3)
+      // ★ 스퍼트: GOAL 150m 전(_spurt100) ~ GOAL
+      //   제주: 좌직선 중반(goalP-150/total) ~ goalP
+      //   서울/부산: 좌직선 진입(p3) ~ goalP
       final bool inBoost   = (p >= _boost400 && p < _boost200);
       final bool inSpurt   = (p >= _spurt100 && p < _goalP);
       final int  curMaxL   = _GridRailEngine.maxLanes(p, _goalP,
@@ -3521,7 +3510,12 @@ class _RacePainter extends CustomPainter {
     }
   }
 
-  // 제주 모든 출발선 표시 (도면 기준: 800m~1610m)
+  // 제주 모든 출발선 표시 (역산 기준: 800m~1610m)
+  // ★ 새 설계: startP = (goalP - d/total + 2.0) % 1.0
+  //   1610m: 좌직선 13% (GOAL과 다른 위치 — 1바퀴+210m 출발)
+  //   1400m: 좌직선 85% (= GOAL 위치, 1바퀴 출발)
+  //   1000m~1200m: 우직선 / 상단코너
+  //   800m/900m: 우직선
   void _drawJejuAllStartLines(Canvas canvas, Size size, Rect tr) {
     // 제주 공식 경주거리 목록
     const allDists = [800, 900, 1000, 1110, 1200, 1300, 1400, 1610];
@@ -3529,19 +3523,16 @@ class _RacePainter extends CustomPainter {
 
     for (final d in allDists) {
       final bool isCurrentStart = (d == distance);
-      final bool isGoal = (d == 1610); // 1610m 출발선 = GOAL 위치 동일
 
-      // 해당 거리의 출발선 진행률
+      // 해당 거리의 출발선 진행률 (goalP 역산)
       final sp = _TGJeju.startP(d);
       final pt  = _TGJeju.toPoint(sp, tr);
       final ang = _TGJeju.toAngle(sp);
       final nx  = -sin(ang) * tw;
       final ny  =  cos(ang) * tw;
 
-      if (isGoal) {
-        // 1610m = GOAL선: 진하게 표시 (별도 _drawJejuStartFinishLines에서 처리)
-        continue;
-      }
+      // 1400m 출발선은 GOAL 위치와 동일 (별도 처리)
+      if (d == 1400 && distance != 1400) continue;
 
       // 선 색상: 현재 경주 출발선=황금색, 나머지=흰색 반투명
       final lineColor = isCurrentStart
@@ -3594,8 +3585,9 @@ class _RacePainter extends CustomPainter {
     // ── ① 모든 출발선 표시 (800m~1400m, 흐리게) ──
     _drawJejuAllStartLines(canvas, size, tr);
 
-    // ── ② 결승선 (GOAL) — 좌직선 85% (= 1610m 출발선 = GOAL) ──
-    //   도면: 좌직선 상단부 (화면 좌측 위쪽)
+    // ── ② 결승선 (GOAL) — 좌직선 85% (goalP = 0.7497) ──
+    //   ★ 새 설계: GOAL은 _TGJeju.goalP 고정 (1400m 출발선 위치와 동일)
+    //   1610m 출발선 = goalP - 1610/1400 + 2 = 0.5997 (좌직선 13%) ← GOAL과 다른 위치
     final gpp  = _TGJeju.goalP % 1.0;
     final gpt  = _TGJeju.toPoint(gpp, tr);
     final gang = _TGJeju.toAngle(gpp);
@@ -3627,31 +3619,34 @@ class _RacePainter extends CustomPainter {
     _txt(canvas, 'GOAL', gpt + goalTagOffset,
         Colors.white, 10, bold: true, centered: true);
 
-    // 1610m 레이블 (GOAL과 같은 위치임을 표시)
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(center: gpt + goalTagOffset + const Offset(0, 14), width: 52, height: 14),
-        const Radius.circular(3),
-      ),
-      Paint()..color = Colors.red.withValues(alpha: 0.75),
-    );
-    _txt(canvas, '1610m START', gpt + goalTagOffset + const Offset(0, 14),
-        Colors.white.withValues(alpha: 0.9), 7, bold: true, centered: true);
+    // 1400m 출발선 = GOAL 위치 안내 (1400m 경주일 때만)
+    if (distance == 1400) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: gpt + goalTagOffset + const Offset(0, 14), width: 52, height: 14),
+          const Radius.circular(3),
+        ),
+        Paint()..color = Colors.red.withValues(alpha: 0.75),
+      );
+      _txt(canvas, '1400m START', gpt + goalTagOffset + const Offset(0, 14),
+          Colors.white.withValues(alpha: 0.9), 7, bold: true, centered: true);
+    }
 
-    // ── ③ 현재 경주 출발선 (강조) — 1610m 이외 거리만 ──
-    if (distance != 1610) {
+    // ── ③ 현재 경주 출발선 (강조) ──
+    // _drawJejuAllStartLines에서 현재 거리 = 황금색 강조선으로 이미 표시됨
+    // 1400m 출발선은 GOAL 위치이므로 별도 표시 불필요
+    if (distance != 1400) {
       final spp  = startP % 1.0;
       final spt  = _TGJeju.toPoint(spp, tr);
       final sang = _TGJeju.toAngle(spp);
       final snx  = -sin(sang) * (tw + 4);
       final sny  =  cos(sang) * (tw + 4);
 
-      // 황금색 출발선 (강조)
+      // 황금색 출발선 (강조 — 두 줄로 두께감)
       canvas.drawLine(spt + Offset(snx, sny), spt - Offset(snx, sny),
           Paint()..color = Colors.white..strokeWidth = 3.0);
       canvas.drawLine(spt + Offset(snx, sny), spt - Offset(snx, sny),
           Paint()..color = const Color(0xFFFFD700)..strokeWidth = 2.0);
-      // (START 표지판은 _drawJejuAllStartLines에서 이미 표시됨)
     }
   }
 
