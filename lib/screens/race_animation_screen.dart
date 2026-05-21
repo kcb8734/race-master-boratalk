@@ -387,6 +387,175 @@ class _TG {
 enum _Seg { topStr, cornerR, botStr, cornerL }
 
 // ──────────────────────────────────────────────────────────────────────────
+//  부산경남 트랙 기하학 (_TGBusan) — 실제 도면 기반 세로형 오벌 CW
+//
+//  [부산경남(경남경마공원) 도면 기준]
+//    - 우직선(백스트래치):  ≈ 600m  (아래→위, CW 구간0) ← 1000~1600m 출발선
+//    - 상단코너(비대칭):    ≈ 300m  (우→좌, CW 구간1)  ← 상단 우측 돌출 형태
+//    - 좌직선(메인스트래치):≈ 400m  (위→아래, CW 구간2) ← GOAL(하단85%) + 1800~2200m
+//    - 하단코너:            ≈ 300m  (좌→우, CW 구간3)
+//    - 총 1주: ≈ 1600m
+//
+//  CW 시계방향 진행:
+//    구간0 (0→p2):   우직선   아래→위  ← 1000/1200/1300/1400/1500/1600m 출발선 ★
+//    구간1 (p2→p3):  상단코너 우→좌
+//    구간2 (p3→p4):  좌직선   위→아래  ← GOAL(하단85%) + 1800/1900/2000/2200m ★
+//    구간3 (p4→1.0): 하단코너 좌→우
+//
+//  GOAL 위치: 좌직선 하단부 ~85% 지점 = 화면 좌측 하단
+//
+//  출발선 거리별 위치 (total=1600m, goalP≈0.72 기준 역산):
+//    1000m: 우직선 약56%  (우직선 상단부, 상단코너 근처)
+//    1200m: 우직선 약31%  (우직선 중상단)
+//    1300m: 우직선 약19%  (우직선 중단)
+//    1400m: 우직선 약6%   (우직선 중하단)
+//    1500m: 하단코너 약94% (우직선 직전, 하단부 근처)
+//    1600m: 하단코너 약81% (하단코너 진입부)
+//    1800m: 좌직선 약59%  (좌직선 중하단)
+//    1900m: 좌직선 약46%  (좌직선 중간)
+//    2000m: 좌직선 약34%  (좌직선 중상단)
+//    2200m: 좌직선 약9%   (좌직선 상단부)
+// ──────────────────────────────────────────────────────────────────────────
+class _TGBusan {
+  // 부산경남 트랙 구간 거리(m) — CW 기준 (도면 기반)
+  static const double dRight  = 600.0; // 우직선 (아래→위, 1000~1600m 출발선)
+  static const double dCornT  = 300.0; // 상단 반원 코너 (우→좌, 비대칭)
+  static const double dLeft   = 400.0; // 좌직선 (위→아래, GOAL+1800~2200m)
+  static const double dCornB  = 300.0; // 하단 반원 코너 (좌→우)
+  static const double total   = dRight + dCornT + dLeft + dCornB; // = 1600m
+
+  // 구간 진행률 경계 (CW 기준)
+  static double get p2 => dRight / total;                          // 상단코너 시작 = 0.375
+  static double get p3 => (dRight + dCornT) / total;               // 좌직선 시작   = 0.5625
+  static double get p4 => (dRight + dCornT + dLeft) / total;       // 하단코너 시작 = 0.8125
+
+  // ── GOAL 고정 위치 ──
+  // 도면 기준: 좌직선 하단부 85% 지점 = 화면 좌측 하단, 하단코너 진입 전
+  // goalP = p3 + (p4-p3)*0.85 = 0.5625 + 0.25*0.85 = 0.7750
+  static double get goalP => p3 + (p4 - p3) * 0.85;
+
+  // ── 출발 진행률 (GOAL 역산, CW 기준) ──
+  //  부산경남 경주거리: 1000, 1200, 1300, 1400, 1500, 1600, 1800, 1900, 2000, 2200m
+  //  goalP=0.775 기준 역산 (total=1600m):
+  //    1000m: 0.775 - 0.625 = 0.150  → 우직선 약40%
+  //    1200m: 0.775 - 0.750 = 0.025  → 우직선 약7%
+  //    1300m: 0.775 - 0.8125 → (0.775-0.8125+10)%1 = 0.9625 → 하단코너약95%~우직선전
+  //    1400m: 0.775 - 0.875  → 0.900 → 하단코너 약81%
+  //    1500m: 0.775 - 0.9375 → 0.8375 → 하단코너 약25%~중앙
+  //    1600m: 0.775 - 1.0    → (0.775-1.0+10)%1 = 0.775 = goalP (1바퀴)
+  //  → 1300~1600m가 하단코너에 걸림: 위치 보정 필요
+  //
+  //  ★ 도면 기준 실제 위치 재설계 (우직선에 1000~1600m, 좌직선에 1800~2200m):
+  //    우직선 = 구간0 (p=0~0.375), 길이 600m
+  //    1000m 출발 → GOAL까지 1000m → startP = goalP - 1000/1600
+  //    → 0.775 - 0.625 = 0.150 → 우직선 40% ✓
+  //    1200m → 0.775 - 0.750 = 0.025 → 우직선 7% ✓
+  //    1300m → 0.775 - 0.8125 = -0.0375 → %1 = 0.9625 → 하단코너95% (우직선 직전) ✓
+  //    1400m → 0.775 - 0.875  = -0.100  → %1 = 0.900  → 하단코너 73% ✓ (코너 진입부)
+  //    1500m → 0.775 - 0.9375 = -0.1625 → %1 = 0.8375 → 하단코너 25% ✓
+  //    1600m → 0.775 - 1.000  = -0.225  → %1 = 0.775  = goalP (1바퀴) ✓
+  //    1800m → 0.775 - 1.125  = -0.350  → %1 = 0.650  → 좌직선 35% ✓
+  //    1900m → 0.775 - 1.1875 = -0.4125 → %1 = 0.5875 → 좌직선 10% ✓
+  //    2000m → 0.775 - 1.250  = -0.475  → %1 = 0.525  → 상단코너 말단 (좌직선진입)
+  //    2200m → 0.775 - 1.375  = -0.600  → %1 = 0.400  → 상단코너 중간
+  //  → 1900m/2000m/2200m는 상단코너 걸림 문제 → 좌직선 범위 확장 필요
+  //
+  //  ★★ 실용적 해결: 거리별 직접 지정 (도면 시각 위치 직접 매핑)
+  static double startP(int distM) {
+    // 도면 기준 각 거리의 화면상 위치를 직접 지정 (p값 = 0~1)
+    // CW 기준: 구간0=우직선(0~0.375), 구간1=상단코너(0.375~0.5625),
+    //          구간2=좌직선(0.5625~0.8125), 구간3=하단코너(0.8125~1.0)
+    switch (distM) {
+      // ── 우직선 출발 (구간0: 0~0.375) ──
+      case 1000: return 0.275;  // 우직선 73% 위치 (상단부)
+      case 1200: return 0.190;  // 우직선 51% 위치 (중상단)
+      case 1300: return 0.130;  // 우직선 35% 위치 (중단)
+      case 1400: return 0.075;  // 우직선 20% 위치 (중하단)
+      case 1500: return 0.030;  // 우직선 8%  위치 (하단부)
+      case 1600: return 0.975;  // 하단코너 86% (우직선 직전)
+      // ── 좌직선 출발 (구간2: 0.5625~0.8125) ──
+      case 1800: return 0.650;  // 좌직선 35% 위치 (상단부)
+      case 1900: return 0.615;  // 좌직선 21% 위치
+      case 2000: return 0.580;  // 좌직선 7%  위치 (상단 근처)
+      case 2200: return 0.500;  // 상단코너 말단 ~ 좌직선 직전
+      default:
+        final ratio = distM.clamp(1000, 2400) / total;
+        return (goalP - ratio + 10.0) % 1.0;
+    }
+  }
+
+  // ── 진행률 → 트랙 상의 Offset (부산경남 CW) ──
+  // 화면 좌표 배치:
+  //   구간0: 우직선 아래→위 (cx+hw, cy+hr) → (cx+hw, cy-hr)
+  //   구간1: 상단코너 CW (중심: cx, cy-hr), ang: 0 → -π
+  //   구간2: 좌직선 위→아래 (cx-hw, cy-hr) → (cx-hw, cy+hr) ← GOAL 구간
+  //   구간3: 하단코너 CW (중심: cx, cy+hr), ang: π → 0
+  //
+  // ★ 부산경남 비율: 우직선이 좌직선보다 길어서 hw/hr 비율이 서울과 다름
+  //   hw = tr.width * 0.38 (서울보다 좁은 코너)
+  //   hr = tr.height * 0.46 (서울보다 긴 직선)
+  static Offset toPoint(double p, Rect tr, {double clusterOff = 0}) {
+    final pp = p % 1.0;
+    final cx = tr.center.dx;
+    final cy = tr.center.dy;
+    final hw = tr.width  * 0.38;  // 부산경남: 코너 반지름 (서울 0.42보다 작음)
+    final hr = tr.height * 0.46;  // 부산경남: 직선 길이 더 김
+
+    final clampV = (hw * 0.08).clamp(0.0, 5.0);
+    final safeOff = clusterOff.clamp(-clampV, clampV);
+
+    Offset result;
+    if (pp < p2) {
+      // 구간0: 우직선 아래→위
+      final f = pp / p2;
+      result = Offset(cx + hw - safeOff, cy + hr - f * hr * 2);
+    } else if (pp < p3) {
+      // 구간1: 상단코너 CW, ang: 0 → -π
+      final f   = (pp - p2) / (p3 - p2);
+      final ang = -(f * pi);
+      final r = hw - safeOff;
+      result = Offset(cx + cos(ang) * r, cy - hr + sin(ang) * r);
+    } else if (pp < p4) {
+      // 구간2: 좌직선 위→아래
+      final f = (pp - p3) / (p4 - p3);
+      result = Offset(cx - hw + safeOff, cy - hr + f * hr * 2);
+    } else {
+      // 구간3: 하단코너 CW, ang: π → 0
+      final f   = (pp - p4) / (1.0 - p4);
+      final ang = pi - f * pi;
+      final r = hw - safeOff;
+      result = Offset(cx + cos(ang) * r, cy + hr + sin(ang) * r);
+    }
+    return result;
+  }
+
+  // 진행률 → 진행 방향각 (부산경남 CW)
+  static double toAngle(double p) {
+    final pp = p % 1.0;
+    if (pp < p2) {
+      return -pi / 2;         // 우직선: 위방향
+    } else if (pp < p3) {
+      final f = (pp - p2) / (p3 - p2);
+      return -(f * pi) - pi / 2; // 상단코너
+    } else if (pp < p4) {
+      return pi / 2;          // 좌직선: 아래방향
+    } else {
+      final f = (pp - p4) / (1.0 - p4);
+      return (pi - f * pi) - pi / 2; // 하단코너
+    }
+  }
+
+  // 현재 구간 판별 (CW 기준)
+  static _Seg segment(double p) {
+    final pp = p % 1.0;
+    if (pp < p2) return _Seg.topStr;   // 우직선
+    if (pp < p3) return _Seg.cornerL;  // 상단코너
+    if (pp < p4) return _Seg.botStr;   // 좌직선
+    return _Seg.cornerR;               // 하단코너
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 //  레이스 단계
 // ──────────────────────────────────────────────────────────────────────────
 enum _Phase {
@@ -411,9 +580,14 @@ class _GridRailEngine {
 
   // 진행률(prog) 기준 구간 판별
   // isCW 파라미터 = isJeju로 대체 사용 (제주=true, 서울/부산경남=false)
-  static int maxLanes(double prog, double goalP, {bool isCW = false}) {
+  static int maxLanes(double prog, double goalP,
+      {bool isCW = false, bool isBusan = false}) {
     final bool isJeju = isCW; // 호출 시 isCW: _isJeju 로 전달됨
-    final totalDist = isJeju ? _TGJeju.total : _TG.total;
+    final double totalDist = isJeju
+        ? _TGJeju.total
+        : isBusan
+            ? _TGBusan.total
+            : _TG.total;
     final fromGoal = goalP - prog;
     if (fromGoal <= 200.0 / totalDist) { return kZone4Lanes; }
     if (fromGoal <= 400.0 / totalDist) { return kZone3Lanes; }
@@ -421,9 +595,12 @@ class _GridRailEngine {
     final pp = prog % 1.0;
     final bool inCorner;
     if (isJeju) {
-      // 제주: 하단코너(p2~p3) 또는 상단코너(p4~1.0)
       inCorner = (pp >= _TGJeju.p2 && pp < _TGJeju.p3) ||
                  (pp >= _TGJeju.p4);
+    } else if (isBusan) {
+      // 부산경남: 상단코너(p2~p3) 또는 하단코너(p4~1.0)
+      inCorner = (pp >= _TGBusan.p2 && pp < _TGBusan.p3) ||
+                 (pp >= _TGBusan.p4);
     } else {
       inCorner = (pp >= _TG.p2 && pp < _TG.p3) ||
                  (pp >= _TG.p4);
@@ -475,8 +652,9 @@ class _GridRailEngine {
   // 진로 방해 해결: 전방 막힘 → 횡이동, 양옆 막힘 → 지체
   // 반환: speedMult 보정값 (0.7~1.0)
   static double resolveBlock(
-      _Horse self, List<_Horse> horses, double goalP, Random rng, {bool isCW = false}) {
-    final maxL = maxLanes(self.prog, goalP, isCW: isCW);
+      _Horse self, List<_Horse> horses, double goalP, Random rng,
+      {bool isCW = false, bool isBusan = false}) {
+    final maxL = maxLanes(self.prog, goalP, isCW: isCW, isBusan: isBusan);
     clampLane(self, maxL);
 
     if (!isFrontBlocked(self, horses, goalP)) {
@@ -622,8 +800,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
 
   // 경주 방향 — 서울/부산경남: CW(시계방향), 제주: CCW(반시계방향)
-  bool get _isCW   => !_isJeju; // 서울/부산경남은 CW
-  bool get _isJeju => widget.race.venueCode == '3'; // 제주 전용 트랙 분기
+  bool get _isCW    => !_isJeju; // 서울/부산경남은 CW
+  bool get _isJeju  => widget.race.venueCode == '3'; // 제주 전용 트랙
+  bool get _isBusan => widget.race.venueCode == '2'; // 부산경남 전용 트랙
 
   // 경마장명
   String get _venueName {
@@ -671,18 +850,24 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
   void _calcParams() {
     if (_isJeju) {
-      // 제주 전용 트랙 파라미터 (세로형 오벌, _TGJeju 기반, total≈1400m, CCW)
+      // 제주 전용 트랙 파라미터 (_TGJeju, total≈1400m, CCW)
       _startP   = _TGJeju.startP(widget.race.distance);
-      // GOAL = startP + (경주거리/total) 누적값 — 항상 startP보다 크게 유지
       _goalP    = _startP + widget.race.distance / _TGJeju.total;
-      _baseSec  = 30.0; // 제주 트랙 총 1400m 기준 레이스 시간
+      _baseSec  = 30.0;
       _boost400 = _goalP - 400.0 / _TGJeju.total;
       _boost200 = _goalP - 200.0 / _TGJeju.total;
       _spurt100 = _goalP - 100.0 / _TGJeju.total;
+    } else if (_isBusan) {
+      // 부산경남 전용 트랙 파라미터 (_TGBusan, total=1600m, CW)
+      // startP는 거리별 직접 지정값 사용 (도면 매핑)
+      _startP   = _TGBusan.startP(widget.race.distance);
+      _goalP    = _startP + widget.race.distance / _TGBusan.total;
+      _baseSec  = 30.0;
+      _boost400 = _goalP - 400.0 / _TGBusan.total;
+      _boost200 = _goalP - 200.0 / _TGBusan.total;
+      _spurt100 = _goalP - 100.0 / _TGBusan.total;
     } else {
-      // 서울/부산경남 트랙 파라미터 (세로형 오벌, _TG 기반, CW)
-      // 경주거리: 1000m(특별) / 1200~2300m (일반)
-      // startP → goalP = startP + dist/total (prog 증가, 통일)
+      // 서울 트랙 파라미터 (_TG, total≈1700m, CW)
       _startP   = _TG.startP(widget.race.distance);
       _goalP    = _startP + widget.race.distance / _TG.total;
       _baseSec  = 30.0;
@@ -829,19 +1014,23 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       anyRunning = true;
 
       final p   = h.prog;
-      final seg = _isJeju ? _TGJeju.segment(p % 1.0) : _TG.segment(p % 1.0);
+      final seg = _isJeju  ? _TGJeju.segment(p % 1.0)
+                  : _isBusan ? _TGBusan.segment(p % 1.0)
+                  : _TG.segment(p % 1.0);
 
       // ── Zone 판별 ──────────────────────────────────────────────────────
       final bool inCorner  = (seg == _Seg.cornerR || seg == _Seg.cornerL);
       final bool inBoost   = (p > _boost400 && p < _boost200);
       final bool inSpurt   = (p > _spurt100);
-      final int  curMaxL   = _GridRailEngine.maxLanes(p, _goalP, isCW: _isJeju);
+      final int  curMaxL   = _GridRailEngine.maxLanes(p, _goalP,
+          isCW: _isJeju, isBusan: _isBusan);
 
       // ── Zone 레인 압축: 진입 시 clamp ──────────────────────────────────
       _GridRailEngine.clampLane(h, curMaxL);
 
       // ── GridRailEngine: 진로 방해 해결 → speedMult 보정 ───────────────
-      double blockMult = _GridRailEngine.resolveBlock(h, _horses, _goalP, _rng, isCW: _isJeju);
+      double blockMult = _GridRailEngine.resolveBlock(h, _horses, _goalP, _rng,
+          isCW: _isJeju, isBusan: _isBusan);
 
       // ── 1단계: Zone별 기본 속도 조정 ──────────────────────────────────
       double speedMult = blockMult;
@@ -1085,6 +1274,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
                     gatePulse: 0.0,
                     ranking:   _ranking,
                     isJeju:    _isJeju,
+                    isBusan:   _isBusan,
                     isCW:      _isCW,
                   ),
                 ),
@@ -1114,6 +1304,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
                           venueName: _venueName,
                           gatePulse: _gatePulse.value,
                           isJeju:    _isJeju,
+                          isBusan:   _isBusan,
                         ),
                       ),
                     ),
@@ -1334,8 +1525,9 @@ class _RacePainter extends CustomPainter {
   final int          frameIdx;
   final double       glowVal, gatePulse;
   final List<_Horse> ranking;
-  final bool         isJeju; // 제주 전용 트랙 여부
-  final bool         isCW;   // 항상 false (CCW)
+  final bool         isJeju;  // 제주 전용 트랙
+  final bool         isBusan; // 부산경남 전용 트랙
+  final bool         isCW;    // 항상 false (CCW)
 
   _RacePainter({
     required this.horses,
@@ -1353,6 +1545,7 @@ class _RacePainter extends CustomPainter {
     required this.gatePulse,
     required this.ranking,
     required this.isJeju,
+    required this.isBusan,
     required this.isCW,
   });
 
@@ -2041,6 +2234,11 @@ class _RacePainter extends CustomPainter {
       _drawJejuTrack(canvas, size, tr);
       _drawJejuMarkers(canvas, size, tr);
       _drawJejuStartFinishLines(canvas, size, tr);
+    } else if (isBusan) {
+      // 부산경남 전용 트랙 렌더링
+      _drawBusanTrack(canvas, size, tr);
+      _drawBusanMarkers(canvas, size, tr);
+      _drawBusanStartFinishLines(canvas, size, tr);
     } else {
       _drawTrack(canvas, size, tr);
       _drawMarkers(canvas, size, tr);
@@ -2549,6 +2747,434 @@ class _RacePainter extends CustomPainter {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
+  //  부산경남 전용 트랙 렌더링 — 실제 도면 기반 세로형 비대칭 오벌 CW
+  //  우직선 길고 상단 코너 우측 돌출, 좌직선 하단에 GOAL 고정
+  //  거리: 1000/1200/1300/1400/1500/1600m → 우직선
+  //         1800/1900/2000/2200m → 좌직선
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── 부산경남 트랙 오벌 경로 (CW 세로형, hw=코너반지름, hr=직선반높이) ──
+  Path _busanOvalPath(double cx, double cy, double hw, double hr) {
+    if (hw <= 0 || hr <= 0) return Path();
+    final path = Path();
+    // CW: 우직선 아래→위 시작
+    path.moveTo(cx + hw, cy + hr);  // 우하단
+    path.lineTo(cx + hw, cy - hr);  // 우상단
+    // 상단 코너: 중심(cx, cy-hr), 0→π (CW: 오른→왼)
+    path.arcTo(
+      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2, height: hw * 2),
+      0, pi, false,
+    );
+    // 좌직선 위→아래
+    path.lineTo(cx - hw, cy + hr);
+    // 하단 코너: 중심(cx, cy+hr), π→2π (CW: 왼→오른)
+    path.arcTo(
+      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2, height: hw * 2),
+      pi, pi, false,
+    );
+    path.close();
+    return path;
+  }
+
+  // ── 부산경남 2단 레인 트랙 (hw=0.38, hr=0.46) ──
+  void _drawBusanTrack(Canvas canvas, Size size, Rect tr) {
+    final cx  = tr.center.dx;
+    final cy  = tr.center.dy;
+    final hw  = tr.width  * _TGBusan.p2;   // 0.375 * width (코너 반지름)
+    final hr  = tr.height * 0.44;           // 세로 반높이
+
+    // 레인 두께 / 갭
+    const twOuter = 11.0;
+    const twInner = 11.0;
+    const gap     =  6.0;
+
+    final outerOuter = hw;
+    final outerInner = hw - twOuter;
+    final innerOuter = hw - twOuter - gap;
+    final innerInner = hw - twOuter - gap - twInner;
+
+    // ① 내측 잔디
+    final grassPath = _busanOvalPath(cx, cy, innerInner, hr - innerInner);
+    canvas.drawPath(grassPath, Paint()..color = const Color(0xFF1A5A1A));
+    _drawGrassStripesBusan(canvas, cx, cy, innerInner, hr - innerInner);
+
+    // ② 내측 레인
+    final innerOPath = _busanOvalPath(cx, cy, innerOuter, hr - (twOuter + gap));
+    final innerIPath = _busanOvalPath(cx, cy, innerInner, hr - innerInner);
+    final innerClip  = Path.combine(PathOperation.difference, innerOPath, innerIPath);
+    canvas.save();
+    canvas.clipPath(innerClip);
+    canvas.drawPath(innerOPath, Paint()
+      ..shader = RadialGradient(
+        colors: [const Color(0xFFC49050), const Color(0xFFA87030)],
+        center: Alignment.center, radius: 1.2,
+      ).createShader(tr));
+    // 내측 레인 더트 텍스처
+    final rng2 = Random(44444);
+    for (int i = 0; i < 180; i++) {
+      final t2 = rng2.nextDouble();
+      final pt = _TGBusan.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 8.0);
+      final gs = 0.6 + rng2.nextDouble() * 1.5;
+      canvas.drawOval(
+        Rect.fromCenter(center: pt, width: gs * 2, height: gs),
+        Paint()..color = Color.lerp(const Color(0xFFDDBA88), const Color(0xFF8B6035),
+            rng2.nextDouble())!.withValues(alpha: 0.25 + rng2.nextDouble() * 0.35),
+      );
+    }
+    canvas.restore();
+
+    // ③ 두 레인 사이 잔디 갭
+    final gapOPath = _busanOvalPath(cx, cy, outerInner, hr - twOuter);
+    final gapIPath = _busanOvalPath(cx, cy, innerOuter, hr - (twOuter + gap));
+    final gapPath  = Path.combine(PathOperation.difference, gapOPath, gapIPath);
+    canvas.drawPath(gapPath, Paint()..color = const Color(0xFF1A5A1A).withValues(alpha: 0.9));
+
+    // ④ 외측 레인
+    final outerOPath = _busanOvalPath(cx, cy, outerOuter, hr);
+    final outerIPath = _busanOvalPath(cx, cy, outerInner, hr - twOuter);
+    final outerClip  = Path.combine(PathOperation.difference, outerOPath, outerIPath);
+    canvas.save();
+    canvas.clipPath(outerClip);
+    canvas.drawPath(outerOPath, Paint()
+      ..shader = RadialGradient(
+        colors: [const Color(0xFFD4A060), const Color(0xFFB08040)],
+        center: Alignment.center, radius: 1.2,
+      ).createShader(tr));
+    // 외측 레인 더트 텍스처
+    final rng4 = Random(55555);
+    for (int i = 0; i < 200; i++) {
+      final t4 = rng4.nextDouble();
+      final pt4 = _TGBusan.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 9.0 + 3.0));
+      final gs = 0.7 + rng4.nextDouble() * 1.8;
+      canvas.drawOval(
+        Rect.fromCenter(center: pt4, width: gs * 2, height: gs),
+        Paint()..color = Color.lerp(const Color(0xFFDDBB88), const Color(0xFF8C6035),
+            rng4.nextDouble())!.withValues(alpha: 0.28 + rng4.nextDouble() * 0.38),
+      );
+    }
+    canvas.restore();
+
+    // ⑤ 3중 경계선
+    canvas.drawPath(outerOPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.75)
+      ..style = PaintingStyle.stroke..strokeWidth = 1.8);
+    canvas.drawPath(gapOPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.45)
+      ..style = PaintingStyle.stroke..strokeWidth = 1.2);
+    canvas.drawPath(gapIPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.45)
+      ..style = PaintingStyle.stroke..strokeWidth = 1.2);
+    canvas.drawPath(innerIPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.55)
+      ..style = PaintingStyle.stroke..strokeWidth = 1.5);
+
+    // ⑥ 코너 하이라이트
+    _drawCornerHighlight(canvas, cx, cy, hw, hr);
+
+    // ⑦ 내측 텍스트 (부산경남 전용)
+    _txt(canvas, '${distance}m 레이스',
+        Offset(cx, cy - hr * 0.3),
+        Colors.white.withValues(alpha: 0.5), 10, centered: true);
+    _txt(canvas, '부산경남 경마공원',
+        Offset(cx, cy + hr * 0.3),
+        Colors.white.withValues(alpha: 0.35), 9, centered: true);
+    _txt(canvas, '↻ CW', Offset(cx, cy),
+        const Color(0xFF81C784).withValues(alpha: 0.4), 10, bold: true, centered: true);
+
+    // ⑧ 직선 레이블
+    // 우직선(오른쪽): 1000~1600m, 좌직선(왼쪽): GOAL + 1800~2200m
+    _txt(canvas, '우직선 600m',
+        Offset(tr.right + 6, cy),
+        Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
+    _txt(canvas, '↑1000~1600m',
+        Offset(tr.right + 6, cy - 14),
+        Colors.white.withValues(alpha: 0.25), 6.5, centered: false);
+    _txt(canvas, '좌직선 400m',
+        Offset(tr.left - 74, cy),
+        Colors.white.withValues(alpha: 0.35), 7.5, centered: false);
+    _txt(canvas, 'GOAL+1800~2200m',
+        Offset(tr.left - 74, cy + 12),
+        Colors.white.withValues(alpha: 0.25), 6.0, centered: false);
+  }
+
+  // 부산경남 잔디 줄무늬 (내측)
+  void _drawGrassStripesBusan(Canvas canvas, double cx, double cy, double hw, double hr) {
+    for (int i = 0; i < 4; i++) {
+      final h2 = hw * (0.4 + i * 0.15);
+      final r2 = hr * (0.4 + i * 0.15);
+      if (i.isEven) {
+        canvas.drawPath(_busanOvalPath(cx, cy, h2, r2), Paint()
+          ..color = const Color(0xFF154A15).withValues(alpha: 0.55)
+          ..style = PaintingStyle.fill);
+      }
+    }
+  }
+
+  // ── 부산경남 거리 마커 (GOAL 기준 역산) ──
+  void _drawBusanMarkers(Canvas canvas, Size size, Rect tr) {
+    final dists = [200, 400, 600, 800, 1000, 1200, 1400];
+    final gp = _TGBusan.goalP;
+    for (final d in dists) {
+      if (d >= distance) continue;
+      final markerP = (gp - d.toDouble() / _TGBusan.total + 10.0) % 1.0;
+      final pt  = _TGBusan.toPoint(markerP, tr);
+      final ang = _TGBusan.toAngle(markerP);
+      final nx  = -sin(ang) * 16.0;
+      final ny  =  cos(ang) * 16.0;
+      canvas.drawLine(pt + Offset(nx, ny), pt - Offset(nx, ny),
+          Paint()..color = Colors.white.withValues(alpha: 0.3)..strokeWidth = 1.0);
+      _txt(canvas, '${d}m', pt + Offset(nx * 1.8, ny * 1.8 - 4),
+          Colors.white.withValues(alpha: 0.5), 7.5, centered: true);
+    }
+  }
+
+  // ── 부산경남 출발선 + GOAL 종합 ──
+  void _drawBusanStartFinishLines(Canvas canvas, Size size, Rect tr) {
+    // ① 전체 출발선 (흐리게)
+    _drawBusanAllStartLines(canvas, tr);
+
+    // ② GOAL 결승선 (체크무늬 + 빨간 표지판) — 좌직선 하단 85%
+    const tw = 26.0;
+    final gpp  = _TGBusan.goalP % 1.0;
+    final gpt  = _TGBusan.toPoint(gpp, tr);
+    final gang = _TGBusan.toAngle(gpp);
+    // 좌직선: gang=π/2 → 법선 방향으로 바깥(왼쪽)에 레이블
+    final gnx  = -sin(gang) * (tw + 8);
+    final gny  =  cos(gang) * (tw + 8);
+
+    // 체크무늬 결승선
+    for (int i = 0; i < 10; i++) {
+      final ptA = gpt + Offset(gnx, gny) * (1 - i / 10.0 * 2);
+      final ptB = gpt + Offset(gnx, gny) * (1 - (i + 1) / 10.0 * 2);
+      canvas.drawLine(ptA, ptB, Paint()
+        ..color = i.isEven ? Colors.white : Colors.red
+        ..strokeWidth = 5.5
+        ..strokeCap = StrokeCap.butt);
+    }
+    // GOAL 표지판
+    final goalTag = gpt + Offset(gnx * 2.8, gny * 2.8);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: goalTag, width: 50, height: 20),
+        const Radius.circular(4),
+      ),
+      Paint()..color = Colors.red,
+    );
+    _txt(canvas, 'GOAL', goalTag, Colors.white, 10, bold: true, centered: true);
+
+    // ③ 현재 경주 출발선 강조 (황금색)
+    final spp  = startP % 1.0;
+    final spt  = _TGBusan.toPoint(spp, tr);
+    final sang = _TGBusan.toAngle(spp);
+    final snx  = -sin(sang) * (tw + 4);
+    final sny  =  cos(sang) * (tw + 4);
+    canvas.drawLine(spt + Offset(snx, sny), spt - Offset(snx, sny),
+        Paint()..color = Colors.white..strokeWidth = 3.0);
+    canvas.drawLine(spt + Offset(snx, sny), spt - Offset(snx, sny),
+        Paint()..color = const Color(0xFFFFD700)..strokeWidth = 2.0);
+
+    // ④ 우직선 바깥 마커 (1000~1600m)
+    _drawBusanRightStraightMarkers(canvas, tr);
+  }
+
+  // ── 부산경남 전체 출발선 (모든 거리, 흐리게) ──
+  void _drawBusanAllStartLines(Canvas canvas, Rect tr) {
+    // 부산경남 경주 거리 전체
+    const allDists = [1000, 1200, 1300, 1400, 1500, 1600, 1800, 1900, 2000, 2200];
+    // 우직선 (1000~1600m)
+    const rightDists = {1000, 1200, 1300, 1400, 1500, 1600};
+    // 좌직선 (1800~2200m)
+    const leftDists  = {1800, 1900, 2000, 2200};
+    const tw = 20.0;
+
+    for (final d in allDists) {
+      final bool isCurrent  = (d == distance);
+      final bool isRight    = rightDists.contains(d);
+      final bool isLeft     = leftDists.contains(d);
+      final bool is1000m    = (d == 1000);
+      final bool is1500m    = (d == 1500);
+      final bool is1600m    = (d == 1600);
+      final sp  = _TGBusan.startP(d);
+      final pt  = _TGBusan.toPoint(sp, tr);
+      final ang = _TGBusan.toAngle(sp);
+      final nx  = -sin(ang) * tw;
+      final ny  =  cos(ang) * tw;
+
+      // 색상/두께
+      final lineColor = isCurrent
+          ? const Color(0xFFFFD700)
+          : is1000m
+              ? const Color(0xFF00BFFF).withValues(alpha: 0.55)
+              : is1600m || is1500m
+                  ? Colors.white.withValues(alpha: 0.38)
+                  : isRight
+                      ? Colors.white.withValues(alpha: 0.32)
+                      : isLeft
+                          ? Colors.white.withValues(alpha: 0.22)
+                          : Colors.white.withValues(alpha: 0.16);
+      final lineW = isCurrent ? 2.5
+          : is1000m  ? 1.8
+          : is1600m || is1500m ? 1.5
+          : isRight  ? 1.3
+          : 0.9;
+
+      canvas.drawLine(pt + Offset(nx, ny), pt - Offset(nx, ny),
+          Paint()..color = lineColor..strokeWidth = lineW);
+
+      final labelOff = Offset(nx * 2.1, ny * 2.1);
+
+      if (isCurrent) {
+        // 현재 경주 출발선 강조
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: pt + labelOff + const Offset(0, -2), width: 72, height: 16),
+            const Radius.circular(3),
+          ),
+          Paint()..color = const Color(0xFF0A2A0A).withValues(alpha: 0.88),
+        );
+        _txt(canvas, 'START ${d}m', pt + labelOff,
+            const Color(0xFFFFD700), 8.0, bold: true, centered: true);
+        final seg = _TGBusan.segment(sp);
+        final segLabel = switch (seg) {
+          _Seg.topStr  => '우직선',
+          _Seg.botStr  => '좌직선',
+          _Seg.cornerR => '하단코너',
+          _Seg.cornerL => '상단코너',
+        };
+        _txt(canvas, segLabel, pt + labelOff + const Offset(0, 12),
+            Colors.white.withValues(alpha: 0.55), 6.5, centered: true);
+      } else if (is1000m) {
+        _txt(canvas, '1000m', pt + labelOff,
+            const Color(0xFF00BFFF).withValues(alpha: 0.80), 7.5,
+            bold: true, centered: true);
+        _txt(canvas, '(특별)', pt + labelOff + const Offset(0, 10),
+            const Color(0xFF00BFFF).withValues(alpha: 0.55), 6.0, centered: true);
+      } else if (isRight) {
+        _txt(canvas, '${d}m', pt + labelOff,
+            Colors.white.withValues(alpha: 0.50), 7.5, centered: true);
+      } else if (isLeft) {
+        _txt(canvas, '${d}m', pt + labelOff,
+            Colors.white.withValues(alpha: 0.40), 7.0, centered: true);
+      } else {
+        _txt(canvas, '${d}m', pt + labelOff,
+            Colors.white.withValues(alpha: 0.36), 7.0, centered: true);
+      }
+    }
+  }
+
+  // ── 부산경남: 우직선 오른쪽 바깥 브라켓 안내 마커 (1000~1600m) ──
+  void _drawBusanRightStraightMarkers(Canvas canvas, Rect tr) {
+    final cx = tr.center.dx;
+    // 부산경남 hw = tr.width * p2(=0.375)
+    final hw = tr.width * _TGBusan.p2;
+    const outerOffX = 40.0; // 트랙 오른쪽 바깥 여백
+
+    // 우직선 출발선 목록 (화면 아래→위 순: 1500→1200→1300→1400→1000)
+    // CW 우직선: 아래→위, p 작을수록 위(더 먼 거리), p 클수록 아래(짧은 거리)
+    final dists = [1600, 1500, 1400, 1300, 1200, 1000]; // 화면 아래→위 순
+
+    final bracketX = cx + hw + outerOffX;
+
+    // 1200~1500m 구간 브라켓 (통상 단거리 그룹)
+    final p1200  = _TGBusan.startP(1200);
+    final p1500  = _TGBusan.startP(1500);
+    final pt1200 = _TGBusan.toPoint(p1200 % 1.0, tr);
+    final pt1500 = _TGBusan.toPoint(p1500 % 1.0, tr);
+    canvas.drawLine(
+      Offset(bracketX, pt1200.dy),
+      Offset(bracketX, pt1500.dy),
+      Paint()..color = Colors.white.withValues(alpha: 0.22)..strokeWidth = 1.0,
+    );
+
+    // 1000m 별도 점선 마커 (특별경주 전용)
+    final p1000  = _TGBusan.startP(1000);
+    final pt1000 = _TGBusan.toPoint(p1000 % 1.0, tr);
+    canvas.drawLine(
+      Offset(cx + hw, pt1000.dy),
+      Offset(bracketX + 4, pt1000.dy),
+      Paint()
+        ..color = const Color(0xFF00BFFF).withValues(alpha: 0.45)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke,
+    );
+
+    // 1600m: 하단코너 전 위치 (우직선 하단부 — 별도 점선)
+    final p1600  = _TGBusan.startP(1600);
+    final pt1600 = _TGBusan.toPoint(p1600 % 1.0, tr);
+    // 1600m은 하단코너 직전이라 y가 크므로 하단코너 브라켓 아래에 별도 표시
+    canvas.drawLine(
+      Offset(cx + hw, pt1600.dy),
+      Offset(bracketX + 4, pt1600.dy),
+      Paint()
+        ..color = Colors.orange.withValues(alpha: 0.40)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke,
+    );
+
+    // 각 거리 눈금선 + 레이블
+    for (final d in dists) {
+      final sp = _TGBusan.startP(d);
+      final pt = _TGBusan.toPoint(sp % 1.0, tr);
+      final isCurrent = (d == distance);
+      final is1000m   = (d == 1000);
+      final is1600m   = (d == 1600);
+
+      final lineColor = isCurrent
+          ? const Color(0xFFFFD700)
+          : is1000m
+              ? const Color(0xFF00BFFF).withValues(alpha: 0.50)
+              : is1600m
+                  ? Colors.orange.withValues(alpha: 0.45)
+                  : Colors.white.withValues(alpha: 0.32);
+      final lineW = isCurrent ? 2.0 : (is1000m || is1600m ? 1.4 : 1.0);
+
+      canvas.drawLine(
+        Offset(cx + hw, pt.dy),
+        Offset(bracketX + 6, pt.dy),
+        Paint()..color = lineColor..strokeWidth = lineW,
+      );
+
+      final labelColor = isCurrent
+          ? const Color(0xFFFFD700)
+          : is1000m
+              ? const Color(0xFF00BFFF).withValues(alpha: 0.80)
+              : is1600m
+                  ? Colors.orange.withValues(alpha: 0.80)
+                  : Colors.white.withValues(alpha: 0.55);
+      final labelSize = isCurrent ? 8.5 : (is1000m || is1600m ? 8.0 : 7.5);
+
+      if (isCurrent) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(bracketX + 10, pt.dy - 8, 44, 16),
+            const Radius.circular(3),
+          ),
+          Paint()..color = const Color(0xFF1A3A1A).withValues(alpha: 0.85),
+        );
+      } else if (is1000m) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(bracketX + 10, pt.dy - 8, 50, 16),
+            const Radius.circular(3),
+          ),
+          Paint()..color = const Color(0xFF003A5A).withValues(alpha: 0.75),
+        );
+      } else if (is1600m) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(bracketX + 10, pt.dy - 8, 44, 16),
+            const Radius.circular(3),
+          ),
+          Paint()..color = const Color(0xFF3A2A00).withValues(alpha: 0.75),
+        );
+      }
+      _txt(canvas, is1000m ? '1000m(특)' : '${d}m',
+          Offset(bracketX + 32, pt.dy),
+          labelColor, labelSize, bold: isCurrent || is1000m, centered: true);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   //  제주 전용 트랙 렌더링 — 실제 도면 기반 세로형 오벌 CCW
   // ══════════════════════════════════════════════════════════════════════════
 
@@ -2852,6 +3478,9 @@ class _RacePainter extends CustomPainter {
       if (isJeju) {
         pt  = _TGJeju.toPoint(pp, tr, clusterOff: h.clusterOff);
         ang = _TGJeju.toAngle(pp);
+      } else if (isBusan) {
+        pt  = _TGBusan.toPoint(pp, tr, clusterOff: h.clusterOff);
+        ang = _TGBusan.toAngle(pp);
       } else {
         pt  = _TG.toPoint(pp, tr, clusterOff: h.clusterOff, isCW: false);
         ang = _TG.toAngle(pp, isCW: false);
@@ -3100,6 +3729,7 @@ class _GatePainter extends _RacePainter {
     required super.venueName,
     required super.gatePulse,
     required super.isJeju,
+    required super.isBusan,
   }) : super(
     startP:   0, goalP:  1, boost400: 0,
     boost200: 0, spurt100: 0,
