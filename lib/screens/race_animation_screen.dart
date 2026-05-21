@@ -420,6 +420,12 @@ class _TGBusan {
   // ══════════════════════════════════════════════════════════════════════════
   // 부산경남 트랙 — 도면 기반 CW 세로형 오벌
   // 구간0=우직선(↑600m) / 구간1=상단코너(300m) / 구간2=좌직선(↓400m) / 구간3=하단코너(300m)
+  //
+  // [실제 부산경남 경마공원 도면]
+  //   - 코너 반경 약 70m → 코너 호 길이 ≈ π×70 ≈ 220m
+  //   - 코너 타원 rx=hw(가로), ry=hw×kCornRyFrac(세로, 납작)
+  //   - kHrFrac=0.38 → 직선 반높이 줄여 코너가 화면 내에 확실히 수납
+  //   - kCornRyFrac=0.50 → 코너 세로 반지름 = hw×0.5 (납작한 반타원)
   // ══════════════════════════════════════════════════════════════════════════
   static const double dRight  = 600.0;
   static const double dCornT  = 300.0;
@@ -433,8 +439,9 @@ class _TGBusan {
   static double get p4 => (dRight + dCornT + dLeft) / total; // 0.8125
 
   // ── 공유 렌더 파라미터 ★ toPoint/_busanOvalPath/_drawBusanTrack 모두 동일값 ──
-  static const double kHwFrac = 0.38; // 코너 반지름 비율 (tr.width 기준)
-  static const double kHrFrac = 0.44; // 직선 반높이 비율 (tr.height 기준)
+  static const double kHwFrac      = 0.38; // 코너 가로 반지름 비율 (tr.width 기준)
+  static const double kHrFrac      = 0.38; // 직선 반높이 비율 (tr.height 기준, 줄여서 코너 화면 내 수납)
+  static const double kCornRyFrac  = 0.50; // 코너 세로 반지름 = hw×kCornRyFrac (납작 타원)
 
   // ── GOAL: 좌직선 하단 75% ──
   // goalP = 0.5625 + (0.8125-0.5625)*0.75 = 0.5625 + 0.1875 = 0.7500
@@ -454,6 +461,7 @@ class _TGBusan {
   //   1000m: 우직선 79%   → p=0.295 (상단부)
   //
   // 좌직선 출발선 (구간2, 위→아래: p클수록아래):
+  //   1700m: 좌직선 75% = GOAL과 동일선 → p=0.750 (1바퀴 완주 지점)
   //   2200m: 좌직선 7%    → p=0.580
   //   2000m: 좌직선 19%   → p=0.610
   //   1900m: 좌직선 29%   → p=0.635
@@ -468,6 +476,7 @@ class _TGBusan {
       case 1200: return 0.200; // 우직선 53%
       case 1000: return 0.295; // 우직선 79% (특별경주)
       // 좌직선 (구간2: 0.5625~0.8125, 위→아래)
+      case 1700: return goalP; // 좌직선 75% — GOAL 동일선 (1바퀴 완주)
       case 2200: return 0.580; // 좌직선 7%
       case 2000: return 0.610; // 좌직선 19%
       case 1900: return 0.635; // 좌직선 29%
@@ -478,53 +487,86 @@ class _TGBusan {
     }
   }
 
-  // ── 진행률 → 트랙 상의 Offset (부산경남 CW) ──
+  // ── 진행률 → 트랙 상의 Offset (부산경남 CW, 타원형 코너) ──
+  //
   // 화면 좌표 배치:
   //   구간0: 우직선 아래→위 (cx+hw, cy+hr) → (cx+hw, cy-hr)
-  //   구간1: 상단코너 CW (중심: cx, cy-hr), ang: 0 → -π
+  //   구간1: 상단코너 CW (중심: cx, cy-hr), 타원 rx=hw, ry=hw*kCornRyFrac
+  //          ang: 0 → -π (CW: 오른→왼)
   //   구간2: 좌직선 위→아래 (cx-hw, cy-hr) → (cx-hw, cy+hr) ← GOAL 구간
-  //   구간3: 하단코너 CW (중심: cx, cy+hr), ang: π → 0
+  //   구간3: 하단코너 CW (중심: cx, cy+hr), 타원 rx=hw, ry=hw*kCornRyFrac
+  //          ang: π → 0 (CW: 왼→오른)
   //
-  // ── 진행률 → 화면 좌표 ★ kHwFrac/kHrFrac 사용 (busanOvalPath/_drawBusanTrack 완전 동기화) ──
+  // ★ clusterOff는 rx(가로)에만 적용 — 타원 경로와 정확히 일치
   static Offset toPoint(double p, Rect tr, {double clusterOff = 0}) {
     final pp  = p % 1.0;
     final cx  = tr.center.dx;
     final cy  = tr.center.dy;
-    final hw  = tr.width  * kHwFrac; // 0.38
-    final hr  = tr.height * kHrFrac; // 0.44
+    final hw  = tr.width  * kHwFrac;          // 코너 가로 반지름
+    final hr  = tr.height * kHrFrac;          // 직선 반높이
+    final ry  = hw * kCornRyFrac;             // 코너 세로 반지름 (납작 타원)
     final cV  = (hw * 0.08).clamp(0.0, 5.0);
     final off = clusterOff.clamp(-cV, cV);
 
     if (pp < p2) {
+      // 구간0: 우직선 아래→위
       final f = pp / p2;
       return Offset(cx + hw - off, cy + hr - f * hr * 2);
     } else if (pp < p3) {
-      final f = (pp - p2) / (p3 - p2);
-      final a = -(f * pi);
-      return Offset(cx + cos(a) * (hw - off), cy - hr + sin(a) * (hw - off));
+      // 구간1: 상단코너 CW — 타원(rx=hw-off, ry=ry)
+      final f  = (pp - p2) / (p3 - p2);
+      final a  = -(f * pi);                   // 0 → -π (CW)
+      final rx = hw - off;
+      return Offset(cx + rx * cos(a), cy - hr + ry * sin(a));
     } else if (pp < p4) {
+      // 구간2: 좌직선 위→아래
       final f = (pp - p3) / (p4 - p3);
       return Offset(cx - hw + off, cy - hr + f * hr * 2);
     } else {
-      final f = (pp - p4) / (1.0 - p4);
-      final a = pi - f * pi;
-      return Offset(cx + cos(a) * (hw - off), cy + hr + sin(a) * (hw - off));
+      // 구간3: 하단코너 CW — 타원(rx=hw-off, ry=ry)
+      final f  = (pp - p4) / (1.0 - p4);
+      final a  = pi - f * pi;                 // π → 0 (CW)
+      final rx = hw - off;
+      return Offset(cx + rx * cos(a), cy + hr + ry * sin(a));
     }
   }
 
-  // 진행률 → 진행 방향각 (부산경남 CW)
+  // ── 진행률 → 진행 방향각 (부산경남 CW, 타원 접선) ──
+  //
+  // 타원 접선 방향: P(t) = (rx·cos(a), ry·sin(a))
+  //   dP/da = (-rx·sin(a), ry·cos(a))
+  //   접선각 = atan2(dy, dx)
+  //
+  // 상단코너 (CW): a=-(f*π), da/dt<0 → CW방향 → atan2(-ry·cos(a), rx·sin(a))
+  //   f=0: a=0  → atan2(-ry, 0)  = -π/2 (위방향 = 우직선 연속)
+  //   f=0.5: a=-π/2 → atan2(0, rx) ??? 아래 계산 참조
+  //   f=1: a=-π → atan2(ry, 0) = π/2 (아래방향 = 좌직선 연속)
+  //
+  // 하단코너 (CW): a=π-f*π, da/dt<0
+  //   f=0: a=π → atan2(ry, 0) = π/2 (아래방향 = 좌직선 연속)
+  //   f=1: a=0  → atan2(-ry, 0) = -π/2 (위방향 = 우직선 연속)
   static double toAngle(double p) {
-    final pp = p % 1.0;
+    final pp  = p % 1.0;
+    final hw  = 1.0; // 정규화 (비율만 필요)
+    final ry  = hw * kCornRyFrac;
     if (pp < p2) {
       return -pi / 2;         // 우직선: 위방향
     } else if (pp < p3) {
-      final f = (pp - p2) / (p3 - p2);
-      return -(f * pi) - pi / 2; // 상단코너
+      // 상단코너 CW: a=-(f*π), CW 접선 방향
+      // dP/da = (-rx·sin(a), ry·cos(a)), CW이므로 da<0 → 접선 = (rx·sin(a), -ry·cos(a))
+      final f  = (pp - p2) / (p3 - p2);
+      final a  = -(f * pi);
+      final rx = hw;
+      return atan2(-ry * cos(a), rx * sin(a));
     } else if (pp < p4) {
       return pi / 2;          // 좌직선: 아래방향
     } else {
-      final f = (pp - p4) / (1.0 - p4);
-      return (pi - f * pi) - pi / 2; // 하단코너
+      // 하단코너 CW: a=π-f*π, CW 접선 방향
+      // dP/da = (-rx·sin(a), ry·cos(a)), CW이므로 da<0 → 접선 = (rx·sin(a), -ry·cos(a))
+      final f  = (pp - p4) / (1.0 - p4);
+      final a  = pi - f * pi;
+      final rx = hw;
+      return atan2(-ry * cos(a), rx * sin(a));
     }
   }
 
@@ -2736,23 +2778,30 @@ class _RacePainter extends CustomPainter {
   //         1800/1900/2000/2200m → 좌직선
   // ══════════════════════════════════════════════════════════════════════════
 
-  // ── 부산경남 트랙 오벌 경로 (CW 세로형, hw=코너반지름, hr=직선반높이) ──
+  // ── 부산경남 트랙 오벌 경로 (CW 세로형, hw=코너가로반지름, hr=직선반높이) ──
+  //
+  // ★ toPoint 와 완전 동기화:
+  //   - 코너 가로 반지름 rx = hw   (kHwFrac)
+  //   - 코너 세로 반지름 ry = hw * kCornRyFrac  (납작한 타원)
+  //   - arcTo Rect: width = rx*2, height = ry*2
+  //
   Path _busanOvalPath(double cx, double cy, double hw, double hr) {
     if (hw <= 0 || hr <= 0) return Path();
+    final ry = hw * _TGBusan.kCornRyFrac; // 타원 세로 반지름
     final path = Path();
     // CW: 우직선 아래→위 시작
     path.moveTo(cx + hw, cy + hr);  // 우하단
     path.lineTo(cx + hw, cy - hr);  // 우상단
-    // 상단 코너: 중심(cx, cy-hr), 0→π (CW: 오른→왼)
+    // 상단 코너: 중심(cx, cy-hr), 타원 rx=hw, ry=ry, 0→-π (CW: 오른→왼)
     path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2, height: hw * 2),
+      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2, height: ry * 2),
       0, pi, false,
     );
     // 좌직선 위→아래
     path.lineTo(cx - hw, cy + hr);
-    // 하단 코너: 중심(cx, cy+hr), π→2π (CW: 왼→오른)
+    // 하단 코너: 중심(cx, cy+hr), 타원 rx=hw, ry=ry, π→0 (CW: 왼→오른)
     path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2, height: hw * 2),
+      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2, height: ry * 2),
       pi, pi, false,
     );
     path.close();
@@ -2760,31 +2809,34 @@ class _RacePainter extends CustomPainter {
   }
 
   // ── 부산경남 2단 레인 트랙 ──
-  // ★ hw = kHwFrac(0.38)*width, hr = kHrFrac(0.44)*height — toPoint 와 완전 동일
+  // ★ hw = kHwFrac(0.38)*width, hr = kHrFrac(0.38)*height — toPoint 와 완전 동일
+  // ★ _busanOvalPath hr 인자는 항상 hr(직선반높이)로 고정, hw만 줄여서 레인 계층 생성
   void _drawBusanTrack(Canvas canvas, Size size, Rect tr) {
     final cx  = tr.center.dx;
     final cy  = tr.center.dy;
     final hw  = tr.width  * _TGBusan.kHwFrac;  // 0.38
-    final hr  = tr.height * _TGBusan.kHrFrac;  // 0.44
+    final hr  = tr.height * _TGBusan.kHrFrac;  // 0.38 (kHrFrac 변경 반영)
 
-    // 레인 두께 / 갭
-    const twOuter = 11.0;
-    const twInner = 11.0;
-    const gap     =  6.0;
+    // 레인 두께 / 갭 (hw 기준 비율로 계산 — 화면 크기에 무관하게 일정)
+    final twOuter = (hw * 0.13).clamp(8.0, 14.0);  // 외측 레인 두께
+    final twInner = (hw * 0.13).clamp(8.0, 14.0);  // 내측 레인 두께
+    final gap     = (hw * 0.08).clamp(4.0, 8.0);   // 레인 간 잔디 갭
 
-    final outerOuter = hw;
-    final outerInner = hw - twOuter;
-    final innerOuter = hw - twOuter - gap;
-    final innerInner = hw - twOuter - gap - twInner;
+    // hw 계층 (직선부): hw만 줄이고, hr은 항상 고정
+    final hwOO = hw;                         // 외측 바깥 경계
+    final hwOI = hw - twOuter;               // 외측 안쪽 경계
+    final hwIO = hw - twOuter - gap;         // 내측 바깥 경계
+    final hwII = hw - twOuter - gap - twInner; // 내측 안쪽 경계 (잔디 외곽)
+    final hwGrass = hwII - (hwII * 0.15).clamp(2.0, 6.0); // 잔디 내부
 
-    // ① 내측 잔디
-    final grassPath = _busanOvalPath(cx, cy, innerInner, hr - innerInner);
+    // ① 내측 잔디 (hr 고정)
+    final grassPath = _busanOvalPath(cx, cy, hwGrass, hr);
     canvas.drawPath(grassPath, Paint()..color = const Color(0xFF1A5A1A));
-    _drawGrassStripesBusan(canvas, cx, cy, innerInner, hr - innerInner);
+    _drawGrassStripesBusan(canvas, cx, cy, hwGrass, hr);
 
-    // ② 내측 레인
-    final innerOPath = _busanOvalPath(cx, cy, innerOuter, hr - (twOuter + gap));
-    final innerIPath = _busanOvalPath(cx, cy, innerInner, hr - innerInner);
+    // ② 내측 레인 (hr 고정, hw만 줄임)
+    final innerOPath = _busanOvalPath(cx, cy, hwIO, hr);
+    final innerIPath = _busanOvalPath(cx, cy, hwII, hr);
     final innerClip  = Path.combine(PathOperation.difference, innerOPath, innerIPath);
     canvas.save();
     canvas.clipPath(innerClip);
@@ -2797,7 +2849,7 @@ class _RacePainter extends CustomPainter {
     final rng2 = Random(44444);
     for (int i = 0; i < 180; i++) {
       final t2 = rng2.nextDouble();
-      final pt = _TGBusan.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 8.0);
+      final pt = _TGBusan.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 6.0);
       final gs = 0.6 + rng2.nextDouble() * 1.5;
       canvas.drawOval(
         Rect.fromCenter(center: pt, width: gs * 2, height: gs),
@@ -2807,15 +2859,15 @@ class _RacePainter extends CustomPainter {
     }
     canvas.restore();
 
-    // ③ 두 레인 사이 잔디 갭
-    final gapOPath = _busanOvalPath(cx, cy, outerInner, hr - twOuter);
-    final gapIPath = _busanOvalPath(cx, cy, innerOuter, hr - (twOuter + gap));
+    // ③ 두 레인 사이 잔디 갭 (hr 고정)
+    final gapOPath = _busanOvalPath(cx, cy, hwOI, hr);
+    final gapIPath = _busanOvalPath(cx, cy, hwIO, hr);
     final gapPath  = Path.combine(PathOperation.difference, gapOPath, gapIPath);
     canvas.drawPath(gapPath, Paint()..color = const Color(0xFF1A5A1A).withValues(alpha: 0.9));
 
-    // ④ 외측 레인
-    final outerOPath = _busanOvalPath(cx, cy, outerOuter, hr);
-    final outerIPath = _busanOvalPath(cx, cy, outerInner, hr - twOuter);
+    // ④ 외측 레인 (hr 고정)
+    final outerOPath = _busanOvalPath(cx, cy, hwOO, hr);
+    final outerIPath = _busanOvalPath(cx, cy, hwOI, hr);
     final outerClip  = Path.combine(PathOperation.difference, outerOPath, outerIPath);
     canvas.save();
     canvas.clipPath(outerClip);
@@ -2828,7 +2880,7 @@ class _RacePainter extends CustomPainter {
     final rng4 = Random(55555);
     for (int i = 0; i < 200; i++) {
       final t4 = rng4.nextDouble();
-      final pt4 = _TGBusan.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 9.0 + 3.0));
+      final pt4 = _TGBusan.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 8.0 + 3.0));
       final gs = 0.7 + rng4.nextDouble() * 1.8;
       canvas.drawOval(
         Rect.fromCenter(center: pt4, width: gs * 2, height: gs),
@@ -2852,8 +2904,22 @@ class _RacePainter extends CustomPainter {
       ..color = Colors.white.withValues(alpha: 0.55)
       ..style = PaintingStyle.stroke..strokeWidth = 1.5);
 
-    // ⑥ 코너 하이라이트
-    _drawCornerHighlight(canvas, cx, cy, hw, hr);
+    // ⑥ 코너 하이라이트 (타원형 — toPoint 와 동기화)
+    final ry = hw * _TGBusan.kCornRyFrac;
+    canvas.drawArc(
+      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2.5, height: ry * 2.5),
+      0, pi, false,
+      Paint()..color = const Color(0xFFFFAA00).withValues(alpha: 0.08)..style = PaintingStyle.fill,
+    );
+    canvas.drawArc(
+      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2.5, height: ry * 2.5),
+      pi, pi, false,
+      Paint()..color = const Color(0xFFFFAA00).withValues(alpha: 0.08)..style = PaintingStyle.fill,
+    );
+    _txt(canvas, '코너', Offset(cx, cy + hr + ry * 0.5),
+        Colors.white.withValues(alpha: 0.35), 8, centered: true);
+    _txt(canvas, '코너', Offset(cx, cy - hr - ry * 0.5),
+        Colors.white.withValues(alpha: 0.35), 8, centered: true);
 
     // ── ⑦ 내측 텍스트 (부산경남 전용) ──
     _txt(canvas, '${distance}m 레이스',
@@ -2881,13 +2947,12 @@ class _RacePainter extends CustomPainter {
         Colors.white.withValues(alpha: 0.28), 6.0);
   }
 
-  // 부산경남 잔디 줄무늬 (내측)
+  // 부산경남 잔디 줄무늬 (내측) — hw만 비율로 줄이고 hr은 고정
   void _drawGrassStripesBusan(Canvas canvas, double cx, double cy, double hw, double hr) {
     for (int i = 0; i < 4; i++) {
-      final h2 = hw * (0.4 + i * 0.15);
-      final r2 = hr * (0.4 + i * 0.15);
+      final h2 = hw * (0.35 + i * 0.18); // hw만 비율 변경
       if (i.isEven) {
-        canvas.drawPath(_busanOvalPath(cx, cy, h2, r2), Paint()
+        canvas.drawPath(_busanOvalPath(cx, cy, h2, hr), Paint() // hr 고정
           ..color = const Color(0xFF154A15).withValues(alpha: 0.55)
           ..style = PaintingStyle.fill);
       }
@@ -2963,12 +3028,12 @@ class _RacePainter extends CustomPainter {
 
   // ── 부산경남 전체 출발선 (모든 거리, 흐리게) ──
   void _drawBusanAllStartLines(Canvas canvas, Rect tr) {
-    // 부산경남 경주 거리 전체
-    const allDists = [1000, 1200, 1300, 1400, 1500, 1600, 1800, 1900, 2000, 2200];
+    // 부산경남 경주 거리 전체 (1700m 추가)
+    const allDists = [1000, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2200];
     // 우직선 (1000~1600m)
     const rightDists = {1000, 1200, 1300, 1400, 1500, 1600};
-    // 좌직선 (1800~2200m)
-    const leftDists  = {1800, 1900, 2000, 2200};
+    // 좌직선 (1700~2200m)
+    const leftDists  = {1700, 1800, 1900, 2000, 2200};
     const tw = 20.0;
 
     for (final d in allDists) {
@@ -2978,6 +3043,7 @@ class _RacePainter extends CustomPainter {
       final bool is1000m    = (d == 1000);
       final bool is1500m    = (d == 1500);
       final bool is1600m    = (d == 1600);
+      final bool is1700m    = (d == 1700); // 좌직선 GOAL 동일선 (1바퀴)
       final sp  = _TGBusan.startP(d);
       final pt  = _TGBusan.toPoint(sp, tr);
       final ang = _TGBusan.toAngle(sp);
@@ -2989,15 +3055,18 @@ class _RacePainter extends CustomPainter {
           ? const Color(0xFFFFD700)
           : is1000m
               ? const Color(0xFF00BFFF).withValues(alpha: 0.55)
-              : is1600m || is1500m
-                  ? Colors.white.withValues(alpha: 0.38)
-                  : isRight
-                      ? Colors.white.withValues(alpha: 0.32)
-                      : isLeft
-                          ? Colors.white.withValues(alpha: 0.22)
-                          : Colors.white.withValues(alpha: 0.16);
+              : is1700m
+                  ? const Color(0xFF81C784).withValues(alpha: 0.50) // 1700m: 연두 (GOAL 동선)
+                  : is1600m || is1500m
+                      ? Colors.white.withValues(alpha: 0.38)
+                      : isRight
+                          ? Colors.white.withValues(alpha: 0.32)
+                          : isLeft
+                              ? Colors.white.withValues(alpha: 0.22)
+                              : Colors.white.withValues(alpha: 0.16);
       final lineW = isCurrent ? 2.5
           : is1000m  ? 1.8
+          : is1700m  ? 1.6
           : is1600m || is1500m ? 1.5
           : isRight  ? 1.3
           : 0.9;
@@ -3033,6 +3102,12 @@ class _RacePainter extends CustomPainter {
             bold: true, centered: true);
         _txt(canvas, '(특별)', pt + labelOff + const Offset(0, 10),
             const Color(0xFF00BFFF).withValues(alpha: 0.55), 6.0, centered: true);
+      } else if (is1700m) {
+        _txt(canvas, '1700m', pt + labelOff,
+            const Color(0xFF81C784).withValues(alpha: 0.85), 7.5,
+            bold: true, centered: true);
+        _txt(canvas, '(GOAL선)', pt + labelOff + const Offset(0, 10),
+            const Color(0xFF81C784).withValues(alpha: 0.60), 6.0, centered: true);
       } else if (isRight) {
         _txt(canvas, '${d}m', pt + labelOff,
             Colors.white.withValues(alpha: 0.50), 7.5, centered: true);
