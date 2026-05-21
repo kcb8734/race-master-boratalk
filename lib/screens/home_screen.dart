@@ -37,20 +37,24 @@ class _HomeScreenState extends State<HomeScreen>
     '🤖 23개 API 데이터 기반 AI 정밀 분석!',
     '🏆 실시간 AI 모의 레이스로 최적 조합 찾기!',
     '📊 직전 5경주 성적·조교·컨디션 전부 분석!',
+    '🐎 승률·배당·조교 데이터를 한눈에!',
+    '⚡ 빠른 분석, 정확한 예측 — 경마통!',
   ];
-  // 무한 스크롤을 위해 배너 텍스트를 이어붙인 단일 문자열
+  // 무한 스크롤을 위해 배너 텍스트를 이어붙인 단일 문자열 (충분히 반복)
   String get _bannerFull =>
-      _bannerTexts.map((t) => '  $t  ·').join('  ') * 3;
+      _bannerTexts.map((t) => '   $t   ◆').join('   ') * 4;
 
   @override
   void initState() {
     super.initState();
-    // 배너 애니메이션: 0→1 무한 반복 (12초)
+    // 배너 애니메이션: 0→1 무한 반복 (속도 기반 스크롤)
     _bannerCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 18),
+      duration: const Duration(seconds: 28), // 28초에 텍스트 전체 1회 순환
     )..repeat();
-    _bannerAnim = Tween<double>(begin: 0, end: 1).animate(_bannerCtrl);
+    _bannerAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _bannerCtrl, curve: Curves.linear),
+    );
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await context.read<RaceProvider>().initialize();
@@ -348,23 +352,48 @@ class _HomeContent extends StatelessWidget {
   // ── 자동 스크롤 광고 배너
   Widget _buildScrollingBanner() {
     return Container(
-      height: 36,
-      color: const Color(0xFF0D1929),
-      child: ClipRect(
-        child: AnimatedBuilder(
-          animation: bannerAnim,
-          builder: (_, __) {
-            return CustomPaint(
-              painter: _MarqueePainter(
-                text: bannerFull,
-                progress: bannerAnim.value,
-                textColor: const Color(0xFFFFD700),
-                fontSize: 12.0,
-              ),
-              child: const SizedBox.expand(),
-            );
-          },
+      height: 34,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF050E1C), Color(0xFF0D1929), Color(0xFF050E1C)],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
         ),
+      ),
+      child: Row(
+        children: [
+          // 왼쪽 골드 구분선
+          Container(
+            width: 3,
+            height: 34,
+            color: const Color(0xFFFFD700),
+          ),
+          const SizedBox(width: 6),
+          // 스크롤 텍스트 영역
+          Expanded(
+            child: ClipRect(
+              child: AnimatedBuilder(
+                animation: bannerAnim,
+                builder: (_, __) => CustomPaint(
+                  painter: _MarqueePainter(
+                    text: bannerFull,
+                    progress: bannerAnim.value,
+                    textColor: const Color(0xFFFFD700),
+                    fontSize: 12.0,
+                  ),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // 오른쪽 골드 구분선
+          Container(
+            width: 3,
+            height: 34,
+            color: const Color(0xFFFFD700),
+          ),
+        ],
       ),
     );
   }
@@ -655,11 +684,12 @@ class _HomeContent extends StatelessWidget {
 }
 
 // ──────────────────────────────────────────────
-// _MarqueePainter — Canvas 기반 마퀴 스크롤 텍스트
+// _MarqueePainter — Canvas 기반 마퀴 스크롤 텍스트 (개선판)
+// progress 0.0→1.0 에 따라 텍스트 전체 폭만큼 왼쪽으로 스크롤 (오른쪽→왼쪽)
 // ──────────────────────────────────────────────
 class _MarqueePainter extends CustomPainter {
   final String text;
-  final double progress; // 0.0 ~ 1.0
+  final double progress; // 0.0 ~ 1.0 (AnimationController.repeat 값)
   final Color textColor;
   final double fontSize;
 
@@ -679,7 +709,14 @@ class _MarqueePainter extends CustomPainter {
           color: textColor,
           fontSize: fontSize,
           fontWeight: FontWeight.w600,
-          letterSpacing: 0.2,
+          letterSpacing: 0.3,
+          shadows: [
+            Shadow(
+              color: textColor.withValues(alpha: 0.4),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -689,18 +726,28 @@ class _MarqueePainter extends CustomPainter {
     final textW = tp.width;
     if (textW <= 0) return;
 
-    // 텍스트가 왼쪽 끝에서 시작해 오른쪽으로 사라지는 방향 (좌→우 방향 이동)
-    // progress: 0 → textW 만큼 이동 → 다시 0 (무한 반복)
-    final offset = -(progress * textW * 0.5) % textW;
+    // ── 오른쪽에서 왼쪽으로 흐르는 마퀴 스크롤 ──
+    // progress 0.0: 텍스트 오른쪽 끝에서 시작
+    // progress 1.0: 텍스트 왼쪽으로 textW 만큼 이동 완료 → 다시 처음
+    final scrollX = progress * textW;
+    final ty = (size.height - tp.height) / 2;
 
-    // 두 번 그려서 끊김 없이 연결
-    tp.paint(canvas, Offset(offset, (size.height - tp.height) / 2));
-    tp.paint(canvas, Offset(offset + textW, (size.height - tp.height) / 2));
+    // 첫 번째 복사본
+    final x0 = -scrollX % textW;
+    tp.paint(canvas, Offset(x0, ty));
+
+    // 두 번째 복사본 (첫 번째 복사본 뒤에 이어붙여 끊김 방지)
+    tp.paint(canvas, Offset(x0 + textW, ty));
+
+    // 세 번째 복사본 (창 폭이 텍스트 폭보다 넓을 경우 대비)
+    if (x0 + textW * 2 < size.width) {
+      tp.paint(canvas, Offset(x0 + textW * 2, ty));
+    }
   }
 
   @override
   bool shouldRepaint(_MarqueePainter old) =>
-      old.progress != progress || old.text != text;
+      old.progress != progress || old.text != text || old.textColor != textColor;
 }
 
 // ──────────────────────────────────────────────

@@ -270,6 +270,12 @@ class _TG {
   //    2000m: 좌직선 중상단
   //    2300m: 좌직선 상단 / 상단코너
   static double startP(int distM) {
+    // ★ 1600m 전용: 하단코너 중앙(최하단 바깥 센터)에 출발선 배치
+    // CCW 방향: 하단코너 최하단(우직선→코너→최하단점) → 코너 나머지 → 좌직선 UP → GOAL
+    // 화면: 하단 반원의 가장 아래쪽 바깥 센터 (사용자 요청 "하단 트랙라인 바깥쪽 센터")
+    if (distM == 1600) {
+      return p2 + (p3 - p2) * 0.5; // 하단코너 정중앙 (ang=π/2, 최하단)
+    }
     final ratio = distM.clamp(1200, 2400) / total;
     return (goalP - ratio + 10.0) % 1.0;
   }
@@ -665,7 +671,14 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     } else {
       // 서울/부산경남 트랙 파라미터 (세로형 오벌, _TG 기반)
       _startP   = _TG.startP(widget.race.distance);
-      _goalP    = _startP + widget.race.distance / _TG.total;
+      // ★ 1600m 특수 처리: 하단코너 중앙 출발 → goalP 직접 설정
+      // 하단코너 중앙(0.338) → CCW 진행 → 코너 나머지 → 좌직선 → goalP
+      // goalP는 좌직선 하단부 고정값 사용 (startP+거리 공식 대신)
+      if (widget.race.distance == 1600) {
+        _goalP = _TG.goalP; // 고정 GOAL 위치(좌직선 5%) 사용
+      } else {
+        _goalP = _startP + widget.race.distance / _TG.total;
+      }
       _baseSec  = 30.0;
       _boost400 = _goalP - 400.0 / _TG.total;
       _boost200 = _goalP - 200.0 / _TG.total;
@@ -2271,8 +2284,79 @@ class _RacePainter extends CustomPainter {
         Paint()..color = const Color(0xFFFFD700)..strokeWidth = 2.0);
 
     // ④ 1200m/1300m/1400m 경주: 우직선 바깥에 스타트라인 안내 마커 그룹 표시
-    // (GOAL에서 UP 방향으로 출발하는 3개 경주의 출발선을 트랙 오른쪽 바깥에 강조)
     _drawRightStraightStartMarkers(canvas, tr);
+
+    // ⑤ 1600m 경주: 하단코너 바깥 센터에 전용 마커 항상 표시
+    _drawBottomCorner1600Marker(canvas, tr);
+  }
+
+  // ── 1600m 하단코너 바깥 센터 전용 마커 ──
+  // 서울/부산경남 하단 반원 코너 최하단(화면 아래쪽 바깥)에 1600m 스타트라인 표시
+  // CCW: 하단코너 중앙(최하단) → 코너 나머지(우→좌) → 좌직선 UP → GOAL
+  // "오른쪽으로 출발해서 오른쪽 코너 돌아 UP 방향으로 올라가서 GOAL"
+  void _drawBottomCorner1600Marker(Canvas canvas, Rect tr) {
+    final cx = tr.center.dx;
+
+    // 하단코너 최하단 중앙 좌표: toPoint(p2+(p3-p2)*0.5, tr) = 하단 반원 ang=π/2 지점
+    final cornerCenterP = _TG.p2 + (_TG.p3 - _TG.p2) * 0.5;
+    final cornerPt = _TG.toPoint(cornerCenterP, tr);
+
+    final isCurrent = (distance == 1600);
+
+    // 하단코너 최하단 바깥(아래)에 가로선 표시
+    // 코너 최하단: 진행방향=좌(-x), 법선=아래(+y) 방향이므로
+    // 수직선은 ±x 방향 (트랙 가로폭만큼)
+    const lineHalfW = 28.0;
+    final lineY = cornerPt.dy + 10.0; // 트랙 아래쪽 바깥
+
+    final lineColor = isCurrent
+        ? const Color(0xFFFFD700)
+        : Colors.cyan.withValues(alpha: 0.55);
+    final lineW = isCurrent ? 2.5 : 1.5;
+
+    // 1600m 표시선 (가로 — 하단코너 바깥 아래)
+    canvas.drawLine(
+      Offset(cx - lineHalfW, lineY),
+      Offset(cx + lineHalfW, lineY),
+      Paint()..color = lineColor..strokeWidth = lineW,
+    );
+    // 양 끝 수직 틱
+    for (final dx in [-lineHalfW, lineHalfW]) {
+      canvas.drawLine(
+        Offset(cx + dx, lineY - 5),
+        Offset(cx + dx, lineY + 5),
+        Paint()..color = lineColor..strokeWidth = lineW,
+      );
+    }
+
+    // 코너 트랙에서 아래 라인까지 세로 연결선
+    canvas.drawLine(
+      Offset(cx, cornerPt.dy),
+      Offset(cx, lineY),
+      Paint()..color = lineColor.withValues(alpha: 0.4)..strokeWidth = 1.0,
+    );
+
+    // 레이블: 1600m + 방향 안내
+    if (isCurrent) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(cx, lineY + 16),
+            width: 80, height: 16,
+          ),
+          const Radius.circular(3),
+        ),
+        Paint()..color = const Color(0xFF0A2A2A).withValues(alpha: 0.90),
+      );
+      _txt(canvas, 'START 1600m', Offset(cx, lineY + 16),
+          const Color(0xFFFFD700), 8.0, bold: true, centered: true);
+      _txt(canvas, '→코너UP→GOAL', Offset(cx, lineY + 28),
+          Colors.cyan.withValues(alpha: 0.70), 6.5, centered: true);
+    } else {
+      // 비현재: 작은 레이블
+      _txt(canvas, '1600m', Offset(cx, lineY + 12),
+          Colors.cyan.withValues(alpha: 0.60), 7.5, centered: true);
+    }
   }
 
   // ── 우직선(오른쪽) 1200m/1300m/1400m 출발선 마커 (바깥 안내선) ──
@@ -2350,7 +2434,8 @@ class _RacePainter extends CustomPainter {
   // [수정] 1200m/1300m/1400m 출발선: 우직선 오른쪽 바깥에 명확히 표시
   //        → 모두 UP 방향(우직선 위→아래 진행의 역방향)으로 출발, GOAL을 향해 레이스
   void _drawSeoulAllStartLines(Canvas canvas, Rect tr) {
-    const allDists = [1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300];
+    // ★ 1600m는 _drawBottomCorner1600Marker()에서 별도 처리 → 여기서 제외
+    const allDists = [1200, 1300, 1400, 1700, 1800, 1900, 2000, 2300];
     // 우직선에 위치하는 단거리 경주 (1200m/1300m/1400m)
     const rightStraightDists = {1200, 1300, 1400};
     const tw = 20.0;
