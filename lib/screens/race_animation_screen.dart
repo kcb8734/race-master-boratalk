@@ -59,41 +59,59 @@ import '../utils/horse_cap_colors.dart';
 // ──────────────────────────────────────────────────────────────────────────
 class _TGJeju {
   // 실제 제주 경마장 구간 거리(m) — 도면 기준
-  static const double dRightStr = 493.7;  // 우측 직선 (긴 직선, 출발선 위치)
-  static const double dCornB    = 306.3;  // 하단 반원 코너 (π × 97.5)
-  static const double dLeftStr  = 293.7;  // 좌측 직선 (GOAL 포함)
-  static const double dCornT    = 306.3;  // 상단 반원 코너
-  static const double total     = dRightStr + dCornB + dLeftStr + dCornT; // ≈1400.0
+  static const double dRightStr = 493.7;  // 우측 직선 (긴 직선, 출발선 800~1200m)
+  static const double dCornB    = 306.3;  // 하단 반원 코너 (pi x 97.5)
+  static const double dLeftStr  = 293.7;  // 좌측 직선 (GOAL 상단부)
+  static const double dCornT    = 306.3;  // 상단 반원 코너 (1300~1400m 출발선)
+  static const double total     = dRightStr + dCornB + dLeftStr + dCornT; // =1400.0
 
   // 구간 진행률 경계
-  static double get p2 => dRightStr / total;                        // 우직선 끝 ≈0.352
-  static double get p3 => (dRightStr + dCornB) / total;             // 좌직선 시작 ≈0.571
-  static double get p4 => (dRightStr + dCornB + dLeftStr) / total;  // 상단코너 시작 ≈0.781
+  static double get p2 => dRightStr / total;                        // 우직선 끝 =0.353
+  static double get p3 => (dRightStr + dCornB) / total;             // 좌직선 시작 =0.571
+  static double get p4 => (dRightStr + dCornB + dLeftStr) / total;  // 상단코너 시작 =0.781
 
-  // ── GOAL 고정 위치 ──
-  // 좌직선 상단부 85% 지점 = 1610m 출발선 위치 = 화면 좌측 상단부
-  // p3 = 좌직선 시작(아래쪽), p4 = 좌직선 끝(위쪽)
-  // CCW 진행: 하단코너 돌고 → 좌직선 아래→위 → 85% 지점이 GOAL
-  // 도면 기준: 제주 좌직선 상단(북쪽)에 결승선 위치
-  static double get goalP => p3 + (p4 - p3) * 0.85; // 좌직선 85% ≈ 화면 좌측 상단부
+  // GOAL 고정 위치: 좌직선 상단부 85%
+  // p3(좌직선 시작=아래) ~ p4(좌직선 끝=위) 중 85% = 화면 좌측 상단부
+  static double get goalP => p3 + (p4 - p3) * 0.85; // =0.750
 
-  // ── 출발 진행률 (결승선 역산, 각 거리에 맞는 트랙 상 위치) ──
-  //  제주 경주거리: 800, 900, 1000, 1110, 1200, 1300, 1400, 1610m
+  // ── 출발 진행률 (도면 실측 기반 직접 매핑) ──
   //
-  //  도면 기준 출발선 위치 (CCW, 우직선=0~p2, 하단코너=p2~p3, 좌직선=p3~p4, 상단코너=p4~1):
-  //    1610m = GOAL (좌직선 85%) → 1610m은 1바퀴+210m = goalP에서 1610/1400 역산
-  //    1400m = 상단코너 구간   (goalP - 1400/1400 = goalP - 1.0 ≡ goalP)
-  //    1300m = 상단코너 구간
-  //    1200m = 우직선 상단   (출발 후 GOAL까지 1200m)
-  //    1110m = 우직선 중간
-  //    1000m = 우직선 하단부
-  //    900m  = 하단코너 진입부
-  //    800m  = 좌직선 상단부 (GOAL 200m 전)
+  //  [도면 기준 위치]
+  //    CCW: 구간0=우직선(위->아래), 구간1=하단코너, 구간2=좌직선(아래->위), 구간3=상단코너
+  //
+  //    1610m: GOAL 바로 아래 = 좌직선 85% = goalP (1바퀴 이상 경주)
+  //    1400m: 상단 좌 코너 진입 직후 = p4 + (1-p4)*0.05
+  //    1300m: 상단 센터 (코너 중간) = p4 + (1-p4)*0.40
+  //    1200m: 우상단 코너 끝 = p4 + (1-p4)*0.90
+  //    1110m: 우직선 상단 = p2*0.05
+  //    1000m: 우직선 중상단 = p2*0.28
+  //     900m: 우직선 중간 = p2*0.51
+  //     800m: 우직선 하단 = p2*0.74
+  //
+  //  [역산 검증] goalP=0.750 기준 (dist/total):
+  //    1610m: 1610/1400=1.150 -> goalP+0.150 -> goalP (1바퀴+150m)
+  //    1400m: 0.750-1.000=-0.250 -> 0.750 (1바퀴=상단코너 진입 직후)
+  //    1300m: 0.750-0.929=-0.179 -> 0.821 (상단코너 구간)
+  //    1200m: 0.750-0.857=-0.107 -> 0.893 (상단코너 끝/우직선 직전)
+  //    1110m: 0.750-0.793=-0.043 -> 0.957 (우직선 진입 직후)
+  //    1000m: 0.750-0.714=0.036  (우직선 초반)
+  //     900m: 0.750-0.643=0.107  (우직선 30%)
+  //     800m: 0.750-0.571=0.179  (우직선 50%)
   static double startP(int distM) {
-    // GOAL 에서 경주거리만큼 역산: startP = goalP - dist/total (mod 1.0)
-    // 거리 > total(1400m)인 경우: 1바퀴 이상 → +1.0 보정
-    final ratio = distM.clamp(800, 1700) / total;
-    return (goalP - ratio + 2.0) % 1.0;
+    switch (distM) {
+      case 1610: return goalP;                        // GOAL 위치 (좌직선 85%, 1바퀴+)
+      case 1400: return p4 + (1.0 - p4) * 0.05;      // 상단 좌 코너 진입 직후
+      case 1300: return p4 + (1.0 - p4) * 0.40;      // 상단 코너 중간 (센터)
+      case 1200: return p4 + (1.0 - p4) * 0.90;      // 우상단 코너 끝
+      case 1110: return p2 * 0.05;                    // 우직선 상단 (5%)
+      case 1000: return p2 * 0.28;                    // 우직선 중상단 (28%)
+      case  900: return p2 * 0.51;                    // 우직선 중간 (51%)
+      case  800: return p2 * 0.74;                    // 우직선 하단 (74%)
+      default:
+        // 미등록 거리: goalP 역산
+        final ratio = distM.clamp(800, 1700) / total;
+        return (goalP - ratio + 2.0) % 1.0;
+    }
   }
 
   // ── 진행률 → 화면 좌표 (세로형 CCW) ──
@@ -941,9 +959,21 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       _startP   = _TGJeju.startP(widget.race.distance);
       _goalP    = _startP + widget.race.distance / _TGJeju.total;
       _baseSec  = 30.0;
-      _boost400 = _goalP - 400.0 / _TGJeju.total;
-      _boost200 = _goalP - 200.0 / _TGJeju.total;
-      _spurt100 = _goalP - 100.0 / _TGJeju.total;
+      // 제주 CCW: 구간3(상단코너 p4~1.0)=가점부스터, 구간0(우직선 시작~p2)=파이널스퍼트
+      // 구간 경계: p2=하단코너시작, p3=좌직선시작, p4=상단코너시작
+      // 부스터: 상단코너(p4~1.0) 진입 → goalP 기준으로 상단코너 시작점 계산
+      // 스퍼트: 상단코너 돌아 우직선 진입(0≡1.0) ~ 하단코너 진입(p2)
+      // 실제 레이스 진행: startP → goalP (단조증가)
+      // 상단코너는 [p4, 1.0) 구간 → 누적값으로 환산
+      final boostStart = _TGJeju.p4;  // 상단코너 시작
+      final boostEnd   = 1.0;          // 상단코너 끝 = 우직선 시작
+      // goalP에서 역산: 상단코너 구간이 goalP 이전에 몇 바퀴?
+      // 단순 근사: GOAL에서 (1-p4) 거리 전 = 부스터 시작
+      _boost400 = _goalP - (1.0 - boostStart);  // 상단코너 진입(부스터 ON)
+      _boost200 = _goalP - (1.0 - boostEnd);    // 상단코너 끝 = 우직선 시작(부스터 OFF)
+      // 스퍼트: 좌직선(p3) 진입부터 GOAL까지
+      // goalP에서 좌직선 구간(p4-p3) 이전
+      _spurt100 = _goalP - (boostStart - _TGJeju.p3); // 좌직선 진입점
     } else if (_isBusan) {
       // 부산경남 전용 트랙 파라미터 (_TGBusan, total=1600m, CW)
       // startP: 도면 기반 직접 매핑
@@ -951,17 +981,32 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       _startP   = _TGBusan.startP(widget.race.distance);
       _goalP    = _TGBusan.calcGoalP(widget.race.distance);
       _baseSec  = 30.0;
-      _boost400 = _goalP - 400.0 / _TGBusan.total;
-      _boost200 = _goalP - 200.0 / _TGBusan.total;
-      _spurt100 = _goalP - 100.0 / _TGBusan.total;
+      // ★ 부산경남 CW:
+      //   구간0=우직선(↑), 구간1=상단코너(p2~p3), 구간2=좌직선(↓), 구간3=하단코너
+      //   가점부스터: 상단 우측 코너 돌 때 (p2~p3) — goalP에서 역산
+      //   파이널스퍼트: 상단 좌측 코너 돌아 좌직선 진입(p3)부터 GOAL까지
+      // goalP 기준 역산: 상단코너 구간 길이 = p3-p2
+      final cornTLen = _TGBusan.p3 - _TGBusan.p2; // 상단코너 구간 길이 (진행률)
+      final leftLen  = _TGBusan.p4 - _TGBusan.p3; // 좌직선 구간 길이 (진행률)
+      // GOAL에서 (좌직선 + 상단코너) 이전 = 부스터 시작 (p2 진입)
+      _boost400 = _goalP - leftLen - cornTLen; // 상단코너 진입 (부스터 ON)
+      _boost200 = _goalP - leftLen;            // 상단코너 끝 = 좌직선 시작 (부스터 OFF)
+      // 스퍼트: 좌직선 진입(p3)부터 GOAL까지 = goalP - leftLen
+      _spurt100 = _goalP - leftLen; // 좌직선 진입 = 파이널 스퍼트 시작
     } else {
       // 서울 트랙 파라미터 (_TG, total≈1700m, CW)
       _startP   = _TG.startP(widget.race.distance);
       _goalP    = _startP + widget.race.distance / _TG.total;
       _baseSec  = 30.0;
-      _boost400 = _goalP - 400.0 / _TG.total;
-      _boost200 = _goalP - 200.0 / _TG.total;
-      _spurt100 = _goalP - 100.0 / _TG.total;
+      // ★ 서울 CW:
+      //   구간0=우직선(↑), 구간1=상단코너(p2~p3), 구간2=좌직선(↓), 구간3=하단코너
+      //   가점부스터: 상단 우측 코너 돌 때 (p2~p3)
+      //   파이널스퍼트: 상단 좌측 코너 돌아 좌직선 진입(p3)부터 GOAL까지
+      final cornTLen = _TG.p3 - _TG.p2; // 상단코너 구간 길이
+      final leftLen  = _TG.p4 - _TG.p3; // 좌직선 구간 길이
+      _boost400 = _goalP - leftLen - cornTLen; // 상단코너 진입 (부스터 ON)
+      _boost200 = _goalP - leftLen;            // 상단코너 끝 = 좌직선 시작 (부스터 OFF)
+      _spurt100 = _goalP - leftLen;            // 좌직선 진입 = 파이널 스퍼트 시작
     }
   }
 
@@ -1113,8 +1158,10 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
       // ── Zone 판별 ──────────────────────────────────────────────────────
       final bool inCorner  = (seg == _Seg.cornerR || seg == _Seg.cornerL);
-      final bool inBoost   = (p > _boost400 && p < _boost200);
-      final bool inSpurt   = (p > _spurt100);
+      // ★ 부스터: 상단 우측 코너 진입(_boost400) ~ 좌직선 진입(_boost200) 구간
+      // ★ 스퍼트: 좌직선 진입(_spurt100=_boost200) ~ GOAL 까지
+      final bool inBoost   = (p >= _boost400 && p < _boost200);
+      final bool inSpurt   = (p >= _spurt100 && p < _goalP);
       final int  curMaxL   = _GridRailEngine.maxLanes(p, _goalP,
           isCW: _isJeju, isBusan: _isBusan);
 
@@ -2356,116 +2403,76 @@ class _RacePainter extends CustomPainter {
     }
   }
 
-  // ── 2단 레인 트랙 (서울/부산경남 세로형) ──
-  // 외측 레인(outerR) + 잔디 갭 + 내측 레인(innerR) + 중앙 잔디
+  // ── 서울 단일 트랙 (CW 세로형) ──
+  // 단일 더트 링 + 중앙 잔디 — 코너/직선 색상 완전 연속
+  // ★ hw/hr은 _TG.toPoint 와 완전 동일한 값 사용 (0.42/0.44)
+  // ★ 내측 잔디 경계 hw_grass = hw - trackW (hr 고정) → 코너 빈 공간 없음
   void _drawTrack(Canvas canvas, Size size, Rect tr) {
     final cx  = tr.center.dx;
     final cy  = tr.center.dy;
-    // ★ _TG.toPoint 와 동일한 hw, hr 값 사용
-    final hw  = tr.width  * 0.42;   // 가로 반폭 (코너 반지름)
-    final hr  = tr.height * 0.44;   // 세로 반높이
+    final hw  = tr.width  * 0.42;   // 코너 가로 반지름 (= toPoint 동일)
+    final hr  = tr.height * 0.44;   // 직선 세로 반높이 (= toPoint 동일)
 
-    // 레인 두께 / 갭
-    const twOuter = 11.0; // 외측 레인 두께
-    const twInner = 11.0; // 내측 레인 두께
-    const gap     =  6.0; // 두 레인 사이 잔디 갭
+    // 트랙 너비 (hr 고정, hw만 줄여서 내측 경계)
+    final trackW = (hw * 0.28).clamp(16.0, 28.0); // 단일 트랙 폭
+    final hwGrass = hw - trackW;                   // 내측 잔디 경계 hw
 
-    // 반지름 경계 (바깥 → 안)
-    final outerOuter = hw;                            // 최외곽
-    final outerInner = hw - twOuter;                  // 외측 레인 안쪽 경계
-    final innerOuter = hw - twOuter - gap;            // 내측 레인 바깥 경계
-    final innerInner = hw - twOuter - gap - twInner;  // 최내측 (잔디 시작)
+    // ── ① 외측 오벌 (전체 트랙 영역) ──
+    final outerPath = _ovalPath(cx, cy, hw,       hr);         // 외측 경계
+    final innerPath = _ovalPath(cx, cy, hwGrass,  hr);         // 내측 잔디 경계 (hr 고정!)
+    final trackRing = Path.combine(PathOperation.difference, outerPath, innerPath);
 
-    // ── ① 가장 안쪽 잔디 ──
-    final grassPath = _ovalPath(cx, cy, innerInner, hr - innerInner);
-    canvas.drawPath(grassPath, Paint()..color = const Color(0xFF1A5A1A));
-    _drawGrassStripes(canvas, cx, cy, innerInner, hr - innerInner);
+    // ── ② 내측 잔디 채우기 ──
+    canvas.drawPath(innerPath, Paint()..color = const Color(0xFF1A5A1A));
+    _drawGrassStripes(canvas, cx, cy, hwGrass, hr);
 
-    // ── ② 내측 레인 (innerOuter ~ innerInner) ──
-    final innerOPath = _ovalPath(cx, cy, innerOuter, hr - (twOuter + gap));
-    final innerIPath = _ovalPath(cx, cy, innerInner, hr - innerInner);
-    final innerClip  = Path.combine(PathOperation.difference, innerOPath, innerIPath);
+    // ── ③ 트랙 단색 베이스 (코너/직선 모두 연속) ──
+    canvas.drawPath(trackRing,
+        Paint()..color = const Color(0xFFBB8B40)..style = PaintingStyle.fill);
+
+    // ── ④ 직선 구간 하이라이트 (좌/우 직선 세로 띠) ──
     canvas.save();
-    canvas.clipPath(innerClip);
-    canvas.drawPath(innerOPath, Paint()
-      ..shader = RadialGradient(
-        colors: [const Color(0xFFC49050), const Color(0xFFA87030)],
-        center: Alignment.center, radius: 1.2,
-      ).createShader(tr));
-    // 더트 텍스처
-    final rng2 = Random(11111);
-    for (int i = 0; i < 180; i++) {
-      final t2 = rng2.nextDouble();
-      final pt = _TG.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 8.0);
-      final gs = 0.6 + rng2.nextDouble() * 1.5;
+    canvas.clipPath(trackRing);
+    // 우직선 (cx+hwGrass ~ cx+hw)
+    canvas.drawRect(
+      Rect.fromLTRB(cx + hwGrass, cy - hr, cx + hw, cy + hr),
+      Paint()..color = const Color(0xFFD4A055).withValues(alpha: 0.60),
+    );
+    // 좌직선 (cx-hw ~ cx-hwGrass)
+    canvas.drawRect(
+      Rect.fromLTRB(cx - hw, cy - hr, cx - hwGrass, cy + hr),
+      Paint()..color = const Color(0xFFD4A055).withValues(alpha: 0.60),
+    );
+    canvas.restore();
+
+    // ── ⑤ 더트 텍스처 (트랙 전체) ──
+    final rng = Random(11111);
+    canvas.save();
+    canvas.clipPath(trackRing);
+    for (int i = 0; i < 300; i++) {
+      final t = rng.nextDouble();
+      final off = (rng.nextDouble() - 0.5) * trackW * 0.7;
+      final pt = _TG.toPoint(t, tr, clusterOff: off, isCW: false);
+      final gs = 0.6 + rng.nextDouble() * 1.6;
       canvas.drawOval(
         Rect.fromCenter(center: pt, width: gs * 2, height: gs),
-        Paint()..color = Color.lerp(const Color(0xFFDDBA88), const Color(0xFF8B6035),
-            rng2.nextDouble())!.withValues(alpha: 0.25 + rng2.nextDouble() * 0.35),
+        Paint()..color = Color.lerp(const Color(0xFFDDBB88), const Color(0xFF8B6035),
+            rng.nextDouble())!.withValues(alpha: 0.22 + rng.nextDouble() * 0.32),
       );
     }
     canvas.restore();
 
-    // ── ③ 두 레인 사이 잔디 갭 ──
-    final gapOPath = _ovalPath(cx, cy, outerInner, hr - twOuter);
-    final gapIPath = _ovalPath(cx, cy, innerOuter, hr - (twOuter + gap));
-    final gapPath  = Path.combine(PathOperation.difference, gapOPath, gapIPath);
-    canvas.drawPath(gapPath, Paint()..color = const Color(0xFF1A5A1A).withValues(alpha: 0.9));
-    // 갭 안 잔디 줄무늬
-    canvas.save();
-    canvas.clipPath(gapPath);
-    final rng3 = Random(22222);
-    for (int i = 0; i < 60; i++) {
-      final t3 = rng3.nextDouble();
-      final pt3 = _TG.toPoint(t3, tr, clusterOff: -(twOuter + gap * 0.5));
-      canvas.drawCircle(pt3, 1.2 + rng3.nextDouble(),
-          Paint()..color = const Color(0xFF155A15).withValues(alpha: 0.6));
-    }
-    canvas.restore();
+    // ── ⑥ 경계선 (외곽 + 내측) — 2선으로 단순화 ──
+    canvas.drawPath(outerPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.80)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0);
+    canvas.drawPath(innerPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.60)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5);
 
-    // ── ④ 외측 레인 (outerOuter ~ outerInner) ──
-    final outerOPath = _ovalPath(cx, cy, outerOuter, hr);
-    final outerIPath = _ovalPath(cx, cy, outerInner, hr - twOuter);
-    final outerClip  = Path.combine(PathOperation.difference, outerOPath, outerIPath);
-    canvas.save();
-    canvas.clipPath(outerClip);
-    canvas.drawPath(outerOPath, Paint()
-      ..shader = RadialGradient(
-        colors: [const Color(0xFFD4A060), const Color(0xFFB08040)],
-        center: Alignment.center, radius: 1.2,
-      ).createShader(tr));
-    // 더트 텍스처
-    final rng4 = Random(33333);
-    for (int i = 0; i < 200; i++) {
-      final t4 = rng4.nextDouble();
-      final pt4 = _TG.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 9.0 + 3.0));
-      final gs = 0.7 + rng4.nextDouble() * 1.8;
-      canvas.drawOval(
-        Rect.fromCenter(center: pt4, width: gs * 2, height: gs),
-        Paint()..color = Color.lerp(const Color(0xFFDDBB88), const Color(0xFF8C6035),
-            rng4.nextDouble())!.withValues(alpha: 0.28 + rng4.nextDouble() * 0.38),
-      );
-    }
-    canvas.restore();
-
-    // ── ⑤ 3중 경계선 ──
-    // 최외곽
-    canvas.drawPath(outerOPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.75)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.8);
-    // 갭 양쪽
-    canvas.drawPath(gapOPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.45)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.2);
-    canvas.drawPath(gapIPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.45)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.2);
-    // 최내측
-    canvas.drawPath(innerIPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.55)
-      ..style = PaintingStyle.stroke..strokeWidth = 1.5);
-
-    // ── ⑥ 코너 하이라이트 ──
+    // ── ⑦ 코너 하이라이트 ──
     _drawCornerHighlight(canvas, cx, cy, hw, hr);
 
     // ── ⑦ 내측 텍스트 ──
@@ -2848,45 +2855,45 @@ class _RacePainter extends CustomPainter {
 
   // ── 부산경남 트랙 오벌 경로 (CW 세로형, hw=코너가로반지름, hr=직선반높이) ──
   //
-  // ★ toPoint 와 완전 동기화:
-  //   - 코너 가로 반지름 rx = hw   (kHwFrac)
-  //   - 코너 세로 반지름 ry = hw * kCornRyFrac  (납작한 타원)
-  //   - arcTo Rect: width = rx*2, height = ry*2
+  // ★ 부산경남 오벌 경로 (_TGBusan.toPoint 와 동기화)
+  // 납작한 타원 코너 (rx=hw, ry=hw*kCornRyFrac=0.5)
+  // hr = 직선 반높이 (항상 고정), hw = 코너 가로 반지름
   //
+  // CW 방향 (sweepAngle 양수 = Flutter에서 시계방향):
+  //   우직선 → 상단코너(0→π, CW) → 좌직선 → 하단코너(π→2π, CW)
   Path _busanOvalPath(double cx, double cy, double hw, double hr) {
-    if (hw <= 0 || hr <= 0) return Path();
-    final ry = hw * _TGBusan.kCornRyFrac; // 타원 세로 반지름
+    if (hw <= 0) return Path();
+    final safeHr = hr.clamp(hw * 0.05, double.infinity);
+    final ry = hw * _TGBusan.kCornRyFrac;
     final path = Path();
-    // CW: 우직선 아래→위 시작
-    path.moveTo(cx + hw, cy + hr);  // 우하단
-    path.lineTo(cx + hw, cy - hr);  // 우상단
-    // 상단 코너: 중심(cx, cy-hr), 타원 rx=hw, ry=ry, 0→-π (CW: 오른→왼)
+    // 우직선: 하단(cy+safeHr) → 상단(cy-safeHr)
+    path.moveTo(cx + hw, cy + safeHr);
+    path.lineTo(cx + hw, cy - safeHr);
+    // 상단 코너: 중심(cx, cy-safeHr), 타원(rx=hw, ry=ry), 0→π (CW)
     path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2, height: ry * 2),
+      Rect.fromCenter(center: Offset(cx, cy - safeHr), width: hw * 2, height: ry * 2),
       0, pi, false,
     );
-    // 좌직선 위→아래
-    path.lineTo(cx - hw, cy + hr);
-    // 하단 코너: 중심(cx, cy+hr), 타원 rx=hw, ry=ry, π→0 (CW: 왼→오른)
+    // 좌직선: 상단(cy-safeHr) → 하단(cy+safeHr)
+    path.lineTo(cx - hw, cy + safeHr);
+    // 하단 코너: 중심(cx, cy+safeHr), 타원(rx=hw, ry=ry), π→2π (CW)
     path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2, height: ry * 2),
+      Rect.fromCenter(center: Offset(cx, cy + safeHr), width: hw * 2, height: ry * 2),
       pi, pi, false,
     );
     path.close();
     return path;
   }
 
-  // ── 부산경남 2단 레인 트랙 ──
+  // ── 부산경남 단일 트랙 (CW 세로형, 납작 타원 코너) ──
   //
-  // [핵심 렌더링 전략]
-  // ① PathOperation.difference 로 레인 링 생성
-  // ② 단색 베이스 컬러로 채우기 → 코너/직선 색상 완전 연속
-  //    (RadialGradient 제거: tr 중심 기준이라 코너는 항상 어두운 끝부분만 보임)
-  // ③ 더트 텍스처(점) + 직선 하이라이트 별도 레이어로 입체감 부여
-  // ④ 마지막에 경계선 stroke
+  // [렌더링 전략]
+  // ① 단일 트랙 링 (외곽 오벌 - 잔디 오벌) — 코너/직선 색상 완전 연속
+  // ② 직선 구간 하이라이트 (세로 띠)
+  // ③ 더트 텍스처
+  // ④ 경계선 2개 (외곽 + 내측 잔디 경계) — 이중/삼중 선 완전 제거
   //
   // ★ hw = kHwFrac(0.38)*width, hr = kHrFrac(0.38)*height — toPoint 와 완전 동일
-  // ★ _busanOvalPath hr 인자는 항상 hr(직선반높이)로 고정, hw만 줄여서 레인 계층 생성
   void _drawBusanTrack(Canvas canvas, Size size, Rect tr) {
     final cx  = tr.center.dx;
     final cy  = tr.center.dy;
@@ -2894,120 +2901,64 @@ class _RacePainter extends CustomPainter {
     final hr  = tr.height * _TGBusan.kHrFrac;
     final ry  = hw * _TGBusan.kCornRyFrac; // 코너 세로 반지름
 
-    // 레인 두께 / 갭
-    final twOuter = (hw * 0.13).clamp(8.0, 14.0);
-    final twInner = (hw * 0.13).clamp(8.0, 14.0);
-    final gap     = (hw * 0.08).clamp(4.0, 8.0);
+    // 단일 트랙 폭 (hw만 변경, hr 고정)
+    final trackW  = (hw * 0.30).clamp(18.0, 32.0);
+    final hwGrass = hw - trackW; // 내측 잔디 경계 hw
 
-    // hw 계층 (hr 항상 고정)
-    final hwOO    = hw;
-    final hwOI    = hw - twOuter;
-    final hwIO    = hw - twOuter - gap;
-    final hwII    = hw - twOuter - gap - twInner;
-    final hwGrass = hwII - (hwII * 0.15).clamp(2.0, 6.0);
-
-    // ━━━━ 오벌 경로 생성 ━━━━
-    final outerOPath = _busanOvalPath(cx, cy, hwOO, hr); // 외측 바깥
-    final outerIPath = _busanOvalPath(cx, cy, hwOI, hr); // 외측 안쪽 (= 갭 바깥)
-    final gapIPath   = _busanOvalPath(cx, cy, hwIO, hr); // 갭 안쪽  (= 내측 바깥)
-    final innerIPath = _busanOvalPath(cx, cy, hwII, hr); // 내측 안쪽 (= 잔디 바깥)
-    final grassPath  = _busanOvalPath(cx, cy, hwGrass, hr);
-
-    // 링(레인) 경로: outer - inner
-    final outerRing = Path.combine(PathOperation.difference, outerOPath, outerIPath);
-    final gapRing   = Path.combine(PathOperation.difference, outerIPath, gapIPath);
-    final innerRing = Path.combine(PathOperation.difference, gapIPath,  innerIPath);
+    // ━━━━ 오벌 경로 (hr 고정, hw만 변경) ━━━━
+    final outerPath = _busanOvalPath(cx, cy, hw,       hr); // 외측 경계
+    final innerPath = _busanOvalPath(cx, cy, hwGrass,  hr); // 내측 잔디 경계
+    final trackRing = Path.combine(PathOperation.difference, outerPath, innerPath);
 
     // ━━━━ ① 내측 잔디 ━━━━
-    canvas.drawPath(grassPath, Paint()..color = const Color(0xFF1A5A1A));
+    canvas.drawPath(innerPath, Paint()..color = const Color(0xFF1A5A1A));
     _drawGrassStripesBusan(canvas, cx, cy, hwGrass, hr);
 
-    // ━━━━ ② 내측 레인 — 단색 베이스 먼저, 텍스처 나중 ━━━━
-    // 단색 베이스: 코너/직선 구분 없이 동일한 더트색으로 연속 채우기
-    canvas.drawPath(innerRing,
-        Paint()..color = const Color(0xFFB8863A)..style = PaintingStyle.fill);
+    // ━━━━ ② 트랙 단색 베이스 (코너/직선 모두 연속) ━━━━
+    canvas.drawPath(trackRing,
+        Paint()..color = const Color(0xFFC08840)..style = PaintingStyle.fill);
 
-    // 직선 구간만 밝은 하이라이트 (좌/우 직선 세로 띠)
+    // ━━━━ ③ 직선 구간 하이라이트 ━━━━
     canvas.save();
-    canvas.clipPath(innerRing);
+    canvas.clipPath(trackRing);
+    // 우직선 (cx+hwGrass ~ cx+hw)
     canvas.drawRect(
-      Rect.fromLTRB(cx - hwIO, cy - hr, cx - hwII, cy + hr),
-      Paint()..color = const Color(0xFFCFA05A).withValues(alpha: 0.55),
+      Rect.fromLTRB(cx + hwGrass, cy - hr, cx + hw, cy + hr),
+      Paint()..color = const Color(0xFFD9A058).withValues(alpha: 0.60),
     );
+    // 좌직선 (cx-hw ~ cx-hwGrass)
     canvas.drawRect(
-      Rect.fromLTRB(cx + hwII, cy - hr, cx + hwIO, cy + hr),
-      Paint()..color = const Color(0xFFCFA05A).withValues(alpha: 0.55),
+      Rect.fromLTRB(cx - hw, cy - hr, cx - hwGrass, cy + hr),
+      Paint()..color = const Color(0xFFD9A058).withValues(alpha: 0.60),
     );
     canvas.restore();
 
-    // 더트 텍스처 (내측 레인 전체, 코너 포함)
-    final rng2 = Random(44444);
+    // ━━━━ ④ 더트 텍스처 (트랙 전체, 코너 포함) ━━━━
+    final rng = Random(44444);
     canvas.save();
-    canvas.clipPath(innerRing);
-    for (int i = 0; i < 200; i++) {
-      final t2 = rng2.nextDouble();
-      final pt = _TGBusan.toPoint(t2, tr, clusterOff: (rng2.nextDouble() - 0.5) * 5.0);
-      final gs = 0.5 + rng2.nextDouble() * 1.4;
+    canvas.clipPath(trackRing);
+    for (int i = 0; i < 320; i++) {
+      final t = rng.nextDouble();
+      final off = (rng.nextDouble() - 0.5) * trackW * 0.7;
+      final pt = _TGBusan.toPoint(t, tr, clusterOff: off);
+      final gs = 0.5 + rng.nextDouble() * 1.6;
       canvas.drawOval(
         Rect.fromCenter(center: pt, width: gs * 2, height: gs),
         Paint()..color = Color.lerp(const Color(0xFFDDBA88), const Color(0xFF8B6035),
-            rng2.nextDouble())!.withValues(alpha: 0.20 + rng2.nextDouble() * 0.30),
+            rng.nextDouble())!.withValues(alpha: 0.20 + rng.nextDouble() * 0.30),
       );
     }
     canvas.restore();
 
-    // ━━━━ ③ 잔디 갭 ━━━━
-    canvas.drawPath(gapRing,
-        Paint()..color = const Color(0xFF1A5A1A).withValues(alpha: 0.92));
-
-    // ━━━━ ④ 외측 레인 — 단색 베이스 먼저 ━━━━
-    canvas.drawPath(outerRing,
-        Paint()..color = const Color(0xFFC89448)..style = PaintingStyle.fill);
-
-    // 직선 구간 하이라이트
-    canvas.save();
-    canvas.clipPath(outerRing);
-    canvas.drawRect(
-      Rect.fromLTRB(cx - hwOO, cy - hr, cx - hwOI, cy + hr),
-      Paint()..color = const Color(0xFFDFAA60).withValues(alpha: 0.55),
-    );
-    canvas.drawRect(
-      Rect.fromLTRB(cx + hwOI, cy - hr, cx + hwOO, cy + hr),
-      Paint()..color = const Color(0xFFDFAA60).withValues(alpha: 0.55),
-    );
-    canvas.restore();
-
-    // 더트 텍스처 (외측 레인 전체, 코너 포함)
-    final rng4 = Random(55555);
-    canvas.save();
-    canvas.clipPath(outerRing);
-    for (int i = 0; i < 220; i++) {
-      final t4 = rng4.nextDouble();
-      final pt4 = _TGBusan.toPoint(t4, tr, clusterOff: (rng4.nextDouble() * 7.0 + 4.0));
-      final gs = 0.6 + rng4.nextDouble() * 1.7;
-      canvas.drawOval(
-        Rect.fromCenter(center: pt4, width: gs * 2, height: gs),
-        Paint()..color = Color.lerp(const Color(0xFFDDBB88), const Color(0xFF8C6035),
-            rng4.nextDouble())!.withValues(alpha: 0.22 + rng4.nextDouble() * 0.32),
-      );
-    }
-    canvas.restore();
-
-    // ━━━━ ⑤ 경계선 stroke ━━━━
-    final strokePaint = Paint()..style = PaintingStyle.stroke;
-
-    canvas.drawPath(outerOPath, strokePaint
-      ..color = Colors.white.withValues(alpha: 0.80)
+    // ━━━━ ⑤ 경계선 (2선 단순화) — 이중/삼중 선 완전 제거 ━━━━
+    canvas.drawPath(outerPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.82)
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0);
-    canvas.drawPath(outerIPath, strokePaint
-      ..color = Colors.white.withValues(alpha: 0.50)
-      ..strokeWidth = 1.3);
-    canvas.drawPath(gapIPath, strokePaint
-      ..color = Colors.white.withValues(alpha: 0.50)
-      ..strokeWidth = 1.3);
-    canvas.drawPath(innerIPath, strokePaint
-      ..color = Colors.white.withValues(alpha: 0.60)
-      ..strokeWidth = 1.6);
+    canvas.drawPath(innerPath, Paint()
+      ..color = Colors.white.withValues(alpha: 0.62)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5);
 
     // ━━━━ ⑥ 거리별 경로 화살표 (하단코너 구간) ━━━━
     // 1800~2000m: 내측 하단코너 경로 강조 (반투명 화살표)
@@ -3433,66 +3384,91 @@ class _RacePainter extends CustomPainter {
     return path;
   }
 
+  // ── 제주 단일 트랙 (CCW 세로형, 정원형 코너) ──
+  //
+  // [렌더링 전략 — 서울/부산과 동일 방식]
+  // ① hw만 줄여서 innerPath 생성 (vr 고정!) → 코너/직선 색상 완전 연속
+  // ② 단일 트랙 링 = PathOperation.difference(outerPath, innerPath)
+  // ③ 직선 구간 하이라이트 (세로 띠, clipPath 내부)
+  // ④ 더트 텍스처 (트랙 전체, clipPath 내부)
+  // ⑤ 경계선 2개 (외곽+내측) — 이중/삼중 선 없음
+  //
+  // ★ hw = 0.38*width, vr = 0.43*height — toPoint와 완전 동일
+  // ★ innerPath: hw-trackW, vr 고정 → 코너 형태 일치 보장
   void _drawJejuTrack(Canvas canvas, Size size, Rect tr) {
     final cx = tr.center.dx;
     final cy = tr.center.dy;
-    final hw  = tr.width  * 0.38;  // 가로 반폭 (코너 반지름)
-    final vr  = tr.height * 0.43;  // 세로 반높이
-    const tw  = 16.0;
+    final hw  = tr.width  * 0.38;  // 가로 반폭 (= toPoint 동일)
+    final vr  = tr.height * 0.43;  // 세로 반높이 고정 (= toPoint 동일)
 
-    // ① 내측 잔디
-    final innerPath = _jejuOvalPath(cx, cy, hw - tw, vr - tw);
+    // 단일 트랙 폭 (hw만 변경, vr 항상 고정)
+    final trackW  = (hw * 0.28).clamp(14.0, 26.0);
+    final hwGrass = hw - trackW; // 내측 잔디 경계 hw
+
+    // ━━━━ 오벌 경로 (vr 고정, hw만 변경) ━━━━
+    // ★ _jejuOvalPath(cx, cy, hw, vr) — vr 파라미터를 항상 동일하게 고정
+    final outerPath = _jejuOvalPath(cx, cy, hw,       vr); // 외측 경계
+    final innerPath = _jejuOvalPath(cx, cy, hwGrass,  vr); // 내측 잔디 경계 (vr 고정!)
+    final trackRing = Path.combine(PathOperation.difference, outerPath, innerPath);
+
+    // ━━━━ ① 내측 잔디 ━━━━
     canvas.drawPath(innerPath, Paint()..color = const Color(0xFF1B4A1B));
-    // 잔디 줄무늬
+    // 잔디 줄무늬 (hw만 줄이고 vr 고정)
     for (int i = 0; i < 4; i++) {
-      final h2 = (hw - tw) * (0.4 + i * 0.15);
-      final r2 = (vr - tw) * (0.4 + i * 0.15);
+      final h2 = hwGrass * (0.4 + i * 0.18);
       if (i.isEven) {
-        canvas.drawPath(_jejuOvalPath(cx, cy, h2, r2), Paint()
+        canvas.drawPath(_jejuOvalPath(cx, cy, h2, vr), Paint()
           ..color = const Color(0xFF154A15).withValues(alpha: 0.55));
       }
     }
 
-    // ② 더트 트랙
-    final outerPath = _jejuOvalPath(cx, cy, hw, vr);
-    final trackClip = Path.combine(PathOperation.difference, outerPath, innerPath);
-    canvas.save();
-    canvas.clipPath(trackClip);
-    canvas.drawPath(outerPath, Paint()
-      ..shader = RadialGradient(
-        colors: [const Color(0xFFC49A5A), const Color(0xFFAA7840)],
-        center: Alignment.center, radius: 1.2,
-      ).createShader(tr));
+    // ━━━━ ② 트랙 단색 베이스 (코너/직선 모두 연속) ━━━━
+    canvas.drawPath(trackRing,
+        Paint()..color = const Color(0xFFBB8B40)..style = PaintingStyle.fill);
 
-    // 더트 텍스처
-    final rng2 = Random(99999);
+    // ━━━━ ③ 직선 구간 하이라이트 (세로 띠) ━━━━
+    canvas.save();
+    canvas.clipPath(trackRing);
+    // 우직선 (cx+hwGrass ~ cx+hw)
+    canvas.drawRect(
+      Rect.fromLTRB(cx + hwGrass, cy - vr, cx + hw, cy + vr),
+      Paint()..color = const Color(0xFFD4A055).withValues(alpha: 0.55),
+    );
+    // 좌직선 (cx-hw ~ cx-hwGrass)
+    canvas.drawRect(
+      Rect.fromLTRB(cx - hw, cy - vr, cx - hwGrass, cy + vr),
+      Paint()..color = const Color(0xFFD4A055).withValues(alpha: 0.55),
+    );
+    canvas.restore();
+
+    // ━━━━ ④ 더트 텍스처 (트랙 전체, 코너 포함) ━━━━
+    final rng = Random(99999);
+    canvas.save();
+    canvas.clipPath(trackRing);
     for (int i = 0; i < 280; i++) {
-      final t2 = rng2.nextDouble();
-      final pt = _TGJeju.toPoint(t2, tr);
-      final gs = 0.7 + rng2.nextDouble() * 1.8;
+      final t = rng.nextDouble();
+      final off = (rng.nextDouble() - 0.5) * trackW * 0.7;
+      final pt = _TGJeju.toPoint(t, tr, clusterOff: off);
+      final gs = 0.6 + rng.nextDouble() * 1.6;
       canvas.drawOval(
-        Rect.fromCenter(
-          center: pt + Offset((rng2.nextDouble()-0.5)*tw*0.6, 0),
-          width: gs*2, height: gs,
-        ),
-        Paint()..color = Color.lerp(
-          const Color(0xFFDDBA88), const Color(0xFF8B6035),
-          rng2.nextDouble())!.withValues(alpha: 0.3 + rng2.nextDouble() * 0.4),
+        Rect.fromCenter(center: pt, width: gs * 2, height: gs),
+        Paint()..color = Color.lerp(const Color(0xFFDDBA88), const Color(0xFF8B6035),
+            rng.nextDouble())!.withValues(alpha: 0.25 + rng.nextDouble() * 0.35),
       );
     }
     canvas.restore();
 
-    // ③ 테두리
+    // ━━━━ ⑤ 경계선 (2선 단순화) ━━━━
     canvas.drawPath(outerPath, Paint()
-      ..color = Colors.white.withValues(alpha: 0.7)
+      ..color = Colors.white.withValues(alpha: 0.75)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8);
+      ..strokeWidth = 2.0);
     canvas.drawPath(innerPath, Paint()
       ..color = Colors.white.withValues(alpha: 0.55)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5);
 
-    // ④ 코너 하이라이트 (상단/하단 반원)
+    // ━━━━ ⑥ 코너 하이라이트 (상단/하단 반원) ━━━━
     canvas.drawArc(
       Rect.fromCenter(center: Offset(cx, cy + vr), width: hw * 2.6, height: hw * 2.6),
       0, pi, false,
@@ -3508,19 +3484,7 @@ class _RacePainter extends CustomPainter {
     _txt(canvas, '상단코너', Offset(cx, cy - vr - hw * 0.55),
         Colors.white.withValues(alpha: 0.35), 7.5, centered: true);
 
-    // ⑤ 직선 강조 라인
-    // 우직선 (메인스트래치 493.7m)
-    canvas.drawLine(
-      Offset(cx + hw + 2, cy - vr), Offset(cx + hw + 2, cy + vr),
-      Paint()..color = const Color(0xFFFFD700).withValues(alpha: 0.12)..strokeWidth = 6.0,
-    );
-    // 좌직선 (백스트래치 293.7m)
-    canvas.drawLine(
-      Offset(cx - hw - 2, cy - vr), Offset(cx - hw - 2, cy + vr),
-      Paint()..color = const Color(0xFF81C784).withValues(alpha: 0.12)..strokeWidth = 4.0,
-    );
-
-    // ⑥ 내측 텍스트
+    // ━━━━ ⑦ 내측 텍스트 ━━━━
     _txt(canvas, '${distance}m 레이스',
         Offset(cx, cy - vr * 0.25),
         Colors.white.withValues(alpha: 0.5), 10, centered: true);
@@ -3530,12 +3494,12 @@ class _RacePainter extends CustomPainter {
     _txt(canvas, '↺ CCW', Offset(cx, cy),
         const Color(0xFF81C784).withValues(alpha: 0.4), 9, bold: true, centered: true);
 
-    // ⑦ 직선 레이블
+    // ━━━━ ⑧ 직선 레이블 ━━━━
     _txt(canvas, '우직선 493.7m',
-        Offset(cx + hw + tw + 22, cy),
+        Offset(cx + hw + trackW + 18, cy),
         Colors.white.withValues(alpha: 0.35), 7, centered: true);
     _txt(canvas, '좌직선 293.7m',
-        Offset(cx - hw - tw - 22, cy),
+        Offset(cx - hw - trackW - 18, cy),
         Colors.white.withValues(alpha: 0.30), 7, centered: true);
   }
 
@@ -3912,24 +3876,30 @@ class _RacePainter extends CustomPainter {
   // ── 유틸: 세로형 오벌 경로 ──
   // 세로형: 직선이 좌·우, 코너(반원)가 상·하
   // hw = 좌우 반폭 (= 코너 반지름), hr = 직선 절반 높이
+  // ★ 서울 오벌 경로 (_TG.toPoint 와 동기화)
+  // CW 방향: 우직선(아래→위) → 상단코너(CW 위쪽반원) → 좌직선(위→아래) → 하단코너(CW 아래쪽반원)
+  //
+  // 핵심: arcTo의 sweepAngle은 CW(음수) 대신 pi(양수)를 사용해도
+  //       경로 자체는 동일하게 닫힘 — fill에는 방향 무관
+  // ★ hr은 항상 직선 반높이 고정 (hw와 독립) → 코너/직선 경계 완전 연속
   Path _ovalPath(double cx, double cy, double hw, double hr) {
-    if (hw <= 0 || hr <= 0) return Path();
+    if (hw <= 0) return Path();
+    // hr이 너무 작으면 직선 부분이 없어짐 → 최소값 보장
+    final safeHr = hr.clamp(hw * 0.1, double.infinity);
     final path = Path();
-    // 우측 직선: (cx+hw, cy-hr) → (cx+hw, cy+hr)
-    path.moveTo(cx + hw, cy - hr);
-    path.lineTo(cx + hw, cy + hr);
-    // 하단 코너: 중심 (cx, cy+hr), 반지름 hw
-    //   시작: (cx+hw, cy+hr) = 0도, 끝: (cx-hw, cy+hr) = π (시계방향 호)
+    // 우직선 상단(cx+hw, cy-safeHr) → 하단(cx+hw, cy+safeHr)
+    path.moveTo(cx + hw, cy - safeHr);
+    path.lineTo(cx + hw, cy + safeHr);
+    // 하단 코너: 중심(cx, cy+safeHr), 반원 (0 → π)
     path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2, height: hw * 2),
+      Rect.fromCenter(center: Offset(cx, cy + safeHr), width: hw * 2, height: hw * 2),
       0, pi, false,
     );
-    // 좌측 직선: (cx-hw, cy+hr) → (cx-hw, cy-hr)
-    path.lineTo(cx - hw, cy - hr);
-    // 상단 코너: 중심 (cx, cy-hr), 반지름 hw
-    //   시작: (cx-hw, cy-hr) = π, 끝: (cx+hw, cy-hr) = 2π
+    // 좌직선 하단(cx-hw, cy+safeHr) → 상단(cx-hw, cy-safeHr)
+    path.lineTo(cx - hw, cy - safeHr);
+    // 상단 코너: 중심(cx, cy-safeHr), 반원 (π → 2π)
     path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2, height: hw * 2),
+      Rect.fromCenter(center: Offset(cx, cy - safeHr), width: hw * 2, height: hw * 2),
       pi, pi, false,
     );
     path.close();

@@ -50,7 +50,7 @@ class _HomeScreenState extends State<HomeScreen>
     // 배너 애니메이션: 0→1 무한 반복 (속도 기반 스크롤)
     _bannerCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 28), // 28초에 텍스트 전체 1회 순환
+      duration: const Duration(seconds: 70), // 70초에 텍스트 전체 1회 순환 (가독성 향상)
     )..repeat();
     _bannerAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _bannerCtrl, curve: Curves.linear),
