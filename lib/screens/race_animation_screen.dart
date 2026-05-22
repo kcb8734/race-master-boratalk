@@ -2773,23 +2773,57 @@ class _RacePainter extends CustomPainter {
   //  내측 표준 트랙 + 2200m 외측 대형 반원 이중 구조 시각화
   // ══════════════════════════════════════════════════════════════════════════
 
-  // ── 2D 탑다운 오벌 경로 (정원형 반원 코너) ──
-  // hw = 코너 반지름(= 직선 가로 반폭), hr = 직선 반높이
-  // CW: 우직선(하→상) → 상단반원(0→π) → 좌직선(상→하) → 하단반원(π→2π)
+  // ── 2D 탑다운 오벌 경로 (정원형 반원 코너, 바깥으로 볼록) ──
+  //
+  // ══════════════════════════════════════════════════════════════
+  //  _busanOvalPath — 완전 재작성 v5 (arcTo/bezier 전면 폐기)
+  //
+  //  ▸ 구조: 순수 lineTo 세그먼트 근사화 (반원 = 60분할 다각형)
+  //  ▸ 상단 반원: 중심(cx, cy-hr) → 위로 볼록
+  //  ▸ 하단 반원: 중심(cx, cy+hr) → 아래로 볼록
+  //
+  //  [모든 호 API 폐기 이유]
+  //  Flutter Web(CanvasKit)에서 arcTo/addArc 모두 내부 winding 방향이
+  //  플랫폼별 PathFillType 해석에 따라 달라질 수 있음.
+  //  lineTo만 사용하면 winding이 완전히 예측 가능함.
+  //
+  //  [경로 조립 순서 — CW 시계방향, 위에서 내려다보는 탑다운]
+  //  ① 우직선:  (cx+hw, cy+hr) → (cx+hw, cy-hr)   ↑  (남→북)
+  //  ② 상단호:  CW 0→-π (우→위→좌)               위로 볼록 ✅
+  //  ③ 좌직선:  (cx-hw, cy-hr) → (cx-hw, cy+hr)   ↓  (북→남)
+  //  ④ 하단호:  CW π→0 (좌→아래→우)              아래로 볼록 ✅
+  // ══════════════════════════════════════════════════════════════
   Path _busanOvalPath(double cx, double cy, double hw, double hr) {
     if (hw <= 0 || hr <= 0) return Path();
+    const int steps = 60; // 반원을 60등분 → 충분히 부드러운 곡선
     final path = Path();
+
+    // ① 우직선 시작점 (우하단)
     path.moveTo(cx + hw, cy + hr);
+    // ② 우직선: 위쪽 방향
     path.lineTo(cx + hw, cy - hr);
-    path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy - hr), width: hw * 2, height: hw * 2),
-      0, pi, false, // 상단 반원 CW
-    );
+
+    // ③ 상단 반원: CW, 오른쪽(0°) → 위(-90°) → 왼쪽(180°)
+    //    angle: 0 → -π (CW = 음의 방향)
+    //    중심: (cx, cy - hr)
+    for (int i = 1; i <= steps; i++) {
+      final a = -(pi * i / steps); // 0 → -π
+      path.lineTo(cx + hw * cos(a), cy - hr + hw * sin(a));
+    }
+    // 상단 반원 끝점은 (cx - hw, cy - hr)
+
+    // ④ 좌직선: 아래쪽 방향
     path.lineTo(cx - hw, cy + hr);
-    path.arcTo(
-      Rect.fromCenter(center: Offset(cx, cy + hr), width: hw * 2, height: hw * 2),
-      pi, pi, false, // 하단 반원 CW
-    );
+
+    // ⑤ 하단 반원: CW, 왼쪽(π) → 아래(-270°=아래) → 오른쪽(0°)
+    //    angle: π → 0 (CW = π에서 감소하여 0으로)
+    //    중심: (cx, cy + hr)
+    for (int i = 1; i <= steps; i++) {
+      final a = pi - (pi * i / steps); // π → 0
+      path.lineTo(cx + hw * cos(a), cy + hr + hw * sin(a));
+    }
+    // 하단 반원 끝점은 (cx + hw, cy + hr) → close
+
     path.close();
     return path;
   }
