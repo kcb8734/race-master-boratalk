@@ -298,39 +298,131 @@ class HorsePosition {
 }
 
 // ──────────────────────────────────────────────────────────────
-// API4_3 경주기록정보 모델 (경주결과 + 배당 조회)
+// racedetailresult 경주별상세성적표 모델
+// URL: http://apis.data.go.kr/B551015/racedetailresult/getracedetailresult
+// 갱신주기: 일1회 / 응답형식: XML
 // ──────────────────────────────────────────────────────────────
 
-/// 개별 말의 경주결과 + 배당
+/// 개별 말의 경주결과 + 상세성적 (racedetailresult 전체 필드)
 class HorseResult {
-  final int rank;           // 착순
-  final int gateNo;         // 마번(게이트번호)
-  final String horseName;   // 말이름
-  final String jockeyName;  // 기수이름
-  final String raceTime;    // 주파기록 (예: "1:24.5")
-  final String timeDiff;    // 착차 (예: "+1.5" 또는 "동착")
-  final double winOdds;     // 단승 배당 (win)
-  final double placeOdds1;  // 연승 배당1 (place)
-  final double placeOdds2;  // 연승 배당2 (place)
-  final double showOdds;    // 복승 배당 (show)
-  final int weight;         // 마체중
+  // ── 기본 식별 ────────────────────────────────────────────────
+  /// 착순 — stOrd (0=미출전)
+  final int rank;
+  /// 출주번호(마번) — chulNo
+  final int gateNo;
+  /// 마번(고유등록번호) — hrNo (예: "042013")
+  final String horseNo;
+  /// 말이름 — hrName
+  final String horseName;
+  /// 경마장명 — meet (예: "서울")
+  final String venueName;
+
+  // ── 마필 정보 ────────────────────────────────────────────────
+  /// 산지 — prdCtyNm (예: "한", "외")
+  final String origin;
+  /// 성별 — sex (예: "거", "牡", "牝")
+  final String sex;
+  /// 연령 — age (예: "3세", "4세")
+  final String age;
+  /// 마체중(kg) — wgHr
+  final int weight;
+  /// 마체중편차(kg) — df (양수=증량, 음수=감량)
+  final int weightDiff;
+  /// 부담중량(kg) — wgBudam
+  final double wgBudam;
+  /// 장구내역 — hrTool (예: "망사눈", "빠이블록")
+  final String horseTool;
+  /// 경주마레이팅 — hrRating (옵션)
+  final String horseRating;
+
+  // ── 기수 정보 ────────────────────────────────────────────────
+  /// 기수명 — jkName
+  final String jockeyName;
+  /// 기수번호 — jkNo
+  final String jockeyNo;
+  /// 기수경마장 — jkMeet (1=서울, 2=제주, 3=부산경남)
+  final String jockeyMeet;
+  /// 수습기수감량 — jkSymbol (예: "-1", "-2", "-3", null)
+  final String jockeyApprentice;
+
+  // ── 조교사 / 마주 정보 ──────────────────────────────────────
+  /// 조교사명 — trName
+  final String trainerName;
+  /// 조교사번호 — trNo
+  final String trainerNo;
+  /// 조교사경마장 — trMeet
+  final String trainerMeet;
+  /// 마주명 — owName
+  final String ownerName;
+  /// 마주번호 — owNo
+  final String ownerNo;
+  /// 마주복식 — owCloth (말주인 실크 패턴)
+  final String ownerCloth;
+
+  // ── 성적 / 기록 ──────────────────────────────────────────────
+  /// 주파기록 — rcTime (예: "1:16.6")
+  final String raceTime;
+  /// 도착차 — differ (예: "1/2마신", "코", "동착"; 1착은 공백)
+  final String differ;
+  /// 출전여부 — chulYn (1=출전, 0=미출전·취소)
+  final bool didStart;
+
+  // ── 배당 정보 ────────────────────────────────────────────────
+  /// 단승식배당율 — win (0=비대상 또는 미발매)
+  final double winOdds;
+  /// 연승식배당율 — plc
+  final double placeOdds;
+
+  // ── 하위 호환 (기존 코드 유지용) ────────────────────────────
+  /// 연승 배당1 — 기존 placeOdds1과 동일 (= placeOdds)
+  double get placeOdds1 => placeOdds;
+  /// 연승 배당2 (racedetailresult에는 없음 → 0.0 반환)
+  double get placeOdds2 => 0.0;
+  /// 복승 배당 (racedetailresult에는 없음 → 0.0 반환)
+  double get showOdds => 0.0;
+  /// 착차 문자열 (기존 timeDiff와 동일)
+  String get timeDiff => differ;
+
+  /// 미출전 여부 (chulYn=0)
+  bool get isScratch => !didStart;
+  /// 수습기수 감량 여부
+  bool get isApprentice => jockeyApprentice.isNotEmpty && jockeyApprentice != '-';
+  /// 장구 사용 여부
+  bool get hasTool => horseTool.isNotEmpty && horseTool != '-';
 
   const HorseResult({
     required this.rank,
     required this.gateNo,
+    this.horseNo          = '',
     required this.horseName,
-    required this.jockeyName,
-    required this.raceTime,
-    required this.timeDiff,
-    required this.winOdds,
-    required this.placeOdds1,
-    required this.placeOdds2,
-    required this.showOdds,
+    this.venueName        = '',
+    this.origin           = '',
+    this.sex              = '',
+    this.age              = '',
     required this.weight,
+    this.weightDiff       = 0,
+    this.wgBudam          = 55.0,
+    this.horseTool        = '',
+    this.horseRating      = '',
+    required this.jockeyName,
+    this.jockeyNo         = '',
+    this.jockeyMeet       = '',
+    this.jockeyApprentice = '',
+    this.trainerName      = '',
+    this.trainerNo        = '',
+    this.trainerMeet      = '',
+    this.ownerName        = '',
+    this.ownerNo          = '',
+    this.ownerCloth       = '',
+    required this.raceTime,
+    this.differ           = '',
+    this.didStart         = true,
+    required this.winOdds,
+    this.placeOdds        = 0.0,
   });
 }
 
-/// API4_3 경주결과 전체 (1경주 단위)
+/// racedetailresult 경주결과 전체 (1경주 단위)
 class KraRaceResult {
   final String raceNo;       // 경주번호
   final String raceDate;     // 경주일자 (YYYYMMDD)
@@ -346,9 +438,21 @@ class KraRaceResult {
     required this.horses,
   });
 
-  /// 1~3착 (Win/Place 배당 대상)
-  List<HorseResult> get top3 => horses.where((h) => h.rank >= 1 && h.rank <= 3).toList();
+  /// 1~3착 출전마만 (미출전 제외)
+  List<HorseResult> get top3 =>
+      horses.where((h) => h.rank >= 1 && h.rank <= 3 && h.didStart).toList();
 
   /// 1착마
-  HorseResult? get winner => horses.isNotEmpty && horses.first.rank == 1 ? horses.first : null;
+  HorseResult? get winner =>
+      horses.isNotEmpty && horses.first.rank == 1 && horses.first.didStart
+          ? horses.first
+          : null;
+
+  /// 미출전마 목록
+  List<HorseResult> get scratched =>
+      horses.where((h) => !h.didStart).toList();
+
+  /// 출전마만 (착순 정렬)
+  List<HorseResult> get starters =>
+      horses.where((h) => h.didStart).toList();
 }

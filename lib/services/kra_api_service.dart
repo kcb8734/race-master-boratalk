@@ -20,18 +20,35 @@ class KraApiErrorCode {
   static const String unknown               = '99';  // 기타 에러
   static const String normal                = '00';  // 정상
 
-  /// 에러 코드 → 사용자 친화 메시지 변환
+  /// 에러 코드 → 공식 영문 에러메시지명 (OpenAPI 명세서 기준)
+  static String toEnglishMessage(String code) {
+    switch (code) {
+      case '1':  return 'APPLICATION_ERROR';
+      case '10': return 'INVALID_REQUEST_PARAMETER_ERROR';
+      case '12': return 'NO_OPENAPI_SERVICE_ERROR';
+      case '20': return 'SERVICE_ACCESS_DENIED_ERROR';
+      case '22': return 'LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR';
+      case '30': return 'SERVICE_KEY_IS_NOT_REGISTERED_ERROR';
+      case '31': return 'DEADLINE_HAS_EXPIRED_ERROR';
+      case '32': return 'UNREGISTERED_IP_ERROR';
+      case '99': return 'UNKNOWN_ERROR';
+      case '00': return 'NORMAL SERVICE';
+      default:   return 'UNKNOWN_ERROR';
+    }
+  }
+
+  /// 에러 코드 → 사용자 친화 메시지 변환 (국문)
   static String toMessage(String code) {
     switch (code) {
-      case '1':  return 'KRA API 어플리케이션 오류';
-      case '10': return 'KRA API 잘못된 요청 파라미터';
-      case '12': return 'KRA API 서비스가 존재하지 않거나 폐기되었습니다';
-      case '20': return 'KRA API 접근이 거부되었습니다 (서비스키 권한 확인 필요)';
-      case '22': return 'KRA API 일일 요청 한도를 초과하였습니다';
-      case '30': return 'KRA API 서비스키가 등록되지 않았습니다';
-      case '31': return 'KRA API 서비스키 사용 기한이 만료되었습니다';
-      case '32': return 'KRA API 등록되지 않은 IP에서 요청되었습니다';
-      case '99': return 'KRA API 알 수 없는 오류 (기타 에러)';
+      case '1':  return 'KRA API 어플리케이션 오류 (APPLICATION_ERROR)';
+      case '10': return 'KRA API 잘못된 요청 파라미터 (INVALID_REQUEST_PARAMETER_ERROR)';
+      case '12': return 'KRA API 서비스가 존재하지 않거나 폐기되었습니다 (NO_OPENAPI_SERVICE_ERROR)';
+      case '20': return 'KRA API 접근이 거부되었습니다 (SERVICE_ACCESS_DENIED_ERROR)';
+      case '22': return 'KRA API 일일 요청 한도 초과 (LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR)';
+      case '30': return 'KRA API 미등록 서비스키 (SERVICE_KEY_IS_NOT_REGISTERED_ERROR)';
+      case '31': return 'KRA API 서비스키 기한 만료 (DEADLINE_HAS_EXPIRED_ERROR)';
+      case '32': return 'KRA API 미등록 IP (UNREGISTERED_IP_ERROR)';
+      case '99': return 'KRA API 알 수 없는 오류 (UNKNOWN_ERROR)';
       default:   return 'KRA API 오류 (코드: $code)';
     }
   }
@@ -393,80 +410,261 @@ class KraApiService {
     }).whereType<HorseEntry>().toList();
   }
 
-  // ── API4_3: 경주기록정보 (결과 + 배당) ──
+  // ── racedetailresult: 경주별상세성적표 (결과 + 전체 상세정보) ──────────
+  // URL: http://apis.data.go.kr/B551015/racedetailresult/getracedetailresult
+  // 응답형식: XML (JSON 미지원 — _type=json 파라미터 제거)
+  // 필드: stOrd, chulNo, hrNo, hrName, jkName, jkNo, jkSymbol, jkMeet,
+  //        trNo, trName, trMeet, owNo, owName, owCloth, wgBudam, wgHr, df,
+  //        prdCtyNm, sex, age, hrRating, hrTool, rcTime, differ, win, plc,
+  //        chulYn, meet
+  // ─────────────────────────────────────────────────────────────────────
   static Future<KraRaceResult?> fetchRaceResult(
       String venueCode, DateTime date, String raceNo) async {
     final dateStr = _formatDate(date);
     final meetCode = _venueToMeet(venueCode);
 
     try {
-      // 결과: API4_3 — 경주결과 + 기록
-      final resultUri = Uri.parse(
+      // racedetailresult — XML 응답 (numOfRows=16: 최대 출전마 수 대비 여유)
+      final uri = Uri.parse(
+        'http://apis.data.go.kr/B551015/racedetailresult/getracedetailresult'
+        '?serviceKey=$_serviceKey'
+        '&numOfRows=16&pageNo=1&meet=$meetCode&rc_date=$dateStr&rc_no=$raceNo',
+      );
+      if (kDebugMode) debugPrint('[KRA racedetailresult] $uri');
+
+      final resp = await http.get(uri).timeout(const Duration(seconds: 10));
+      _KraInterceptor.check(resp);
+
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
+        // XML 파싱 — JSON 미지원이므로 정규식 기반 추출
+        final items = _extractXmlItems(resp.body);
+        if (items != null && items.isNotEmpty) {
+          final result = _parseDetailResult(items, venueCode, date, raceNo);
+          if (result.horses.isNotEmpty) return result;
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[KRA racedetailresult] Error: $e → API4_3 시도');
+    }
+
+    // Fallback: 기존 API4_3 (JSON 지원) — racedetailresult 실패 시
+    try {
+      final fallbackUri = Uri.parse(
         '$_baseUrl/API4_3?serviceKey=$_serviceKey'
         '&numOfRows=20&pageNo=1&meet=$meetCode&rc_date=$dateStr&rc_no=$raceNo&_type=json',
       );
-      if (kDebugMode) debugPrint('[KRA API4_3] $resultUri');
+      if (kDebugMode) debugPrint('[KRA API4_3 fallback] $fallbackUri');
 
-      final resp = await http.get(resultUri).timeout(const Duration(seconds: 8));
-      _KraInterceptor.check(resp); // ★ HTTP 500 인터셉터
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
+      final resp = await http.get(fallbackUri).timeout(const Duration(seconds: 8));
+      _KraInterceptor.check(resp);
+      if (resp.statusCode == 200 && !resp.body.contains('Unexpected errors')) {
         final data = jsonDecode(resp.body);
         final items = _extractItems(data);
         if (items != null && items.isNotEmpty) {
-          return _parseRaceResult(items, venueCode, date, raceNo);
+          return _parseFallbackResult(items, venueCode, date, raceNo);
         }
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[KRA API4_3] Error: $e');
     }
+
     return null;
   }
 
-  // ── API4_3 결과 파싱 ──
-  static KraRaceResult _parseRaceResult(
+  // ── racedetailresult XML 파싱 ─────────────────────────────────────────
+  // XML 구조: <response><body><items><item>...</item></items></body></response>
+  // 정규식 기반으로 <item>...</item> 블록 추출 → 각 필드 파싱
+  static List<Map<String, String>>? _extractXmlItems(String xml) {
+    try {
+      // resultCode 확인
+      final codeMatch = RegExp(r'<resultCode>(\d+)<\/resultCode>').firstMatch(xml);
+      final code = codeMatch?.group(1) ?? '';
+      if (code.isNotEmpty && code != '00') {
+        if (kDebugMode) debugPrint('[XmlParse] resultCode=$code: ${KraApiErrorCode.toMessage(code)}');
+        return null;
+      }
+
+      // <item>...</item> 블록 추출 (DOTALL 모드)
+      final itemMatches = RegExp(
+        r'<item>([\s\S]*?)<\/item>',
+        multiLine: true,
+      ).allMatches(xml);
+
+      if (itemMatches.isEmpty) return null;
+
+      return itemMatches.map((m) {
+        final block = m.group(1) ?? '';
+        final map = <String, String>{};
+        // 각 <tag>value</tag> 파싱
+        final tagMatches = RegExp(r'<(\w+)>([\s\S]*?)<\/\1>').allMatches(block);
+        for (final t in tagMatches) {
+          map[t.group(1)!] = t.group(2)!.trim();
+        }
+        return map;
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('[XmlParse] Error: $e');
+      return null;
+    }
+  }
+
+  // ── racedetailresult 전체 필드 파싱 ──────────────────────────────────
+  static KraRaceResult _parseDetailResult(
+      List<Map<String, String>> items,
+      String venueCode, DateTime date, String raceNo) {
+    final results = <HorseResult>[];
+
+    for (final item in items) {
+      try {
+        // ── 착순 / 출전 여부 ──────────────────────────────────
+        // stOrd: 착순 (1~n), chulYn: 출전여부 (1=출전, 0=미출전)
+        final stOrd   = int.tryParse(item['stOrd']  ?? '0') ?? 0;
+        final chulYn  = (item['chulYn'] ?? '1') == '1';
+        final chulNo  = int.tryParse(item['chulNo'] ?? '1') ?? 1;
+
+        // ── 마필 기본정보 ────────────────────────────────────
+        final hrNo      = item['hrNo']      ?? '';
+        final hrName    = item['hrName']    ?? '미정';
+        final venueName = item['meet']      ?? '';
+        final prdCtyNm  = item['prdCtyNm'] ?? '';
+        final sex       = item['sex']       ?? '';
+        final age       = item['age']       ?? '';
+
+        // ── 체중 정보 ─────────────────────────────────────
+        final wgHr    = int.tryParse(item['wgHr']    ?? '0') ?? 0;
+        final df      = int.tryParse(item['df']      ?? '0') ?? 0;
+        final wgBudam = double.tryParse(item['wgBudam'] ?? '55') ?? 55.0;
+
+        // ── 장구 / 레이팅 ────────────────────────────────────
+        final hrTool   = item['hrTool']   ?? '';
+        final hrRating = item['hrRating'] ?? '';
+
+        // ── 기수 정보 ─────────────────────────────────────
+        final jkName       = item['jkName']   ?? '미정';
+        final jkNo         = item['jkNo']     ?? '';
+        final jkMeet       = item['jkMeet']   ?? '';
+        // jkSymbol: 수습기수감량 (예: "-1", "-2", "-3" 또는 null/빈값)
+        final jkSymbol     = item['jkSymbol'] ?? '';
+
+        // ── 조교사 정보 ────────────────────────────────────
+        final trName   = item['trName'] ?? '';
+        final trNo     = item['trNo']   ?? '';
+        final trMeet   = item['trMeet'] ?? '';
+
+        // ── 마주 정보 ─────────────────────────────────────
+        final owName   = item['owName']  ?? '';
+        final owNo     = item['owNo']    ?? '';
+        final owCloth  = item['owCloth'] ?? '';
+
+        // ── 성적 / 기록 ────────────────────────────────────
+        final rcTime = item['rcTime'] ?? '';
+        // differ: 도착차 (1착은 공백, 이후 "1/2마신", "코", "동착" 등)
+        // 9999.9 또는 빈값 처리
+        final differRaw = item['differ'] ?? '';
+        final differ    = (differRaw == '9999.9' || differRaw.isEmpty) ? '' : differRaw;
+
+        // ── 배당 정보 ─────────────────────────────────────
+        // 9999.9 = 비대상(미발매) → 0.0으로 변환
+        double parseOdds(String? s) {
+          final v = double.tryParse(s ?? '0') ?? 0.0;
+          return v >= 9999.0 ? 0.0 : v;
+        }
+        final winOdds   = parseOdds(item['win']);
+        final placeOdds = parseOdds(item['plc']);
+
+        results.add(HorseResult(
+          rank:              stOrd,
+          gateNo:            chulNo,
+          horseNo:           hrNo,
+          horseName:         hrName,
+          venueName:         venueName,
+          origin:            prdCtyNm,
+          sex:               sex,
+          age:               age,
+          weight:            wgHr,
+          weightDiff:        df,
+          wgBudam:           wgBudam,
+          horseTool:         hrTool,
+          horseRating:       hrRating,
+          jockeyName:        jkName,
+          jockeyNo:          jkNo,
+          jockeyMeet:        jkMeet,
+          jockeyApprentice:  jkSymbol,
+          trainerName:       trName,
+          trainerNo:         trNo,
+          trainerMeet:       trMeet,
+          ownerName:         owName,
+          ownerNo:           owNo,
+          ownerCloth:        owCloth,
+          raceTime:          rcTime,
+          differ:            differ,
+          didStart:          chulYn,
+          winOdds:           winOdds,
+          placeOdds:         placeOdds,
+        ));
+      } catch (_) {}
+    }
+
+    // 착순 정렬: 출전마 → 미출전마 순서
+    // 출전마 중 stOrd 오름차순, 미출전마는 마번 오름차순
+    results.sort((a, b) {
+      if (a.didStart && !b.didStart) return -1;
+      if (!a.didStart && b.didStart) return 1;
+      if (a.didStart && b.didStart) return a.rank.compareTo(b.rank);
+      return a.gateNo.compareTo(b.gateNo);
+    });
+
+    return KraRaceResult(
+      raceNo:    raceNo,
+      raceDate:  _formatDate(date),
+      venueCode: venueCode,
+      venueName: _meetToVenueName(_venueToMeet(venueCode)),
+      horses:    results,
+    );
+  }
+
+  // ── API4_3 Fallback 파싱 (racedetailresult 실패 시) ─────────────────
+  static KraRaceResult _parseFallbackResult(
       List<dynamic> items, String venueCode, DateTime date, String raceNo) {
     final results = <HorseResult>[];
 
     for (final item in items) {
       try {
-        final ord = int.tryParse(item['ord']?.toString() ?? '0') ?? 0;
-        final chulNo = int.tryParse(item['chulNo']?.toString() ?? '1') ?? 1;
+        final ord    = int.tryParse(item['ord']?.toString()      ?? '0') ?? 0;
+        final chulNo = int.tryParse(item['chulNo']?.toString()   ?? '1') ?? 1;
         final hrName = item['hrName']?.toString() ?? '미정';
         final jkName = item['jkName']?.toString() ?? '미정';
-        final rcTime = item['rcTime']?.toString() ?? '';
-        final diffTime = item['diffTime']?.toString() ?? '';
-
-        // 배당 파싱
-        final winOdds = double.tryParse(item['winOdds']?.toString() ?? '0') ?? 0.0;
-        final plcOdds1 = double.tryParse(item['plcOdds1']?.toString() ?? '0') ?? 0.0;
-        final plcOdds2 = double.tryParse(item['plcOdds2']?.toString() ?? '0') ?? 0.0;
-        final showOdds = double.tryParse(item['showOdds']?.toString() ?? '0') ?? 0.0;
+        final rcTime = item['rcTime']?.toString()  ?? '';
         final weight = int.tryParse(item['hrWeight']?.toString() ?? '0') ?? 0;
 
+        double parseOdds(String? s) {
+          final v = double.tryParse(s ?? '0') ?? 0.0;
+          return v >= 9999.0 ? 0.0 : v;
+        }
+        final winOdds = parseOdds(item['winOdds']?.toString());
+        final plcOdds = parseOdds(item['plcOdds1']?.toString());
+
         results.add(HorseResult(
-          rank: ord,
-          gateNo: chulNo,
+          rank:      ord,
+          gateNo:    chulNo,
           horseName: hrName,
-          jockeyName: jkName,
-          raceTime: rcTime,
-          timeDiff: diffTime,
-          winOdds: winOdds,
-          placeOdds1: plcOdds1,
-          placeOdds2: plcOdds2,
-          showOdds: showOdds,
-          weight: weight,
+          jockeyName:jkName,
+          raceTime:  rcTime,
+          weight:    weight,
+          winOdds:   winOdds,
+          placeOdds: plcOdds,
         ));
       } catch (_) {}
     }
 
     results.sort((a, b) => a.rank.compareTo(b.rank));
     return KraRaceResult(
-      raceNo: raceNo,
-      raceDate: _formatDate(date),
+      raceNo:    raceNo,
+      raceDate:  _formatDate(date),
       venueCode: venueCode,
       venueName: _meetToVenueName(_venueToMeet(venueCode)),
-      horses: results,
+      horses:    results,
     );
   }
 

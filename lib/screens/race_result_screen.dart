@@ -6,7 +6,8 @@ import '../utils/horse_cap_colors.dart';
 
 // ──────────────────────────────────────────────────────────────
 // RaceResultScreen
-// 경주결과 + 배당 조회 화면 (API4_3 기반)
+// 경주결과 + 배당 조회 화면 (racedetailresult API 기반)
+// 필드: 착순, 도착차, 주파기록, 단승/연승배당, 장구, 수습감량, 미출전 여부
 // 시즌오프·경주종료 중에도 항상 접근 가능
 // ──────────────────────────────────────────────────────────────
 class RaceResultScreen extends StatefulWidget {
@@ -549,30 +550,25 @@ class _RaceResultScreenState extends State<RaceResultScreen>
                   winner.winOdds > 0 ? '${winner.winOdds.toStringAsFixed(1)}배' : '-',
                   const Color(0xFFFFD700)),
               const SizedBox(width: 8),
-              _buildOddsChip('연승1\n(Place)',
-                  winner.placeOdds1 > 0 ? '${winner.placeOdds1.toStringAsFixed(1)}배' : '-',
+              // 연승(Place) — racedetailresult plc 필드 (1착마 기준)
+              _buildOddsChip('연승\n(Place)',
+                  winner.placeOdds > 0 ? '${winner.placeOdds.toStringAsFixed(1)}배' : '-',
                   const Color(0xFF64B5F6)),
               const SizedBox(width: 8),
+              // 2착 연승 배당
               if (result.top3.length >= 2)
-                _buildOddsChip('연승2\n(Place)',
-                    result.top3[1].placeOdds2 > 0
-                        ? '${result.top3[1].placeOdds2.toStringAsFixed(1)}배'
+                _buildOddsChip('2착연승\n(Place)',
+                    result.top3[1].placeOdds > 0
+                        ? '${result.top3[1].placeOdds.toStringAsFixed(1)}배'
                         : '-',
                     const Color(0xFF81C784)),
-              if (result.top3.length >= 2) const SizedBox(width: 8),
-              if (result.top3.length >= 3)
-                _buildOddsChip('복승\n(Show)',
-                    result.top3[2].showOdds > 0
-                        ? '${result.top3[2].showOdds.toStringAsFixed(1)}배'
-                        : '-',
-                    const Color(0xFFFFB74D)),
             ],
           ),
           const SizedBox(height: 10),
           Divider(color: Colors.white.withValues(alpha: 0.08)),
           const SizedBox(height: 6),
           Text(
-            '※ 단승(1착) · 연승(1~2착 각) · 복승(3착 이내) 기준',
+            '※ 단승(1착 단독) · 연승(각 착 연승식 배당) 기준 — KRA racedetailresult API',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.35),
               fontSize: 10,
@@ -620,24 +616,35 @@ class _RaceResultScreenState extends State<RaceResultScreen>
 
   // ── 전체 착순 테이블 ──
   Widget _buildResultTable(List<HorseResult> horses) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF0A1628),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1A3A5A).withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        children: [
-          // 테이블 헤더
-          _buildTableHeader(),
-          // 각 행
-          ...horses.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final horse = entry.value;
-            return _buildTableRow(horse, isLast: idx == horses.length - 1);
-          }),
-        ],
-      ),
+    // 출전마와 미출전마 분리
+    final starters  = horses.where((h) => h.didStart).toList();
+    final scratched = horses.where((h) => !h.didStart).toList();
+
+    return Column(
+      children: [
+        // ── 출전마 테이블 ──
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0A1628),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF1A3A5A).withValues(alpha: 0.5)),
+          ),
+          child: Column(
+            children: [
+              _buildTableHeader(),
+              ...starters.asMap().entries.map((entry) {
+                final idx   = entry.key;
+                final horse = entry.value;
+                final isLast = idx == starters.length - 1 && scratched.isEmpty;
+                return _buildTableRow(horse, isLast: isLast);
+              }),
+            ],
+          ),
+        ),
+        // ── 미출전마 섹션 (있을 때만) ──
+        if (scratched.isNotEmpty) ...
+          _buildScratchedSection(scratched),
+      ],
     );
   }
 
@@ -657,11 +664,103 @@ class _RaceResultScreenState extends State<RaceResultScreen>
           const SizedBox(width: 8),
           const SizedBox(width: 28, child: Text('마번', style: _hStyle)),
           const SizedBox(width: 8),
-          const Expanded(child: Text('말이름/기수', style: _hStyle)),
+          const Expanded(child: Text('말이름 / 기수', style: _hStyle)),
           const SizedBox(width: 8),
-          const SizedBox(width: 56, child: Text('주파기록', style: _hStyle, textAlign: TextAlign.right)),
+          const SizedBox(width: 58, child: Text('기록/도착차', style: _hStyle, textAlign: TextAlign.right)),
           const SizedBox(width: 8),
-          const SizedBox(width: 52, child: Text('단승배당', style: _hStyle, textAlign: TextAlign.right)),
+          const SizedBox(width: 50, child: Text('단/연승', style: _hStyle, textAlign: TextAlign.right)),
+        ],
+      ),
+    );
+  }
+
+  // ── 미출전마 섹션 ──────────────────────────────────────────────
+  List<Widget> _buildScratchedSection(List<HorseResult> scratched) {
+    return [
+      const SizedBox(height: 12),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A0A0A),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF8B2020).withValues(alpha: 0.4)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF8B2020).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF8B2020).withValues(alpha: 0.5)),
+                  ),
+                  child: const Text(
+                    '출전취소 (미출전)',
+                    style: TextStyle(
+                      color: Color(0xFFFF6B6B),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${scratched.length}두',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: scratched.map((h) => _buildScratchedChip(h)).toList(),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Widget _buildScratchedChip(HorseResult horse) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A1010),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF8B2020).withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HorseCapBadge(gateNo: horse.gateNo, size: 20, showNumber: true),
+          const SizedBox(width: 6),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                horse.horseName,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                horse.jockeyName,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3),
+                  fontSize: 9,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -682,6 +781,11 @@ class _RaceResultScreenState extends State<RaceResultScreen>
       3 => const Color(0xFFBE8C5A),
       _ => const Color(0xFF4A6A8A),
     };
+
+    // 기수명 + 수습감량 표시 (예: "정평수(-1)", "홍길동")
+    final jockeyLabel = horse.isApprentice
+        ? '${horse.jockeyName}(${horse.jockeyApprentice}kg)'
+        : horse.jockeyName;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -727,56 +831,122 @@ class _RaceResultScreenState extends State<RaceResultScreen>
             child: HorseCapBadge(gateNo: horse.gateNo, size: 26, showNumber: true),
           ),
           const SizedBox(width: 8),
-          // 말이름 + 기수
+          // 말이름 + 기수(+수습감량) + 장구
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  horse.horseName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: isTop3
-                        ? Colors.white.withValues(alpha: 0.9)
-                        : Colors.white.withValues(alpha: 0.65),
-                    fontSize: 12,
-                    fontWeight: isTop3 ? FontWeight.w700 : FontWeight.w500,
-                  ),
+                // 말이름 행
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        horse.horseName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isTop3
+                              ? Colors.white.withValues(alpha: 0.9)
+                              : Colors.white.withValues(alpha: 0.65),
+                          fontSize: 12,
+                          fontWeight: isTop3 ? FontWeight.w700 : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    // 장구 뱃지 (hrTool 있을 때)
+                    if (horse.hasTool) ...
+                      [
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color:
+                                const Color(0xFF6B4FD8).withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                                color: const Color(0xFF6B4FD8)
+                                    .withValues(alpha: 0.5)),
+                          ),
+                          child: Text(
+                            horse.horseTool,
+                            style: const TextStyle(
+                              color: Color(0xFFB39DDB),
+                              fontSize: 8,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                  ],
                 ),
-                Text(
-                  horse.jockeyName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.38),
-                    fontSize: 10,
-                  ),
+                // 기수 행 (수습감량 포함)
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        jockeyLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: horse.isApprentice
+                              ? const Color(0xFF80CBC4).withValues(alpha: 0.8)
+                              : Colors.white.withValues(alpha: 0.38),
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                    // 수습기수 아이콘 (감량 적용 시)
+                    if (horse.isApprentice) ...
+                      [
+                        const SizedBox(width: 3),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF004D40).withValues(alpha: 0.4),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: const Text(
+                            '수습',
+                            style: TextStyle(
+                              color: Color(0xFF80CBC4),
+                              fontSize: 7,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                  ],
                 ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          // 주파기록 + 착차
+          // 주파기록 + 도착차(differ)
           SizedBox(
-            width: 56,
+            width: 58,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
                   horse.raceTime.isNotEmpty ? horse.raceTime : '-',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.7),
+                    color: horse.rank == 1
+                        ? const Color(0xFFFFD700).withValues(alpha: 0.9)
+                        : Colors.white.withValues(alpha: 0.7),
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                     fontFamily: 'monospace',
                   ),
                 ),
-                if (horse.timeDiff.isNotEmpty && horse.rank > 1)
+                // 도착차 (differ) — 1착은 표시 안 함
+                if (horse.differ.isNotEmpty && horse.rank != 1)
                   Text(
-                    horse.timeDiff,
+                    horse.differ,
+                    textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.35),
+                      color: Colors.white.withValues(alpha: 0.38),
                       fontSize: 9,
                     ),
                   ),
@@ -784,39 +954,74 @@ class _RaceResultScreenState extends State<RaceResultScreen>
             ),
           ),
           const SizedBox(width: 8),
-          // 단승배당
+          // 단승배당 + 연승배당
           SizedBox(
-            width: 52,
-            child: horse.winOdds > 0
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            width: 50,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // 단승 배당 (win)
+                if (horse.winOdds > 0)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFF6B35).withValues(alpha: isTop3 ? 0.18 : 0.08),
-                      borderRadius: BorderRadius.circular(6),
+                      color: const Color(0xFFFF6B35)
+                          .withValues(alpha: isTop3 ? 0.18 : 0.08),
+                      borderRadius: BorderRadius.circular(5),
                       border: Border.all(
-                          color: const Color(0xFFFF6B35).withValues(alpha: isTop3 ? 0.4 : 0.15)),
+                          color: const Color(0xFFFF6B35)
+                              .withValues(alpha: isTop3 ? 0.4 : 0.15)),
                     ),
                     child: Text(
-                      '${horse.winOdds.toStringAsFixed(1)}배',
-                      textAlign: TextAlign.center,
+                      '단 ${horse.winOdds.toStringAsFixed(1)}',
                       style: TextStyle(
                         color: isTop3
                             ? const Color(0xFFFF6B35)
                             : const Color(0xFFFF6B35).withValues(alpha: 0.55),
-                        fontSize: 11,
+                        fontSize: 10,
                         fontWeight: FontWeight.w700,
                         fontFamily: 'monospace',
                       ),
                     ),
                   )
-                : Text(
+                else
+                  Text(
                     '-',
                     textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.25),
-                      fontSize: 11,
-                    ),
+                        color: Colors.white.withValues(alpha: 0.2), fontSize: 11),
                   ),
+                // 연승 배당 (plc) — 있을 때만
+                if (horse.placeOdds > 0) ...
+                  [
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF64B5F6)
+                            .withValues(alpha: isTop3 ? 0.15 : 0.06),
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                            color: const Color(0xFF64B5F6)
+                                .withValues(alpha: isTop3 ? 0.35 : 0.12)),
+                      ),
+                      child: Text(
+                        '연 ${horse.placeOdds.toStringAsFixed(1)}',
+                        style: TextStyle(
+                          color: isTop3
+                              ? const Color(0xFF64B5F6)
+                              : const Color(0xFF64B5F6).withValues(alpha: 0.5),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
+              ],
+            ),
           ),
         ],
       ),
