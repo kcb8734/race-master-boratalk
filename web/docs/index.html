@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>경마통 — 문서 다운로드</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Nanum Gothic', 'Apple SD Gothic Neo', sans-serif;
+      background: #0a1628;
+      color: #e0e8ff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 900;
+      color: #FFD700;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .header p {
+      font-size: 14px;
+      color: rgba(255,255,255,0.5);
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(255,215,0,0.15);
+      border: 1px solid rgba(255,215,0,0.4);
+      color: #FFD700;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 16px;
+    }
+    .cards {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 100%;
+      max-width: 640px;
+    }
+    .card {
+      background: linear-gradient(135deg, #0e1e3a, #081428);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255,215,0,0.4);
+    }
+    .icon {
+      font-size: 42px;
+      flex-shrink: 0;
+      width: 56px;
+      text-align: center;
+    }
+    .info { flex: 1; }
+    .info .num {
+      font-size: 10px;
+      color: rgba(255,255,255,0.35);
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .info h2 {
+      font-size: 16px;
+      font-weight: 800;
+      color: #e8f0ff;
+      margin-bottom: 6px;
+      line-height: 1.3;
+    }
+    .info p {
+      font-size: 12px;
+      color: rgba(255,255,255,0.45);
+      line-height: 1.5;
+    }
+    .size-badge {
+      display: inline-block;
+      background: rgba(100,181,246,0.15);
+      border: 1px solid rgba(100,181,246,0.3);
+      color: #64B5F6;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-top: 6px;
+    }
+    .dl-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: linear-gradient(135deg, #FFD700, #FFA000);
+      color: #1a0e00;
+      font-weight: 900;
+      font-size: 13px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      text-decoration: none;
+      flex-shrink: 0;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .dl-btn:hover { opacity: 0.88; transform: scale(0.97); }
+    .divider {
+      width: 100%;
+      max-width: 640px;
+      height: 1px;
+      background: rgba(255,255,255,0.07);
+      margin: 32px 0 24px;
+    }
+    .footer {
+      text-align: center;
+      font-size: 11px;
+      color: rgba(255,255,255,0.25);
+      line-height: 1.7;
+    }
+    @media (max-width: 480px) {
+      .card { flex-direction: column; align-items: flex-start; gap: 14px; }
+      .dl-btn { width: 100%; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="badge">📄 공식 문서 다운로드</div>
+    <h1>🏇 경마통 (Race Master)</h1>
+    <p>저작권 · 특허 · 사업계획서 PDF 다운로드</p>
+  </div>
+
+  <div class="cards">
+
+    <!-- 저작권 등록 신청서 -->
+    <div class="card">
+      <div class="icon">©️</div>
+      <div class="info">
+        <div class="num">Document 01</div>
+        <h2>저작권 등록 신청서</h2>
+        <p>컴퓨터프로그램저작물 등록 · 한국저작권위원회 제출용<br>
+           데이터 매핑 엔진 · GridRail 물리 엔진 · Jockey Engine 포함</p>
+        <span class="size-badge">PDF · 127 KB · A4</span>
+      </div>
+      <a class="dl-btn" href="01_저작권등록신청서.pdf" download="경마통_저작권등록신청서.pdf">
+        ⬇ 다운로드
+      </a>
+    </div>
+
+    <!-- 특허 등록 출원서 -->
+    <div class="card">
+      <div class="icon">🔬</div>
+      <div class="info">
+        <div class="num">Document 02</div>
+        <h2>특허 등록 출원서</h2>
+        <p>특허청 제출용 · 도면부호 포함 (도 1~3)<br>
+           청구항 6개 · Jockey Engine 방법 특허 · 트랙 렌더링 특허</p>
+        <span class="size-badge">PDF · 108 KB · A4</span>
+      </div>
+      <a class="dl-btn" href="02_특허등록출원서.pdf" download="경마통_특허등록출원서.pdf">
+        ⬇ 다운로드
+      </a>
+    </div>
+
+    <!-- 사업계획서 -->
+    <div class="card">
+      <div class="icon">💼</div>
+      <div class="info">
+        <div class="num">Document 03</div>
+        <h2>사업계획서</h2>
+        <p>투자유치용 · 3억원 투자 계획 · 시장 수익 분석<br>
+           마권 6.5조 시장 · 정보지/유튜브 대체 수익 분석 포함</p>
+        <span class="size-badge">PDF · 180 KB · A4</span>
+      </div>
+      <a class="dl-btn" href="03_사업계획서.pdf" download="경마통_사업계획서.pdf">
+        ⬇ 다운로드
+      </a>
+    </div>
+
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="footer">
+    <p>경마통 Race Master — AI 기반 실시간 경마 레이스 시뮬레이터</p>
+    <p>본 문서의 모든 알고리즘·수식·기술 내용은 저작권법에 의해 보호됩니다.</p>
+    <p style="margin-top:8px; color:rgba(255,255,255,0.15)">
+      본 서비스는 공공데이터포털 KRA API를 활용한 독립적 정보 분석 서비스이며,<br>
+      한국마사회 공식 서비스가 아닙니다.
+    </p>
+  </div>
+
+</body>
+</html>
