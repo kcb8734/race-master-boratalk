@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
 import '../models/race_horse_data.dart';
@@ -25,6 +26,41 @@ enum RaceLockState {
 }
 
 // ──────────────────────────────────────────────────────────────
+// 배당률 변동 감지 이벤트
+// ──────────────────────────────────────────────────────────────
+class OddsChangeEvent {
+  final int gateNo;
+  final String horseName;
+  final double previousOdds;
+  final double currentOdds;
+  final double changePct;   // 변동 비율 (양수 = 상승, 음수 = 하락)
+
+  const OddsChangeEvent({
+    required this.gateNo,
+    required this.horseName,
+    required this.previousOdds,
+    required this.currentOdds,
+    required this.changePct,
+  });
+
+  bool get isSignificant => changePct.abs() >= 10.0; // 10% 이상 변동
+  bool get isRising => changePct > 0;
+  String get directionEmoji => isRising ? '📈' : '📉';
+  String get changeLabel =>
+      '${isRising ? "+": ""}${changePct.toStringAsFixed(1)}%';
+}
+
+// ──────────────────────────────────────────────────────────────
+// 실시간 갱신 상태
+// ──────────────────────────────────────────────────────────────
+enum RefreshStatus {
+  idle,        // 대기 중
+  refreshing,  // 갱신 중
+  success,     // 마지막 갱신 성공
+  error,       // 마지막 갱신 실패
+}
+
+// ──────────────────────────────────────────────────────────────
 // RaceProvider
 // ──────────────────────────────────────────────────────────────
 class RaceProvider extends ChangeNotifier {
@@ -49,6 +85,46 @@ class RaceProvider extends ChangeNotifier {
   DataStatus _dataStatus = DataStatus.loading;
   DataStatus get dataStatus => _dataStatus;
 
+  // ── 실시간 갱신 상태 ─────────────────────────────────────────
+  Timer? _refreshTimer;
+  DateTime? _lastUpdated;
+  RefreshStatus _refreshStatus = RefreshStatus.idle;
+  bool _isAutoRefreshEnabled = false;
+  List<OddsChangeEvent> _recentOddsChanges = [];
+
+  // 이전 배당률 스냅샷 (변동 감지용)
+  Map<int, double> _previousOddsSnapshot = {};
+
+  // 자동 갱신 간격 (경주 시작 전 5분마다)
+  static const Duration _refreshInterval = Duration(minutes: 5);
+
+  // ── 실시간 갱신 게터 ─────────────────────────────────────────
+  DateTime? get lastUpdated => _lastUpdated;
+  RefreshStatus get refreshStatus => _refreshStatus;
+  bool get isAutoRefreshEnabled => _isAutoRefreshEnabled;
+  bool get isRefreshing => _refreshStatus == RefreshStatus.refreshing;
+  List<OddsChangeEvent> get recentOddsChanges => _recentOddsChanges;
+
+  /// 마지막 업데이트 시각 표시 문자열
+  String get lastUpdatedLabel {
+    if (_lastUpdated == null) return '업데이트 전';
+    final now = DateTime.now();
+    final diff = now.difference(_lastUpdated!);
+    if (diff.inSeconds < 60) return '방금 전';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}분 전';
+    final h = _lastUpdated!.hour.toString().padLeft(2, '0');
+    final m = _lastUpdated!.minute.toString().padLeft(2, '0');
+    return '$h:$m 갱신';
+  }
+
+  /// 다음 자동 갱신까지 남은 시간 (초)
+  int get secondsUntilNextRefresh {
+    if (_lastUpdated == null || !_isAutoRefreshEnabled) return 0;
+    final elapsed = DateTime.now().difference(_lastUpdated!).inSeconds;
+    final intervalSec = _refreshInterval.inSeconds;
+    return (intervalSec - elapsed).clamp(0, intervalSec);
+  }
+
   // ── 게터 ────────────────────────────────────────────────────
   List<DayTab> get weekDays => _weekDays;
   int get selectedDayIndex => _selectedDayIndex;
@@ -66,6 +142,116 @@ class RaceProvider extends ChangeNotifier {
   bool get canSimulate => _isPremium || _simCount < _freeLimitPerDay;
   int get remainingFree =>
       (_freeLimitPerDay - _simCount).clamp(0, _freeLimitPerDay);
+
+  // ─────────────────────────────────────────────────────────────
+  // dispose: 타이머 정리
+  // ─────────────────────────────────────────────────────────────
+  @override
+  void dispose() {
+    stopAutoRefresh();
+    super.dispose();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 실시간 갱신 — 자동 폴링 시작
+  // ─────────────────────────────────────────────────────────────
+
+  /// 자동 갱신 시작 (경주 선택 시 호출)
+  /// [race]가 종료됐거나 시즌오프 중이면 폴링하지 않음
+  void startAutoRefresh(RaceInfo race) {
+    // 이미 실행 중이면 중지 후 재시작
+    stopAutoRefresh();
+
+    // 종료된 경주 또는 시즌오프면 폴링 안 함
+    if (race.isFinished || globalLockState == RaceLockState.seasonOff) return;
+
+    _isAutoRefreshEnabled = true;
+    _refreshTimer = Timer.periodic(_refreshInterval, (_) async {
+      await _autoRefreshHorses();
+    });
+    notifyListeners();
+  }
+
+  /// 자동 갱신 중지
+  void stopAutoRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+    _isAutoRefreshEnabled = false;
+  }
+
+  /// 수동 새로고침 (버튼 탭)
+  Future<void> manualRefresh() async {
+    if (_selectedRace == null) return;
+    await _autoRefreshHorses(isManual: true);
+  }
+
+  /// 내부 갱신 로직 (자동/수동 공통)
+  Future<void> _autoRefreshHorses({bool isManual = false}) async {
+    if (_selectedRace == null || _isLoadingHorses) return;
+
+    _refreshStatus = RefreshStatus.refreshing;
+    notifyListeners();
+
+    try {
+      final race = _selectedRace!;
+      final day  = _weekDays[_selectedDayIndex];
+
+      // 이전 배당률 스냅샷 저장
+      _previousOddsSnapshot = {
+        for (final h in _horses) h.gateNo: h.odds
+      };
+
+      final rawEntries = await KraApiService.fetchHorseEntries(
+          _selectedVenue.code, day.date, race.raceNo);
+      final enriched = await RaceStatEngine.enrichHorseStats(
+        entries: rawEntries,
+        race: race,
+      );
+
+      // 배당률 변동 감지
+      _detectOddsChanges(enriched);
+
+      _horses = enriched;
+      if (_selectedRace != null) {
+        _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);
+      }
+
+      _lastUpdated = DateTime.now();
+      _refreshStatus = RefreshStatus.success;
+    } catch (_) {
+      // API 실패 시 기존 데이터 유지
+      _refreshStatus = RefreshStatus.error;
+      _lastUpdated = DateTime.now();
+    }
+
+    notifyListeners();
+  }
+
+  /// 배당률 변동 감지 (10% 이상 변동을 이벤트로 기록)
+  void _detectOddsChanges(List<HorseEntry> newHorses) {
+    final changes = <OddsChangeEvent>[];
+
+    for (final h in newHorses) {
+      final prev = _previousOddsSnapshot[h.gateNo];
+      if (prev == null || prev <= 0 || h.odds <= 0) continue;
+
+      final changePct = ((h.odds - prev) / prev) * 100.0;
+      if (changePct.abs() >= 10.0) {
+        changes.add(OddsChangeEvent(
+          gateNo: h.gateNo,
+          horseName: h.horseName,
+          previousOdds: prev,
+          currentOdds: h.odds,
+          changePct: changePct,
+        ));
+      }
+    }
+
+    if (changes.isNotEmpty) {
+      // 최신 5건만 유지
+      _recentOddsChanges = [...changes, ..._recentOddsChanges].take(5).toList();
+    }
+  }
 
   // ─────────────────────────────────────────────────────────────
   // 시즌오프 데모 모드
@@ -223,6 +409,9 @@ class RaceProvider extends ChangeNotifier {
   void selectDay(int index) {
     if (index < 0 || index >= _weekDays.length) return;
 
+    // 날짜 전환 시 폴링 중지
+    stopAutoRefresh();
+
     // ── Jockey Engine: 날짜 변경 시 당일 기수 성적 초기화 ─────────────
     // 새 날짜 선택 → 전일 safeMode/mentalBuff 상태 리셋
     final currentDay = _weekDays.isNotEmpty ? _weekDays[_selectedDayIndex] : null;
@@ -236,6 +425,8 @@ class RaceProvider extends ChangeNotifier {
     _selectedRace = null;
     _horses = [];
     _insights = [];
+    _recentOddsChanges = [];
+    _previousOddsSnapshot = {};
 
     // 새 날짜에서 현재 선택된 경주장이 비활성이면 활성 경주장 중 첫 번째로 자동 전환
     final newDay = _weekDays[index];
@@ -253,10 +444,13 @@ class RaceProvider extends ChangeNotifier {
   }
 
   void selectVenue(VenueCode venue) {
+    stopAutoRefresh();
     _selectedVenue = venue;
     _selectedRace = null;
     _horses = [];
     _insights = [];
+    _recentOddsChanges = [];
+    _previousOddsSnapshot = {};
     _loadRaces();
     notifyListeners();
   }
@@ -287,12 +481,18 @@ class RaceProvider extends ChangeNotifier {
   }
 
   Future<void> selectRace(RaceInfo race) async {
+    // 경주 변경 시 기존 폴링 중지
+    stopAutoRefresh();
+    _recentOddsChanges = [];
+    _previousOddsSnapshot = {};
+
     _selectedRace = race;
     _isLoadingHorses = true;
     _horses = [];
     _insights = [];
     notifyListeners();
 
+    bool apiSuccess = false;
     try {
       final day = _weekDays[_selectedDayIndex];
       final rawEntries = await KraApiService.fetchHorseEntries(
@@ -301,6 +501,7 @@ class RaceProvider extends ChangeNotifier {
         entries: rawEntries,
         race: race,
       );
+      apiSuccess = true;
     } catch (_) {
       _horses = KraMockService.getHorseEntries(race);
     }
@@ -309,8 +510,15 @@ class RaceProvider extends ChangeNotifier {
       _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);
     }
 
+    _lastUpdated = DateTime.now();
+    _refreshStatus = apiSuccess ? RefreshStatus.success : RefreshStatus.error;
     _isLoadingHorses = false;
     notifyListeners();
+
+    // 경주 미종료 시 자동 갱신 시작
+    if (!race.isFinished) {
+      startAutoRefresh(race);
+    }
   }
 
   void updateUserBonus(int gateNo, double bonus) {
