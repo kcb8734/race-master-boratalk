@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
+import '../models/race_horse_data.dart';
 import '../services/kra_mock_service.dart';
 import '../services/kra_api_service.dart';
 import '../services/race_stat_engine.dart';
@@ -221,6 +222,16 @@ class RaceProvider extends ChangeNotifier {
 
   void selectDay(int index) {
     if (index < 0 || index >= _weekDays.length) return;
+
+    // ── Jockey Engine: 날짜 변경 시 당일 기수 성적 초기화 ─────────────
+    // 새 날짜 선택 → 전일 safeMode/mentalBuff 상태 리셋
+    final currentDay = _weekDays.isNotEmpty ? _weekDays[_selectedDayIndex] : null;
+    final newDayData = _weekDays[index];
+    if (currentDay == null || currentDay.date != newDayData.date) {
+      JockeyDailyTracker.instance.resetDay();
+      HighOddsWindowDetector.instance.reset();
+    }
+
     _selectedDayIndex = index;
     _selectedRace = null;
     _horses = [];

@@ -738,6 +738,14 @@ class _Horse {
   late double userBonus;   // -5~+5  ← UserGValue
   late double g1fNorm;     // 0~1  후반 G1F 성적 (Zone4 가속도 버프 판정용)
 
+  // ── Jockey Engine 버프/페널티 플래그 ──────────────────────────
+  /// 안전주행 모드: 엘리트 기수 당일 2승+ → G1F 가속도 -10%, 코너 aggressiveness -30%
+  bool safeMode   = false;
+  /// 독기 모드: 엘리트 기수 3경기+ & 0승 → G1F 가속도 +15%
+  bool mentalBuff = false;
+  /// 고배당 서지 버프: HighOddsWindow 발동 시 배당 상위 3마번 → G1F 가속도 +20%
+  bool surgeBuff  = false;
+
   _Horse({
     required this.entry,
     required this.prog,
@@ -755,6 +763,12 @@ class _Horse {
     legPhase    = Random().nextDouble() * 2 * pi;
     headPhase   = Random().nextDouble() * 2 * pi;
     gridSegment = (prog * 50).floor();
+
+    // ── Jockey Engine: 기수 상태 바인딩 ─────────────────────────
+    final tracker = JockeyDailyTracker.instance;
+    safeMode   = tracker.isSafeMode(entry.jockeyName, entry.jockeyRcWins);
+    mentalBuff = tracker.isMentalBuff(entry.jockeyName, entry.jockeyRcWins);
+    // surgeBuff는 _initHorses()에서 HighOddsWindowDetector 평가 후 주입
   }
 }
 
@@ -1030,6 +1044,18 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       }
       return horse;
     }).toList();
+
+    // ── Jockey Engine: HighOddsWindow 평가 & surgeBuff 주입 ───────────────
+    // 안전주행 기수 비율 50%+ 이면 고배당 상위 3마번에 surgeBuff = true
+    final detector = HighOddsWindowDetector.instance;
+    detector.evaluate(entries, int.tryParse(widget.race.raceNo) ?? 1);
+    if (detector.isActive) {
+      for (final h in _horses) {
+        if (detector.isSurgeBuff(h.entry.gateNo)) {
+          h.surgeBuff = true;
+        }
+      }
+    }
   }
 
   // ── 게임루프: dart:async Timer.periodic (16ms ≈ 60fps) ──
@@ -1099,7 +1125,16 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       if (inCorner) {
         // ── Zone2(코너): 8→4 격자 압축 구간 ──────────────────────────────
         // ① 기본 감속 + 레인 외측 미세 변동
-        final laneF = curMaxL > 1 ? h.gridLane / (curMaxL - 1.0) : 0.5;
+        double laneF = curMaxL > 1 ? h.gridLane / (curMaxL - 1.0) : 0.5;
+
+        // ★ safeMode(안전주행): aggressiveness -30% → 외측 레인 강제 보정
+        // 인코스 공격 성향을 줄여 외곽으로 안전하게 돌도록 laneF를 외측으로 이동
+        if (h.safeMode) {
+          // laneF를 외측 방향(1.0)으로 30% 보정: 공격적 인코스 파고들기 억제
+          laneF = (laneF + kAggressivenessReduction * (1.0 - laneF))
+                  .clamp(0.0, 1.0);
+        }
+
         speedMult *= 0.84 + laneF * 0.04 + _rng.nextDouble() * 0.04;
 
         // ② ★ trackCondition 페널티 — 코너 압축(8→4레인) 시 주로상태 저항 적용
@@ -1112,7 +1147,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         speedMult *= trackMult;
 
         // ③ 코너 clusterOff: 트랙 너비 안에 머물도록 스케일 대폭 축소
-        h.targetClOff = (h.gridLane - curMaxL / 2.0) * 0.4;
+        // safeMode: 보정된 laneF 기준으로 외곽 렌더링 좌표 산출
+        h.targetClOff = (h.gridLane - curMaxL / 2.0) * 0.4
+            + (h.safeMode ? laneF * 0.3 : 0.0);
       } else {
         // ★ 직선 clusterOff: 레인 간격 축소 (이전 1.8~3.5 → 0.5~0.8)
         h.targetClOff = (h.gridLane - curMaxL / 2.0) *
@@ -1158,6 +1195,38 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         // 우수마 글로우 이펙트 유지 (boostGlow 이미 설정 → 추가 강화만)
         if (g1fMult > 1.0 && !h.boostActive) {
           h.boostGlow = (h.boostGlow + (g1fMult - 1.0) * 0.5).clamp(0, 1);
+        }
+
+        // ── Jockey Engine: P_final 동적 바인딩 ─────────────────────────
+        final tracker    = JockeyDailyTracker.instance;
+        // raceNo: String → int (파싱 실패 시 1번 경주로 폴백)
+        final raceNoInt  = int.tryParse(widget.race.raceNo) ?? 1;
+        final afScale    = tracker.afternoonScale(raceNoInt);
+
+        // [1] 안전주행 패널티: 엘리트 기수 2승+ → maxAccel -10% × 오후배율
+        if (h.safeMode) {
+          speedMult *= (1.0 - kSafeModeAccelPenalty * afScale);
+        }
+
+        // [2] 독기 모드 가점: 엘리트 기수 3경기+ & 0승 → A_zone +15% × 오후배율
+        if (h.mentalBuff) {
+          speedMult *= (1.0 + kMentalBuffBonus * afScale);
+          // 독기 모드 글로우 이펙트
+          if (!h.boostActive) {
+            h.boostGlow = (h.boostGlow + kMentalBuffBonus * afScale * 0.6)
+                          .clamp(0, 1);
+          }
+        }
+
+        // [3] 고배당 서지 버프: HighOddsWindow 발동 상위 3마번 → A_zone +20% × 오후배율
+        if (h.surgeBuff) {
+          final detector = HighOddsWindowDetector.instance;
+          speedMult *= detector.surgeMultiplier(raceNoInt);
+          // 서지 버프 글로우 이펙트
+          if (!h.boostActive) {
+            h.boostGlow = (h.boostGlow + kSurgeBuffBonus * afScale * 0.8)
+                          .clamp(0, 1);
+          }
         }
       }
 
@@ -1253,6 +1322,20 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       }
     }
     if (_raceElapsed == 0.0) _raceElapsed = _elapsed;
+
+    // ── Jockey Engine: 경주 완료 후 기수 성적 기록 ──────────────────────
+    // 1착 확정 시 JockeyDailyTracker에 당일 성적 누적
+    // safeMode/mentalBuff 상태 갱신 → 다음 경주부터 반영
+    final tracker = JockeyDailyTracker.instance;
+    for (final h in _ranking) {
+      tracker.recordFinish(
+        jockeyName:    h.entry.jockeyName,
+        jockeyRcWins:  h.entry.jockeyRcWins,
+        won:           (h.rank == 1),
+      );
+    }
+    // HighOddsWindow 상태 초기화 (다음 경주 재평가를 위해)
+    HighOddsWindowDetector.instance.reset();
 
     // ★ setState 로 _phase 전환 → UI 즉시 갱신
     if (!mounted) return;

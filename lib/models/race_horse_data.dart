@@ -9,6 +9,7 @@
 //     → _Horse (시뮬레이터 인스턴스)
 // ============================================================
 import 'dart:math';
+import 'race_models.dart';
 
 // ── trackCondition 주로상태 저항 계수 ──────────────────────────
 // KRA 주로상태 코드 → 속도 페널티 계수 (0.0 = 패널티 없음, 1.0 = 완전 감속)
@@ -295,4 +296,212 @@ double computeCornerTrackPenalty(String condition, double laneF) {
   // 외측 레인은 코너 반경이 커서 페널티 1.3배 추가
   final adjusted = resistance * (1.0 + laneF * 0.3);
   return max(0.60, 1.0 - adjusted); // 최소 0.60 (과도한 감속 방지)
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  JockeyDailyTracker
+//  ─────────────────────────────────────────────────────────────────────────
+//  기수 당일 성적 누적 추적 엔진
+//
+//  ▸ 엘리트 기수 판정: jockeyRcWins >= 0.22 (통산 승률 22% 이상)
+//  ▸ 안전주행 모드 (Satisfaction Penalty):
+//      dailyWinCount >= 2  → safeMode = true
+//      → maxAcceleration -10%, aggressiveness -30% (코너 G1F 구간)
+//  ▸ 독기 모드 (Win-Desire / Mental Buff):
+//      isElite && racesRidden >= 3 && dailyWinCount == 0
+//      → mentalBuff = true
+//      → A_zone(G1F 400m~GOAL) +15% 가점
+//      → 첫 승리(dailyWinCount >= 1) 즉시 Reset
+//
+//  ▸ 오후 누적 가중치:
+//      경주 번호(raceNo)가 클수록 afternoon weight 증가
+//      = effectScale(raceNo) → 1.0~1.35 범위 선형 보정
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 엘리트 기수 승률 임계값 (통산 22% 이상 = 상위 기수)
+const double kEliteJockeyThreshold = 0.22;
+
+/// 안전주행 모드 발동 조건: 당일 N승 이상
+const int kSafeModeTriggerWins = 2;
+
+/// 독기 모드 발동 조건: 당일 N경기 이상 출전 & 0승
+const int kMentalBuffTriggerRaces = 3;
+
+/// 코너 진입 시 aggressiveness 감산율 (안전주행 모드)
+const double kAggressivenessReduction = 0.30; // -30%
+
+/// 안전주행 모드 maxAcceleration 감산율
+const double kSafeModeAccelPenalty = 0.10;    // -10%
+
+/// 독기 모드 A_zone 가점
+const double kMentalBuffBonus = 0.15;          // +15%
+
+/// 고배당 SurgeBuff A_zone 가점
+const double kSurgeBuffBonus = 0.20;           // +20%
+
+/// 오후 가중치 최대 보정 배율 (경주 9번 이후 최대)
+const double kAfternoonMaxScale = 1.35;
+
+// ── 기수 1명의 당일 성적 레코드 ─────────────────────────────────────
+class _JockeyRecord {
+  int dailyWinCount  = 0; // 당일 승수
+  int racesRidden    = 0; // 당일 출전 경기 수
+  bool safeMode      = false; // 안전주행 모드
+  bool mentalBuff    = false; // 독기 모드
+
+  /// 승리 기록 → 상태 재계산
+  void recordWin() {
+    dailyWinCount++;
+    racesRidden++;
+    _recalc();
+  }
+
+  /// 비승리 완주 기록
+  void recordRace() {
+    racesRidden++;
+    _recalc();
+  }
+
+  void _recalc() {
+    // 안전주행 모드: 2승 이상 달성 시
+    safeMode = (dailyWinCount >= kSafeModeTriggerWins);
+    // 독기 모드: 3경기 이상 출전 & 0승 → 활성 / 첫 승리 시 즉시 해제
+    mentalBuff = (racesRidden >= kMentalBuffTriggerRaces &&
+                  dailyWinCount == 0);
+  }
+}
+
+// ── JockeyDailyTracker 싱글톤 ─────────────────────────────────────────
+/// 당일 기수 성적 전역 추적기.
+/// 레이스 시뮬레이터 초기화 시 race_provider에서 reset() 호출,
+/// 경주 완료 시 recordFinish() 호출.
+class JockeyDailyTracker {
+  JockeyDailyTracker._();
+  static final JockeyDailyTracker instance = JockeyDailyTracker._();
+
+  final Map<String, _JockeyRecord> _records = {};
+
+  /// 날짜가 바뀌었을 때 또는 새 날 첫 경주 시작 시 리셋
+  void resetDay() {
+    _records.clear();
+  }
+
+  /// 기수 결과 기록
+  /// [jockeyName]: 기수 이름 (키)
+  /// [jockeyRcWins]: 통산 승률 (엘리트 여부 판단)
+  /// [won]: 해당 경주 1착 여부
+  void recordFinish({
+    required String jockeyName,
+    required double jockeyRcWins,
+    required bool won,
+  }) {
+    if (!isElite(jockeyRcWins)) return; // 비엘리트 기수는 추적 불필요
+    final rec = _records.putIfAbsent(jockeyName, () => _JockeyRecord());
+    if (won) {
+      rec.recordWin();
+    } else {
+      rec.recordRace();
+    }
+  }
+
+  /// 엘리트 기수 여부 판정
+  bool isElite(double jockeyRcWins) =>
+      jockeyRcWins >= kEliteJockeyThreshold;
+
+  /// 안전주행 모드 여부
+  bool isSafeMode(String jockeyName, double jockeyRcWins) {
+    if (!isElite(jockeyRcWins)) return false;
+    return _records[jockeyName]?.safeMode ?? false;
+  }
+
+  /// 독기 모드 여부
+  bool isMentalBuff(String jockeyName, double jockeyRcWins) {
+    if (!isElite(jockeyRcWins)) return false;
+    return _records[jockeyName]?.mentalBuff ?? false;
+  }
+
+  /// 당일 승수 조회
+  int getDailyWins(String jockeyName) =>
+      _records[jockeyName]?.dailyWinCount ?? 0;
+
+  /// 경주 번호 기반 오후 가중치 배율 (raceNo 1~12 기준)
+  /// 오후 후반부일수록 엘리트 기수 피로/독기 효과 더 강해짐
+  double afternoonScale(int raceNo) {
+    // raceNo 1 → 1.00, raceNo 9+ → kAfternoonMaxScale(1.35)
+    final t = ((raceNo - 1) / 8.0).clamp(0.0, 1.0);
+    return 1.0 + t * (kAfternoonMaxScale - 1.0);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  HighOddsWindowDetector
+//  ─────────────────────────────────────────────────────────────────────────
+//  고배당 변동 레이스 감지 + 비인기 경주마 SurgeBuff 주입 엔진
+//
+//  ▸ 발동 조건:
+//      출전 기수 중 safeMode 활성 기수 비율 >= 50%
+//      → isHighOddsWindow = true
+//  ▸ SurgeBuff 대상:
+//      배당률 상위 3개 마번 (winOdds 높은 순)
+//      → A_zone(후반 400m~GOAL) 가속력 +20% 주입
+//  ▸ 오후 누적 가중치:
+//      afternoonScale 반영 → SurgeBuffBonus 동적 강화
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 고배당 윈도우 발동 임계 (안전모드 기수 비율)
+const double kHighOddsWindowThreshold = 0.50; // 50%
+
+/// SurgeBuff 대상 최대 마두 수
+const int kSurgeBuffTopN = 3;
+
+class HighOddsWindowDetector {
+  HighOddsWindowDetector._();
+  static final HighOddsWindowDetector instance = HighOddsWindowDetector._();
+
+  bool _isActive = false;
+  final Set<int> _surgeGates = {}; // SurgeBuff 적용 대상 마번 set
+
+  bool get isActive => _isActive;
+
+  /// 경주 시작 전 호출: 출전마 목록 기반 고배당 윈도우 여부 계산
+  void evaluate(List<HorseEntry> entries, int raceNo) {
+    _isActive = false;
+    _surgeGates.clear();
+
+    if (entries.isEmpty) return;
+
+    final tracker = JockeyDailyTracker.instance;
+    int safeModeCount = 0;
+    for (final e in entries) {
+      if (tracker.isSafeMode(e.jockeyName, e.jockeyRcWins)) {
+        safeModeCount++;
+      }
+    }
+
+    final ratio = safeModeCount / entries.length;
+    if (ratio < kHighOddsWindowThreshold) return;
+
+    // 고배당 윈도우 활성 → 상위 N개 배당마 추출
+    _isActive = true;
+    final sorted = List<HorseEntry>.from(entries)
+      ..sort((a, b) => b.odds.compareTo(a.odds)); // 배당 높은 순 내림차순
+    for (int i = 0; i < kSurgeBuffTopN && i < sorted.length; i++) {
+      _surgeGates.add(sorted[i].gateNo);
+    }
+  }
+
+  /// 해당 마번이 SurgeBuff 대상인지 여부
+  bool isSurgeBuff(int gateNo) => _surgeGates.contains(gateNo);
+
+  /// SurgeBuff 실제 가점 배율 (오후 가중치 반영)
+  double surgeMultiplier(int raceNo) {
+    if (!_isActive) return 1.0;
+    final scale = JockeyDailyTracker.instance.afternoonScale(raceNo);
+    return 1.0 + kSurgeBuffBonus * scale;
+  }
+
+  void reset() {
+    _isActive = false;
+    _surgeGates.clear();
+  }
 }
