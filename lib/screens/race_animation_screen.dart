@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
 import '../models/race_horse_data.dart';
+import '../providers/user_calibration_controller.dart';
 import '../utils/horse_cap_colors.dart';
 
 
@@ -821,6 +822,11 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
   final Random _rng = Random(42);
 
+  // ── 사용자 수동 보정 컨트롤러 ────────────────────────────────────────
+  late UserCalibrationController _calibCtrl;
+  // 마번별 개별 spurt 오프셋 (spurtTiming 드롭다운 반영)
+  final Map<int, double> _horseSpurtOffset = {};
+
   // 레이스 파라미터
   late double _startP;
   late double _goalP;
@@ -850,6 +856,11 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   void initState() {
     super.initState();
     _calcParams();
+    // ── UserCalibrationController 초기화 (마번 목록 기반) ────────────────
+    final gateNos = widget.horses.isNotEmpty
+        ? widget.horses.map((h) => h.gateNo).toList()
+        : List.generate(10, (i) => i + 1);
+    _calibCtrl = UserCalibrationController(gateNos: gateNos);
     _initHorses();
 
     _glowAnim = AnimationController(
@@ -1032,10 +1043,17 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
                         (totalEntries > 1 ? totalEntries - 1 : 1))
                        .clamp(0, _GridRailEngine.kZone1Lanes - 1);
 
+      // ── UserCalibration: oddsAdjFactor → baseSpeed 보정 ────────────────
+      // userOddsWeight(±2.0) → baseSpeed ×= 0.97~1.03
+      final calibratedBase = base * _calibCtrl.oddsAdjFactor(h.gateNo);
+
+      // ── UserCalibration: spurtTiming → 개별 spurt 오프셋 캐싱 ───────────
+      _horseSpurtOffset[h.gateNo] = _calibCtrl.spurtProgOffset(h.gateNo);
+
       final horse = _Horse(
         entry:     h,
         prog:      _startP,
-        baseSpeed: base,
+        baseSpeed: calibratedBase,
         initLane:  initLane,
       );
       // 부산경남: 거리별 레인 타입 설정
@@ -1228,6 +1246,18 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
                           .clamp(0, 1);
           }
         }
+
+        // [4] UserCalibration: 기수 멘탈 슬라이더 → speedMultOverride
+        //     userJockeyBuff(±1.0) → speedMult ×= 1.0 ± 0.12×afScale
+        final userMultOverride =
+            _calibCtrl.speedMultOverride(h.entry.gateNo, afScale);
+        if (userMultOverride != 1.0) {
+          speedMult *= userMultOverride;
+          if (userMultOverride > 1.0 && !h.boostActive) {
+            h.boostGlow = (h.boostGlow + (userMultOverride - 1.0) * 0.5)
+                          .clamp(0, 1);
+          }
+        }
       }
 
       // ── 지체 누적 (양옆 모두 막힌 경우 stuckTimer 증가) ──────────────
@@ -1336,6 +1366,10 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     }
     // HighOddsWindow 상태 초기화 (다음 경주 재평가를 위해)
     HighOddsWindowDetector.instance.reset();
+
+    // ── UserCalibration: 경주 종료 후 패널 해제 ──────────────────────────
+    // 잠금 해제 → 결과 화면에서 다음 경주 보정 준비 가능
+    _calibCtrl.unlockPanel();
 
     // ★ setState 로 _phase 전환 → UI 즉시 갱신
     if (!mounted) return;
