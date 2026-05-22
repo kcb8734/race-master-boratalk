@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/race_provider.dart';
 import '../utils/app_theme.dart';
+import 'sandbox_mode_screen.dart';
 
 class MyPageScreen extends StatelessWidget {
   const MyPageScreen({super.key});
@@ -23,6 +24,9 @@ class MyPageScreen extends StatelessWidget {
                     _buildProfileCard(context),
                     const SizedBox(height: 20),
                     _buildSubscriptionSection(context),
+                    const SizedBox(height: 20),
+                    // ── 샌드박스 모드 배너 ──────────────────────────
+                    _buildSandboxBanner(context),
                     const SizedBox(height: 20),
                     _buildMenuSection(context),
                     const SizedBox(height: 20),
@@ -267,6 +271,116 @@ class MyPageScreen extends StatelessWidget {
     ];
 
     return _menuGroup('⚙️ 앱 설정', menus, context);
+  }
+
+  /// 샌드박스 모드 진입 배너 카드
+  Widget _buildSandboxBanner(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SandboxModeScreen()),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF1A0A2E), Color(0xFF0D1A2E)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+              color: const Color(0xFF7C3AED).withValues(alpha: 0.7), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C3AED).withValues(alpha: 0.25),
+              blurRadius: 12, spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // 아이콘 컨테이너
+            Container(
+              width: 48, height: 48,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C3AED), Color(0xFF5B21B6)],
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: Text('🧪', style: TextStyle(fontSize: 24)),
+              ),
+            ),
+            const SizedBox(width: 14),
+            // 텍스트
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        '샌드박스 모드',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF7C3AED).withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color: const Color(0xFF7C3AED).withValues(alpha: 0.6)),
+                        ),
+                        child: const Text(
+                          'BETA',
+                          style: TextStyle(
+                            color: Color(0xFFB57BFF),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '과거 경주 재현 · 보정 시뮬레이션 · 예측 정밀도 분석',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // 화살표
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.science_rounded,
+                color: Color(0xFFB57BFF),
+                size: 18,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildLegalSection(BuildContext context) {

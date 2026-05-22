@@ -781,12 +781,15 @@ class RaceAnimationScreen extends StatefulWidget {
   final List<HorseEntry> horses;
   /// 시즌오프 체험 모드 여부 — 결과 화면에 DEMO 배너 표시
   final bool isDemoMode;
+  /// 샌드박스 모드 여부 — 과거 경주 재현 시 결과를 Navigator.pop으로 반환
+  final bool isSandbox;
 
   const RaceAnimationScreen({
     super.key,
     required this.race,
     required this.horses,
     this.isDemoMode = false,
+    this.isSandbox  = false,
   });
 
   @override
@@ -1373,6 +1376,31 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
 
     // ★ setState 로 _phase 전환 → UI 즉시 갱신
     if (!mounted) return;
+
+    // 샌드박스 모드: 결과를 RaceResult 리스트로 변환하여 Navigator.pop 반환
+    if (widget.isSandbox) {
+      final results = _ranking.map((h) => RaceResult(
+        rank:       h.rank,
+        gateNo:     h.entry.gateNo,
+        horseName:  h.entry.horseName,
+        jockeyName: h.entry.jockeyName,
+        finalScore: h.entry.finalScore,
+      )).toList();
+      // 결과 화면 잠깐 표시 후 반환
+      setState(() => _phase = _Phase.finishing);
+      _fadeAnim.reset();
+      _fadeAnim.forward().then((_) {
+        if (mounted) {
+          setState(() => _phase = _Phase.result);
+          // 3초 후 자동 반환
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) Navigator.pop(context, results);
+          });
+        }
+      });
+      return;
+    }
+
     setState(() => _phase = _Phase.finishing);
 
     _fadeAnim.reset();

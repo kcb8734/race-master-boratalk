@@ -545,4 +545,22 @@ class RaceProvider extends ChangeNotifier {
   Future<void> refreshRaces() async {
     await _loadRaces();
   }
+
+  // ─────────────────────────────────────────────────────────────────
+  // 샌드박스 모드: 외부에서 경주/말 데이터 직접 주입
+  // racedetailresult 기반 과거 경주 재현 시 사용
+  // ─────────────────────────────────────────────────────────────────
+  Future<void> injectSandboxData(
+      RaceInfo race, List<HorseEntry> entries) async {
+    stopAutoRefresh();
+    _selectedRace    = race;
+    _horses          = entries;
+    _insights        = RaceStatEngine.generateInsights(entries, race);
+    _lastUpdated     = DateTime.now();
+    _refreshStatus   = RefreshStatus.success;
+    _isLoadingHorses = false;
+    _recentOddsChanges   = [];
+    _previousOddsSnapshot = {};
+    notifyListeners();
+  }
 }
