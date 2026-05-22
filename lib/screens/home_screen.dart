@@ -625,9 +625,10 @@ class _HomeContent extends StatelessWidget {
                     return;
                   }
 
-                  // ── 정상 진입 ──────────────────────────────────
-                  await provider.selectRace(race);
+                  // ── 정상 진입 — 화면 전환 즉시, 데이터 로드 백그라운드 ──
                   if (!ctx.mounted) return;
+                  // 화면 전환을 먼저 수행하고 데이터 로드는 뒤에서 처리
+                  unawaited(provider.selectRace(race));
                   Navigator.push(
                     ctx,
                     PageRouteBuilder(
@@ -636,7 +637,7 @@ class _HomeContent extends StatelessWidget {
                       transitionsBuilder: (cc, a1, a2, child) =>
                           FadeTransition(opacity: a1, child: child),
                       transitionDuration:
-                          const Duration(milliseconds: 400),
+                          const Duration(milliseconds: 180),
                     ),
                   );
                 },
@@ -650,7 +651,7 @@ class _HomeContent extends StatelessWidget {
                       transitionsBuilder: (cc, a1, a2, child) =>
                           FadeTransition(opacity: a1, child: child),
                       transitionDuration:
-                          const Duration(milliseconds: 300),
+                          const Duration(milliseconds: 150),
                     ),
                   );
                 },
@@ -705,7 +706,7 @@ class _HomeContent extends StatelessWidget {
             RaceDashboardScreen(race: demoRace, isDemoMode: true),
         transitionsBuilder: (c, a1, a2, child) =>
             FadeTransition(opacity: a1, child: child),
-        transitionDuration: const Duration(milliseconds: 400),
+        transitionDuration: const Duration(milliseconds: 180),
       ),
     );
   }

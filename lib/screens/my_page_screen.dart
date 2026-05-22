@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/race_provider.dart';
 import '../utils/app_theme.dart';
 import 'sandbox_mode_screen.dart';
@@ -164,99 +166,257 @@ class MyPageScreen extends StatelessWidget {
   Widget _buildSubscriptionSection(BuildContext context) {
     return Consumer<RaceProvider>(
       builder: (_, provider, __) {
+        // ── 이미 구독 중일 때 ──────────────────────────────────────
         if (provider.isPremium) {
-          return Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  const Color(0xFFFFD700).withValues(alpha: 0.12),
-                  const Color(0xFF0C1A2E),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                  color: const Color(0xFFFFD700).withValues(alpha: 0.4)),
-            ),
-            child: const Row(
-              children: [
-                Text('👑', style: TextStyle(fontSize: 28)),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('프리미엄 구독 활성',
-                          style: TextStyle(
-                              color: Color(0xFFFFD700),
-                              fontSize: 14, fontWeight: FontWeight.w900)),
-                      SizedBox(height: 3),
-                      Text('전 레이스 무제한 AI 시뮬레이션 이용 가능',
-                          style: TextStyle(
-                              color: Colors.white, fontSize: 11)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
+          return _buildActivePlanCard(provider);
         }
 
-        return Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0C1A2E),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFF1A2A3A)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('💡 프리미엄으로 업그레이드',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              _benefitRow('✅', '전 레이스 무제한 AI 시뮬레이션'),
-              _benefitRow('✅', '23개 API 실시간 스탯 분석'),
-              _benefitRow('✅', '고배당 복병마 조합 추천'),
-              _benefitRow('✅', '경주별 상세 AI 인사이트'),
-              const SizedBox(height: 12),
-              GestureDetector(
-                onTap: () => _showUpgradeDialog(context, provider),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(
-                    gradient: AppTheme.goldGradient,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text(
-                    '👑  월 9,900원으로 시작하기',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Color(0xFF1A1A1A),
-                        fontSize: 14, fontWeight: FontWeight.w900),
-                  ),
-                ),
+        // ── 플랜 선택 카드 ────────────────────────────────────────
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 섹션 타이틀
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Container(width: 3, height: 16,
+                      decoration: BoxDecoration(
+                          gradient: AppTheme.goldGradient,
+                          borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(width: 8),
+                  const Text('💎 플랜 선택',
+                      style: TextStyle(color: AppTheme.textWhite,
+                          fontSize: 13, fontWeight: FontWeight.w800)),
+                ],
               ),
-            ],
-          ),
+            ),
+            // 베이직 플랜 카드
+            _buildPlanCard(
+              context: context,
+              provider: provider,
+              planType: 'basic',
+              emoji: '⚡',
+              title: '베이직',
+              price: '5,500원',
+              badgeText: '입문 추천',
+              badgeColor: const Color(0xFF3B82F6),
+              borderColor: const Color(0xFF3B82F6),
+              benefits: [
+                ('✅', '하루 3경주 AI 시뮬레이션'),
+                ('✅', '기본 스탯 분석 (15개 API)'),
+                ('✅', '경주 배당률 실시간 조회'),
+                ('❌', '고배당 복병마 조합 추천'),
+                ('❌', '경주별 상세 AI 인사이트'),
+              ],
+              ctaText: '⚡  월 5,500원으로 시작하기',
+              ctaGradient: const LinearGradient(
+                colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+              ),
+            ),
+            const SizedBox(height: 10),
+            // 프리미엄 플랜 카드
+            _buildPlanCard(
+              context: context,
+              provider: provider,
+              planType: 'premium',
+              emoji: '👑',
+              title: '프리미엄',
+              price: '9,900원',
+              badgeText: 'BEST',
+              badgeColor: const Color(0xFFFFD700),
+              borderColor: const Color(0xFFFFD700),
+              benefits: [
+                ('✅', '전 레이스 무제한 AI 시뮬레이션'),
+                ('✅', '23개 API 실시간 스탯 분석'),
+                ('✅', '고배당 복병마 조합 추천'),
+                ('✅', '경주별 상세 AI 인사이트'),
+                ('✅', '샌드박스 모드 & 정밀도 리포트'),
+              ],
+              ctaText: '👑  월 9,900원으로 시작하기',
+              ctaGradient: AppTheme.goldGradient,
+              isRecommended: true,
+            ),
+          ],
         );
       },
     );
   }
 
-  Widget _benefitRow(String icon, String text) {
+  /// 구독 활성 카드
+  Widget _buildActivePlanCard(RaceProvider provider) {
+    final isPremiumPlan = provider.isPremium;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFFFFD700).withValues(alpha: 0.12),
+            const Color(0xFF0C1A2E),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: const Color(0xFFFFD700).withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Text(isPremiumPlan ? '👑' : '⚡',
+              style: const TextStyle(fontSize: 28)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isPremiumPlan ? '프리미엄 구독 활성' : '베이직 구독 활성',
+                  style: const TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 14, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  isPremiumPlan
+                      ? '전 레이스 무제한 AI 시뮬레이션 이용 가능'
+                      : '하루 3경주 AI 시뮬레이션 이용 가능',
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 플랜 카드 공통 위젯
+  Widget _buildPlanCard({
+    required BuildContext context,
+    required RaceProvider provider,
+    required String planType,
+    required String emoji,
+    required String title,
+    required String price,
+    required String badgeText,
+    required Color badgeColor,
+    required Color borderColor,
+    required List<(String, String)> benefits,
+    required String ctaText,
+    required Gradient ctaGradient,
+    bool isRecommended = false,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1A2E),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isRecommended
+              ? borderColor.withValues(alpha: 0.6)
+              : borderColor.withValues(alpha: 0.35),
+          width: isRecommended ? 1.5 : 1.0,
+        ),
+        boxShadow: isRecommended
+            ? [BoxShadow(
+                color: borderColor.withValues(alpha: 0.12),
+                blurRadius: 10, spreadRadius: 1)]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 헤더
+          Row(
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 8),
+              Text(title,
+                  style: TextStyle(
+                      color: isRecommended
+                          ? const Color(0xFFFFD700)
+                          : Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900)),
+              const SizedBox(width: 6),
+              // 배지
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: badgeColor.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: badgeColor.withValues(alpha: 0.5)),
+                ),
+                child: Text(badgeText,
+                    style: TextStyle(
+                        color: badgeColor,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800)),
+              ),
+              const Spacer(),
+              // 가격
+              RichText(
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '월 $price',
+                      style: TextStyle(
+                          color: isRecommended
+                              ? const Color(0xFFFFD700)
+                              : const Color(0xFF60A5FA),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // 혜택 목록
+          ...benefits.map((b) => _benefitRow(b.$1, b.$2, enabled: b.$1 == '✅')),
+          const SizedBox(height: 12),
+          // CTA 버튼
+          GestureDetector(
+            onTap: () => _showPlanUpgradeDialog(context, provider, planType),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              decoration: BoxDecoration(
+                gradient: ctaGradient,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                ctaText,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: isRecommended
+                        ? const Color(0xFF1A1A1A)
+                        : Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _benefitRow(String icon, String text, {bool enabled = true}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 2.5),
       child: Row(
         children: [
           Text(icon, style: const TextStyle(fontSize: 12)),
           const SizedBox(width: 6),
           Text(text,
               style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.7), fontSize: 11)),
+                  color: enabled
+                      ? Colors.white.withValues(alpha: 0.75)
+                      : Colors.white.withValues(alpha: 0.3),
+                  fontSize: 11,
+                  decoration: enabled ? null : TextDecoration.lineThrough,
+                  decorationColor: Colors.white.withValues(alpha: 0.25))),
         ],
       ),
     );
@@ -264,10 +424,14 @@ class MyPageScreen extends StatelessWidget {
 
   Widget _buildMenuSection(BuildContext context) {
     final menus = [
-      ('🔔', '공지사항', '최신 업데이트 및 서비스 안내', () => _showNoticeSheet(context)),
-      ('⭐', '앱 평점 남기기', '경마통에 별점을 주세요!', null),
-      ('📤', '친구에게 공유', '경마통을 친구에게 추천하세요', null),
-      ('📧', '문의하기', '서비스 관련 문의 및 버그 신고', null),
+      ('🔔', '공지사항', '최신 업데이트 및 서비스 안내',
+          () => _showNoticeSheet(context)),
+      ('⭐', '앱 평점 남기기', '경마통에 별점을 주세요! 리뷰가 큰 힘이 돼요',
+          () => _showRatingSheet(context)),
+      ('📤', '친구에게 공유', '카카오톡 친구 1명 공유 시 3회 모의 레이스 추가!',
+          () => _showShareSheet(context)),
+      ('📧', '문의하기', '서비스 관련 문의 및 버그 신고',
+          () => _showInquirySheet(context)),
     ];
 
     return _menuGroup('⚙️ 앱 설정', menus, context);
@@ -496,18 +660,69 @@ class MyPageScreen extends StatelessWidget {
     );
   }
 
+  // ── 기존 호환 (내부 참조 유지용) ──────────────────────────────
   void _showUpgradeDialog(BuildContext context, RaceProvider provider) {
+    _showPlanUpgradeDialog(context, provider, 'premium');
+  }
+
+  // ── 플랜별 구독 다이얼로그 ────────────────────────────────────
+  void _showPlanUpgradeDialog(
+      BuildContext context, RaceProvider provider, String planType) {
+    final isBasic   = planType == 'basic';
+    final emoji     = isBasic ? '⚡' : '👑';
+    final title     = isBasic ? '베이직 구독' : '프리미엄 구독';
+    final price     = isBasic ? '월 5,500원' : '월 9,900원';
+    final accentClr = isBasic ? const Color(0xFF3B82F6) : const Color(0xFFFFD700);
+    final desc      = isBasic
+        ? '월 5,500원으로 하루 3경주 AI 시뮬레이션을\n이용할 수 있습니다.'
+        : '월 9,900원으로 전 레이스 무제한\nAI 시뮬레이션을 이용할 수 있습니다.';
+
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF0C1A2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('👑 프리미엄 업그레이드',
-            style: TextStyle(color: Color(0xFFFFD700),
-                fontSize: 16, fontWeight: FontWeight.w900)),
-        content: Text('월 9,900원으로 전 레이스 무제한 이용이 가능합니다.\n지금 업그레이드 하시겠습니까?',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.8),
-                fontSize: 12, height: 1.5)),
+        title: Row(
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 22)),
+            const SizedBox(width: 8),
+            Text('$title 신청',
+                style: TextStyle(color: accentClr,
+                    fontSize: 15, fontWeight: FontWeight.w900)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(desc,
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 12, height: 1.55)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: accentClr.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: accentClr.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('결제 금액',
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 11)),
+                  Text(price,
+                      style: TextStyle(
+                          color: accentClr,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900)),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -519,18 +734,529 @@ class MyPageScreen extends StatelessWidget {
               provider.setPremium(true);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('👑 프리미엄이 활성화되었습니다!'),
-                  backgroundColor: Color(0xFF1A3A1A),
+                SnackBar(
+                  content: Text('$emoji $title이 활성화되었습니다!'),
+                  backgroundColor: const Color(0xFF1A3A1A),
                 ),
               );
             },
-            child: const Text('구독하기',
+            child: Text('구독하기',
                 style: TextStyle(
-                    color: Color(0xFFFFD700), fontWeight: FontWeight.w800)),
+                    color: accentClr, fontWeight: FontWeight.w800)),
           ),
         ],
       ),
+    );
+  }
+
+  // ── 앱 평점 시트 ──────────────────────────────────────────────
+  void _showRatingSheet(BuildContext context) {
+    int selectedStars = 5;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0C1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+            left: 20, right: 20, top: 8,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Text('⭐ 앱 평점 남기기',
+                  style: TextStyle(color: Color(0xFFFFD700),
+                      fontSize: 16, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 6),
+              Text('경마통을 이용해 주셔서 감사합니다!\n별점을 남겨 서비스 개선에 도움을 주세요.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      fontSize: 12, height: 1.5)),
+              const SizedBox(height: 20),
+              // 별점 선택
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(5, (i) => GestureDetector(
+                  onTap: () => setState(() => selectedStars = i + 1),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(
+                      i < selectedStars ? '⭐' : '☆',
+                      style: TextStyle(
+                        fontSize: 36,
+                        color: i < selectedStars
+                            ? const Color(0xFFFFD700)
+                            : Colors.white.withValues(alpha: 0.2),
+                      ),
+                    ),
+                  ),
+                )),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                ['', '별로예요', '그저 그래요', '괜찮아요', '좋아요!', '최고예요! 🎉'][selectedStars],
+                style: TextStyle(
+                    color: const Color(0xFFFFD700).withValues(alpha: 0.8),
+                    fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFD700),
+                    foregroundColor: const Color(0xFF1A1A1A),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '${'⭐' * selectedStars} 평점 ${selectedStars}점을 남겨주셔서 감사합니다!',
+                        ),
+                        backgroundColor: const Color(0xFF1A3A1A),
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  },
+                  child: const Text('평점 제출하기',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── 친구 공유 시트 (카카오톡 1명 → 3회 모의 레이스 추가) ──────
+  void _showShareSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0C1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Text('📤 친구에게 공유',
+                style: TextStyle(color: Color(0xFFFFD700),
+                    fontSize: 16, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            // 보상 배너
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1A3A1A), Color(0xFF0D1E0D)],
+                ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: const Color(0xFF22C55E).withValues(alpha: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  const Text('🎁', style: TextStyle(fontSize: 28)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('카카오톡 1명 공유 시',
+                            style: TextStyle(
+                                color: Color(0xFF22C55E),
+                                fontSize: 12, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        const Text('모의 레이스 +3회 무료 추가!',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15, fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 4),
+                        Text('최대 10명 공유 → +30회 적립 가능',
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.45),
+                                fontSize: 10)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 공유 링크
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF071220),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF1A2A3A)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'https://play.google.com/store/apps/경마통',
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 11),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(const ClipboardData(
+                          text: 'https://play.google.com/store/apps/경마통'));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('링크가 복사되었습니다!'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A2A3A),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text('복사',
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              fontSize: 11)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            // 카카오톡 공유 버튼
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFFE000),
+                  foregroundColor: const Color(0xFF191600),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () => _sendKakaoShare(context),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text('💬', style: TextStyle(fontSize: 18)),
+                    SizedBox(width: 8),
+                    Text('카카오톡으로 공유하기',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w900)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 카카오톡 공유 처리 (3회 모의 레이스 지급)
+  Future<void> _sendKakaoShare(BuildContext context) async {
+    // 공유 텍스트 클립보드 복사 + SharedPreferences 보상 처리
+    const shareText =
+        '🏇 경마통 AI 모의 레이스 앱을 추천드려요!\n'
+        '실제 KRA 데이터 기반 AI 시뮬레이션으로 경주를 예측해보세요.\n'
+        '▶ https://play.google.com/store/apps/경마통';
+    await Clipboard.setData(const ClipboardData(text: shareText));
+
+    // SharedPreferences에 공유 횟수 및 보상 저장
+    final prefs = await SharedPreferences.getInstance();
+    final shareCount = (prefs.getInt('share_count') ?? 0) + 1;
+    final bonusRaces  = (prefs.getInt('bonus_race_count') ?? 0) + 3;
+    await prefs.setInt('share_count', shareCount);
+    await prefs.setInt('bonus_race_count', bonusRaces);
+
+    if (!context.mounted) return;
+    Navigator.pop(context);
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0C1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('🎁 공유 완료!',
+            style: TextStyle(color: Color(0xFF22C55E),
+                fontSize: 16, fontWeight: FontWeight.w900)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('공유 텍스트가 클립보드에 복사되었습니다.\n카카오톡에 붙여넣어 친구에게 보내주세요!',
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.75),
+                    fontSize: 12, height: 1.5)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A3A1A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: const Color(0xFF22C55E).withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Text('🎫', style: TextStyle(fontSize: 22)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('모의 레이스 +3회 지급!',
+                            style: TextStyle(
+                                color: Color(0xFF22C55E),
+                                fontSize: 13, fontWeight: FontWeight.w800)),
+                        Text('누적 보너스: 총 ${bonusRaces}회',
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.55),
+                                fontSize: 10.5)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('확인',
+                style: TextStyle(
+                    color: Color(0xFF22C55E), fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 문의하기 시트 ─────────────────────────────────────────────
+  void _showInquirySheet(BuildContext context) {
+    final ctrlName    = TextEditingController();
+    final ctrlEmail   = TextEditingController();
+    final ctrlContent = TextEditingController();
+    String inquiryCategory = '기능 문의';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0C1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+            left: 20, right: 20, top: 8,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36, height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const Center(
+                  child: Text('📧 문의하기',
+                      style: TextStyle(color: Color(0xFFFFD700),
+                          fontSize: 16, fontWeight: FontWeight.w900)),
+                ),
+                const SizedBox(height: 4),
+                Center(
+                  child: Text('빠른 시간 내에 답변드리겠습니다.',
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.45),
+                          fontSize: 11)),
+                ),
+                const SizedBox(height: 16),
+                // 문의 유형
+                const Text('문의 유형',
+                    style: TextStyle(color: Colors.white,
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  children: ['기능 문의', '버그 신고', '결제 문의', '기타'].map((cat) =>
+                    GestureDetector(
+                      onTap: () => setState(() => inquiryCategory = cat),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: inquiryCategory == cat
+                              ? const Color(0xFFFFD700).withValues(alpha: 0.15)
+                              : const Color(0xFF071220),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: inquiryCategory == cat
+                                ? const Color(0xFFFFD700).withValues(alpha: 0.6)
+                                : const Color(0xFF1A2A3A),
+                          ),
+                        ),
+                        child: Text(cat,
+                            style: TextStyle(
+                                color: inquiryCategory == cat
+                                    ? const Color(0xFFFFD700)
+                                    : Colors.white.withValues(alpha: 0.5),
+                                fontSize: 12,
+                                fontWeight: inquiryCategory == cat
+                                    ? FontWeight.w700
+                                    : FontWeight.w400)),
+                      ),
+                    ),
+                  ).toList(),
+                ),
+                const SizedBox(height: 14),
+                // 이름
+                _inquiryField('닉네임', ctrlName, '닉네임을 입력하세요', maxLines: 1),
+                const SizedBox(height: 10),
+                // 이메일
+                _inquiryField('이메일 (답변 수신용)', ctrlEmail,
+                    'example@email.com', maxLines: 1,
+                    keyboardType: TextInputType.emailAddress),
+                const SizedBox(height: 10),
+                // 내용
+                _inquiryField('문의 내용', ctrlContent,
+                    '문의 내용을 자세히 작성해 주세요.\n\n예) 앱 버전, 기기 모델, 문제 상황',
+                    maxLines: 5),
+                const SizedBox(height: 6),
+                Text('문의 이메일: pizon8113@gmail.com',
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.3),
+                        fontSize: 10)),
+                const SizedBox(height: 16),
+                // 제출 버튼
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFFD700),
+                      foregroundColor: const Color(0xFF1A1A1A),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: () {
+                      if (ctrlContent.text.trim().isEmpty) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(
+                              content: Text('문의 내용을 입력해 주세요.')),
+                        );
+                        return;
+                      }
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              '📧 문의가 접수되었습니다!\n빠른 시간 내에 이메일로 답변드리겠습니다.'),
+                          backgroundColor: Color(0xFF1A3A1A),
+                          duration: Duration(seconds: 4),
+                        ),
+                      );
+                    },
+                    child: const Text('문의 제출하기',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w900)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _inquiryField(
+    String label,
+    TextEditingController ctrl,
+    String hint, {
+    int maxLines = 1,
+    TextInputType keyboardType = TextInputType.text,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 5),
+        TextField(
+          controller: ctrl,
+          maxLines: maxLines,
+          keyboardType: keyboardType,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25), fontSize: 12),
+            filled: true,
+            fillColor: const Color(0xFF071220),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF1A2A3A)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF1A2A3A)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide:
+                  const BorderSide(color: Color(0xFFFFD700), width: 1.2),
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 10),
+          ),
+        ),
+      ],
     );
   }
 

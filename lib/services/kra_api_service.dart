@@ -205,6 +205,31 @@ String _formatTime(String timeStr) {
   return '${h.padLeft(2, '0')}:$m';
 }
 
+/// postTime 미제공 시 경주장 + 경주번호 기준 기본 시간 반환
+/// KRA 공식 시작 시간표 기준
+String _getRaceStartTimeByNo(String raceNoStr, String meetCode) {
+  final raceNo = int.tryParse(raceNoStr) ?? 1;
+  // 서울(meet=1): 제1경주 11:00, 이후 40분 간격
+  // 부산경남(meet=3): 제1경주 10:00, 이후 40분 간격
+  // 제주(meet=2): 제1경주 10:00, 이후 35~40분 간격
+  final List<String> times;
+  if (meetCode == '3') {
+    // 부산경남
+    times = ['10:00','10:40','11:20','12:00','12:40','13:20',
+             '14:00','14:40','15:20','16:00','16:40'];
+  } else if (meetCode == '2') {
+    // 제주
+    times = ['10:00','10:35','11:10','11:45','12:20','12:55',
+             '13:35','14:15'];
+  } else {
+    // 서울 (기본)
+    times = ['11:00','11:40','12:20','13:00','13:40','14:20',
+             '15:00','15:40','16:20','17:00','17:40'];
+  }
+  final idx = (raceNo - 1).clamp(0, times.length - 1);
+  return times[idx];
+}
+
 DateTime _getWeekday(DateTime now, int targetWeekday) {
   final diff = targetWeekday - now.weekday;
   final date = now.add(Duration(days: diff < 0 ? diff + 7 : diff));
@@ -686,7 +711,14 @@ class KraApiService {
     return items.map<RaceInfo?>((item) {
       try {
         final raceNo        = item['rcNo']?.toString() ?? '';
-        final startTime     = _formatTime(item['rcTime']?.toString() ?? '0000');
+        // postTime = 출발 예정 시간(HHMM 형식), rcTime = 주파기록(초)
+        final rawPostTime   = item['postTime']?.toString()
+                           ?? item['rcPostTime']?.toString()
+                           ?? item['startTime']?.toString()
+                           ?? '';
+        final startTime     = rawPostTime.isNotEmpty
+            ? _formatTime(rawPostTime)
+            : _getRaceStartTimeByNo(raceNo, item['meet']?.toString() ?? '1');
         final distance      = int.tryParse(item['rcDist']?.toString() ?? '1400') ?? 1400;
         final condition     = item['rcGrdCourse']?.toString() ?? '';
         final grade         = item['rcGrdNm']?.toString() ?? '';
