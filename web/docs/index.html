@@ -3,206 +3,207 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>경마통 — 문서 다운로드</title>
+  <title>경마통 Race Master — 공식 문서 다운로드</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Nanum Gothic', 'Apple SD Gothic Neo', sans-serif;
-      background: #0a1628;
+      background: #070f20;
       color: #e0e8ff;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 40px 20px;
+      padding: 40px 20px 60px;
     }
-    .header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-    .header h1 {
-      font-size: 28px;
-      font-weight: 900;
-      color: #FFD700;
-      letter-spacing: -0.5px;
-      margin-bottom: 8px;
-    }
-    .header p {
-      font-size: 14px;
-      color: rgba(255,255,255,0.5);
-    }
+    /* ── 헤더 ── */
+    .header { text-align: center; margin-bottom: 10px; }
     .badge {
       display: inline-block;
       background: rgba(255,215,0,0.15);
-      border: 1px solid rgba(255,215,0,0.4);
+      border: 1px solid rgba(255,215,0,0.45);
       color: #FFD700;
-      font-size: 11px;
-      font-weight: 700;
-      padding: 4px 12px;
-      border-radius: 20px;
-      margin-bottom: 16px;
+      font-size: 11px; font-weight: 700;
+      padding: 4px 14px; border-radius: 20px;
+      margin-bottom: 14px;
     }
-    .cards {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      width: 100%;
-      max-width: 640px;
+    .header h1 {
+      font-size: 26px; font-weight: 900;
+      color: #FFD700; letter-spacing: -0.5px;
+      margin-bottom: 6px;
     }
+    .header .sub {
+      font-size: 13px; color: rgba(255,255,255,0.45);
+      margin-bottom: 6px; line-height: 1.6;
+    }
+    /* ── 법률 안내 배너 ── */
+    .legal-banner {
+      width: 100%; max-width: 680px;
+      background: linear-gradient(135deg, rgba(30,80,40,0.5), rgba(20,60,30,0.5));
+      border: 1px solid rgba(102,187,106,0.4);
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin: 16px 0 28px;
+      font-size: 11.5px;
+      line-height: 1.7;
+      color: rgba(200,255,210,0.85);
+    }
+    .legal-banner strong { color: #66BB6A; }
+    /* ── 섹션 라벨 ── */
+    .section-label {
+      width: 100%; max-width: 680px;
+      font-size: 10px; font-weight: 800;
+      letter-spacing: 2px; color: rgba(255,255,255,0.3);
+      text-transform: uppercase;
+      margin: 0 0 10px 4px;
+    }
+    /* ── 카드 ── */
+    .cards { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 680px; }
     .card {
       background: linear-gradient(135deg, #0e1e3a, #081428);
-      border: 1px solid rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.08);
       border-radius: 16px;
-      padding: 24px;
-      display: flex;
-      align-items: center;
-      gap: 20px;
+      padding: 20px 22px;
+      display: flex; align-items: flex-start; gap: 18px;
       transition: transform 0.2s, border-color 0.2s;
     }
-    .card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(255,215,0,0.4);
-    }
-    .icon {
-      font-size: 42px;
-      flex-shrink: 0;
-      width: 56px;
-      text-align: center;
-    }
-    .info { flex: 1; }
-    .info .num {
-      font-size: 10px;
-      color: rgba(255,255,255,0.35);
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      margin-bottom: 4px;
-    }
-    .info h2 {
-      font-size: 16px;
-      font-weight: 800;
-      color: #e8f0ff;
-      margin-bottom: 6px;
-      line-height: 1.3;
-    }
-    .info p {
-      font-size: 12px;
-      color: rgba(255,255,255,0.45);
-      line-height: 1.5;
-    }
-    .size-badge {
+    .card:hover { transform: translateY(-2px); border-color: rgba(255,215,0,0.35); }
+    .card.featured { border-color: rgba(255,215,0,0.25); background: linear-gradient(135deg, #10213e, #0a1730); }
+    .icon { font-size: 38px; flex-shrink: 0; width: 50px; text-align: center; padding-top: 2px; }
+    .info { flex: 1; min-width: 0; }
+    .num { font-size: 9.5px; color: rgba(255,255,255,0.3); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; }
+    .info h2 { font-size: 15px; font-weight: 800; color: #e8f0ff; margin-bottom: 5px; line-height: 1.3; }
+    .info p { font-size: 11.5px; color: rgba(255,255,255,0.42); line-height: 1.6; }
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .tag {
       display: inline-block;
-      background: rgba(100,181,246,0.15);
-      border: 1px solid rgba(100,181,246,0.3);
-      color: #64B5F6;
-      font-size: 10px;
-      font-weight: 700;
-      padding: 2px 8px;
-      border-radius: 10px;
-      margin-top: 6px;
+      font-size: 9.5px; font-weight: 700;
+      padding: 2px 9px; border-radius: 10px;
     }
+    .tag.blue   { background: rgba(100,181,246,0.15); border: 1px solid rgba(100,181,246,0.3); color: #64B5F6; }
+    .tag.green  { background: rgba(102,187,106,0.15); border: 1px solid rgba(102,187,106,0.3); color: #66BB6A; }
+    .tag.orange { background: rgba(255,183,77,0.15);  border: 1px solid rgba(255,183,77,0.3);  color: #FFB74D; }
+    .tag.purple { background: rgba(186,104,200,0.15); border: 1px solid rgba(186,104,200,0.3); color: #BA68C8; }
     .dl-btn {
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      display: flex; align-items: center; gap: 6px;
       background: linear-gradient(135deg, #FFD700, #FFA000);
       color: #1a0e00;
-      font-weight: 900;
-      font-size: 13px;
-      padding: 10px 18px;
-      border-radius: 10px;
-      text-decoration: none;
-      flex-shrink: 0;
+      font-weight: 900; font-size: 12.5px;
+      padding: 10px 16px; border-radius: 10px;
+      text-decoration: none; flex-shrink: 0;
       transition: opacity 0.2s, transform 0.1s;
+      white-space: nowrap; align-self: center;
     }
-    .dl-btn:hover { opacity: 0.88; transform: scale(0.97); }
-    .divider {
-      width: 100%;
-      max-width: 640px;
-      height: 1px;
-      background: rgba(255,255,255,0.07);
-      margin: 32px 0 24px;
-    }
-    .footer {
-      text-align: center;
-      font-size: 11px;
-      color: rgba(255,255,255,0.25);
-      line-height: 1.7;
-    }
-    @media (max-width: 480px) {
-      .card { flex-direction: column; align-items: flex-start; gap: 14px; }
+    .dl-btn:hover { opacity: 0.85; transform: scale(0.97); }
+    /* ── 구분선 ── */
+    .divider { width: 100%; max-width: 680px; height: 1px; background: rgba(255,255,255,0.06); margin: 28px 0 22px; }
+    /* ── 푸터 ── */
+    .footer { text-align: center; font-size: 10.5px; color: rgba(255,255,255,0.22); line-height: 1.8; }
+    /* ── 반응형 ── */
+    @media (max-width: 520px) {
+      .card { flex-direction: column; gap: 12px; }
       .dl-btn { width: 100%; justify-content: center; }
+      .icon { padding-top: 0; }
     }
   </style>
 </head>
 <body>
 
   <div class="header">
-    <div class="badge">📄 공식 문서 다운로드</div>
-    <h1>🏇 경마통 (Race Master)</h1>
-    <p>저작권 · 특허 · 사업계획서 PDF 다운로드</p>
+    <div class="badge">📄 공식 문서 다운로드 센터</div>
+    <h1>🏇 경마통 Race Master</h1>
+    <p class="sub">
+      실시간 KRA 배당률 직접 대입 · 사용자 수동 보정 · 게임형 모의 레이스<br>
+      <strong style="color:rgba(255,255,255,0.6)">저작권 등록 · 특허 출원 · 사업계획서</strong>
+    </p>
   </div>
 
+  <!-- 법률적 차별화 안내 -->
+  <div class="legal-banner">
+    ⚖️ <strong>법률적 차별화 안내</strong> — 본 서비스는 「게임산업진흥에 관한 법률」상 합법적 게임물로서,
+    금전 투입·환급 구조를 전혀 포함하지 않습니다. 실제 KRA 배당률 데이터를 물리 시뮬레이션에 대입하는
+    <strong>세계 최초의 인터랙티브 경마 시뮬레이터</strong>이며, 사행산업통합감독위원회법의 규제 대상인
+    사행행위와 <strong>구조적·법률적으로 완전히 구분</strong>됩니다.
+  </div>
+
+  <!-- 지재권 문서 -->
+  <div class="section-label">지식재산권 등록 문서</div>
   <div class="cards">
 
-    <!-- 저작권 등록 신청서 -->
-    <div class="card">
+    <div class="card featured">
       <div class="icon">©️</div>
       <div class="info">
         <div class="num">Document 01</div>
-        <h2>저작권 등록 신청서</h2>
-        <p>컴퓨터프로그램저작물 등록 · 한국저작권위원회 제출용<br>
-           데이터 매핑 엔진 · GridRail 물리 엔진 · Jockey Engine 포함</p>
-        <span class="size-badge">PDF · 127 KB · A4</span>
+        <h2>컴퓨터프로그램저작물 등록신청서</h2>
+        <p>한국저작권위원회 제출용 · 알고리즘 4종 전체 기재<br>
+           실시간 배당률 대입 엔진 · 사용자 수동 보정 엔진 · GridRail 물리 엔진 · Jockey Engine<br>
+           P_final 9중 멀티플라이어 연산식 · 법률적 사행성 차별화 진술 포함</p>
+        <div class="tags">
+          <span class="tag blue">PDF · 130 KB</span>
+          <span class="tag green">A4 · 한국저작권위원회</span>
+          <span class="tag orange">알고리즘 4종</span>
+        </div>
       </div>
-      <a class="dl-btn" href="01_저작권등록신청서.pdf" download="경마통_저작권등록신청서.pdf">
-        ⬇ 다운로드
-      </a>
+      <a class="dl-btn" href="01_저작권등록신청서.pdf" download="경마통_저작권등록신청서.pdf">⬇ 다운로드</a>
     </div>
 
-    <!-- 특허 등록 출원서 -->
-    <div class="card">
+    <div class="card featured">
       <div class="icon">🔬</div>
       <div class="info">
         <div class="num">Document 02</div>
         <h2>특허 등록 출원서</h2>
         <p>특허청 제출용 · 도면부호 포함 (도 1~3)<br>
-           청구항 6개 · Jockey Engine 방법 특허 · 트랙 렌더링 특허</p>
-        <span class="size-badge">PDF · 108 KB · A4</span>
+           청구항 6개 · 실시간 배당률 파라미터 오버라이딩 방법특허<br>
+           사용자 수동 보정 기반 모의 레이스 시스템 · 선행기술 차별성 분석</p>
+        <div class="tags">
+          <span class="tag blue">PDF · 125 KB</span>
+          <span class="tag green">A4 · 특허청</span>
+          <span class="tag purple">청구항 6개</span>
+        </div>
       </div>
-      <a class="dl-btn" href="02_특허등록출원서.pdf" download="경마통_특허등록출원서.pdf">
-        ⬇ 다운로드
-      </a>
+      <a class="dl-btn" href="02_특허등록출원서.pdf" download="경마통_특허등록출원서.pdf">⬇ 다운로드</a>
     </div>
 
-    <!-- 사업계획서 -->
-    <div class="card">
-      <div class="icon">💼</div>
-      <div class="info">
-        <div class="num">Document 03</div>
-        <h2>사업계획서</h2>
-        <p>투자유치용 · 3억원 투자 계획 · 시장 수익 분석<br>
-           마권 6.5조 시장 · 정보지/유튜브 대체 수익 분석 포함</p>
-        <span class="size-badge">PDF · 180 KB · A4</span>
-      </div>
-      <a class="dl-btn" href="03_사업계획서.pdf" download="경마통_사업계획서.pdf">
-        ⬇ 다운로드
-      </a>
-    </div>
-
-    <!-- 사용자 보정 모듈 저작권 명세서 -->
     <div class="card">
       <div class="icon">🎛</div>
       <div class="info">
         <div class="num">Document 04</div>
-        <h2>저작권 명세서 — 사용자 수동 보정 모듈</h2>
+        <h2>추가 저작권 명세서 — 사용자 수동 보정 모듈</h2>
         <p>수동 변수 보정 패널 UI 레이아웃 · 데이터 바인딩 트리 구조<br>
-           userOddsWeight · userJockeyBuff · spurtTiming 소스코드 전문</p>
-        <span class="size-badge">PDF · 149 KB · A4</span>
+           userOddsWeight · userJockeyBuff · spurtTiming 핵심 소스코드 전문<br>
+           API 파라미터 오버라이딩 기술 명세 완전판</p>
+        <div class="tags">
+          <span class="tag blue">PDF · 149 KB</span>
+          <span class="tag orange">소스코드 발췌</span>
+        </div>
       </div>
-      <a class="dl-btn" href="04_저작권_사용자보정모듈.pdf" download="경마통_저작권_사용자보정모듈.pdf">
-        ⬇ 다운로드
-      </a>
+      <a class="dl-btn" href="04_저작권_사용자보정모듈.pdf" download="경마통_저작권_사용자보정모듈.pdf">⬇ 다운로드</a>
+    </div>
+
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- 사업계획서 -->
+  <div class="section-label">투자 유치 문서</div>
+  <div class="cards">
+
+    <div class="card featured">
+      <div class="icon">💼</div>
+      <div class="info">
+        <div class="num">Document 03</div>
+        <h2>사업계획서 · 투자유치용</h2>
+        <p>KRA 마권 6.5조 시장 · 연간 방문자 954만명 기반 시장 분석<br>
+           법률적 사행성 차별화 근거 완전 기재 · 3억원 투자 집행 계획<br>
+           3개년 재무 계획 · Break-Even 구독자 1,011명 · TAM/SAM/SOM 분석</p>
+        <div class="tags">
+          <span class="tag blue">PDF · 142 KB</span>
+          <span class="tag green">투자유치용 · 기밀</span>
+          <span class="tag orange">3억원 투자 계획</span>
+          <span class="tag purple">3개년 재무</span>
+        </div>
+      </div>
+      <a class="dl-btn" href="03_사업계획서.pdf" download="경마통_사업계획서.pdf">⬇ 다운로드</a>
     </div>
 
   </div>
@@ -210,11 +211,12 @@
   <div class="divider"></div>
 
   <div class="footer">
-    <p>경마통 Race Master — AI 기반 실시간 경마 레이스 시뮬레이터</p>
-    <p>본 문서의 모든 알고리즘·수식·기술 내용은 저작권법에 의해 보호됩니다.</p>
-    <p style="margin-top:8px; color:rgba(255,255,255,0.15)">
-      본 서비스는 공공데이터포털 KRA API를 활용한 독립적 정보 분석 서비스이며,<br>
-      한국마사회 공식 서비스가 아닙니다.
+    <p>🏇 경마통 Race Master — 실시간 KRA 배당률 기반 AI 경마 모의 시뮬레이터</p>
+    <p>본 문서의 모든 알고리즘·수식·소스코드는 저작권법 및 특허법에 의해 보호됩니다.</p>
+    <p style="margin-top:10px; color:rgba(255,255,255,0.13)">
+      본 서비스는 공공데이터포털 KRA API를 활용한 독립적 게임 및 정보 분석 서비스이며,<br>
+      한국마사회 공식 서비스가 아닙니다. 금전 투입·환급 구조 없음 — 사행행위 해당 없음.<br>
+      Copyright © 2025 경마통 Race Master. All rights reserved.
     </p>
   </div>
 
