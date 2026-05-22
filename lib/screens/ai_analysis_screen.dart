@@ -174,6 +174,13 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
       'baseSpeed = rcWins×50 + jockeyRcWins×30 + (60-wgBudam)×0.2\n'
       'stamina = 100 − |체중변동|×1.5 − 주로저항계수×100',
     ),
+    (
+      'Jockey Engine',
+      '🥇',
+      '엘리트 기수 승률≥한22% 자동 판정 → 3종 상태 실시간 바인딩\n'
+      '안전주행(2승+): G1F 감속 −10% + 코너 인코스 억제 −30%\n'
+      '독기(3경기+ & 0승): G1F 가속 +15% · 고배당 서지: +20% (오후 배율 ×1.35)',
+    ),
   ];
 
   @override
@@ -214,6 +221,8 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
                     _buildProcessSection(),
                     const SizedBox(height: 20),
                     _buildDataMappingSection(),
+                    const SizedBox(height: 20),
+                    _buildJockeyEngineSection(),
                     const SizedBox(height: 20),
                     _buildRaceEngineSection(),
                     const SizedBox(height: 20),
@@ -655,6 +664,149 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
             ),
           );
         }),
+      ],
+    );
+  }
+
+  // ── Jockey Engine 섹션 ─────────────────────────────────────────────────────
+  Widget _buildJockeyEngineSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionTitle('🥇 Jockey Early-Success Relaxation & High-Dividend Cluster Engine'),
+        const SizedBox(height: 10),
+
+        // ── 엔진 상수 카드 ────────────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF1A0E2E), Color(0xFF0A0618)],
+            ),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: const Color(0xFFFFD700).withValues(alpha: 0.5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                          colors: [Color(0xFFB8860B), Color(0xFFFFD700)]),
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: const Text('🥇  Jockey Engine v1.0',
+                        style: TextStyle(
+                            color: Color(0xFF1A0E00),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('당일 기수 누적 성적 기반 실시간 물리 보정 엔진',
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.45),
+                            fontSize: 10)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _dtoFieldRow('kEliteJockeyThreshold', 'double 0.22',
+                  '엘리트 기수 승률 임계  jockeyRcWins ≥ 22% 로 엘리트 판정', const Color(0xFFFFD700)),
+              _dtoFieldRow('kSafeModeTriggerWins', 'int 2',
+                  '안전주행 발동 승수  엘리트 기수 당일 2승 이상 달성 시 발동', const Color(0xFFFF7043)),
+              _dtoFieldRow('kMentalBuffTriggerRaces', 'int 3',
+                  '독기모드 발동 출전수  엘리트 기수 3경기 이상 참가 & 0승 조건', const Color(0xFF64B5F6)),
+              _dtoFieldRow('kHighOddsWindowThreshold', 'double 0.50',
+                  '고배당 윈도우  안전주행 기수 비율 50% 이상 시 경주 전체 발동', const Color(0xFFB388FF)),
+              _dtoFieldRow('kAfternoonMaxScale', 'double 1.35',
+                  '오후 누적 배율  raceNo 1당 1.00 → 9경주+ 시 1.35 선형 증가', const Color(0xFF81C784)),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── 3종 동작 모드 카드 ────────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF080614),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: const Color(0xFF90CAF9).withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('🎮  3종 동작 모드 — P_final 바인딩 연산식',
+                  style: TextStyle(
+                      color: Color(0xFF90CAF9),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900)),
+              const SizedBox(height: 12),
+              _injectionRow(
+                zone: '안전',
+                zoneColor: const Color(0xFFFF7043),
+                label: 'SafeMode — 안전주행 페널티',
+                desc:
+                    '엘리트 기수(jockeyRcWins≥22%) 당일 2승+ 달성 시 발동\n'
+                    '[코너 Zone2] laneF += kAggressivenessReduction×(1−laneF) → 인코스 파고들기 억제 −30%\n'
+                    '[G1F Zone4] speedMult ×= (1.0 − 0.10 × afternoonScale)  → 최대 −13.5% 감속\n'
+                    '안전 주행 방지: 다음 승리가 확정된 기수의 막판 승부원 하락 모델링',
+              ),
+              const SizedBox(height: 10),
+              _injectionRow(
+                zone: '독기',
+                zoneColor: const Color(0xFF64B5F6),
+                label: 'MentalBuff — 독기 모드',
+                desc:
+                    '엘리트 기수 3경기 이상 출전 중 0승 조건 시 독기 발동\n'
+                    '[G1F Zone4] speedMult ×= (1.0 + 0.15 × afternoonScale)  → 최대 +20.25% 가속\n'
+                    '첫 승리 확정 시 recordFinish(won:true) 호출 → 직전 Reset (1승 직후 독기 해제)',
+              ),
+              const SizedBox(height: 10),
+              _injectionRow(
+                zone: '서지',
+                zoneColor: const Color(0xFFB388FF),
+                label: 'SurgeBuff — 고배당 서지',
+                desc:
+                    '안전주행 기수 비율 ≥ 50% 인 경주 에서 HighOddsWindow 발동\n'
+                    '배당 상위 3마번 자동 선정 → surgeBuff=true 주입 (_initHorses 후 즉시)\n'
+                    '[G1F Zone4] speedMult ×= 1.0 + 0.20 × afternoonScale  → 최대 +27% 가속\n'
+                    '경주 종료 시 HighOddsWindowDetector.reset() → 다음 경주 재평가',
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── 오후 배율 스케일 카드 ──────────────────────────────────────────────
+        _mappingFormulaCard(
+          icon: '🌅',
+          title: '[오후 누적 배율] afternoonScale 연산식',
+          color: const Color(0xFF81C784),
+          bgColor: const Color(0xFF061206),
+          borderColor: const Color(0xFF81C784),
+          formula:
+              'afternoonScale(raceNo)  =\n'
+              '  1.0 + clamp(raceNo−1, 0, 8) / 8.0 × (1.35−1.0)\n\n'
+              '  raceNo 1 → afScale 1.00\n'
+              '  raceNo 5 → afScale 1.175\n'
+              '  raceNo 9+ → afScale 1.35  (MAX)',
+          note: 'P_final = speedMult × [다음 한 멀티플라이어 동시 적용]\n'
+              '· G1F우수마 버프 (computeG1fBoostMult) + 안전페널티 + 독기버프 + 서지버프\n'
+              '· 코너 aggressiveness 억제는 laneF 보정으로 실시간 레이아웃 충돌에도 반영\n'
+              '· 당일 승리후 자동 safeMode/mentalBuff 재평가 (recordFinish() 콜백)',
+        ),
       ],
     );
   }
