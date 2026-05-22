@@ -149,6 +149,30 @@ class HorseEntry {
   /// kG1fBoostThreshold(0.65) 이상이면 Zone4 가속도 +25% 버프 대상
   final double g1fRating;
 
+  // ── KRA API26_2 상금 필드 (chaksun1~5, chaksunT, chaksunY, chaksun_6m) ──
+  /// 이번 경주 1착 상금 (원) — KRA API: chaksun1
+  final int prizeWin;
+  /// 이번 경주 2착 상금 (원) — KRA API: chaksun2
+  final int prize2nd;
+  /// 이번 경주 3착 상금 (원) — KRA API: chaksun3
+  final int prize3rd;
+  /// 이번 경주 4착 상금 (원) — KRA API: chaksun4
+  final int prize4th;
+  /// 이번 경주 5착 상금 (원) — KRA API: chaksun5
+  final int prize5th;
+  /// 통산 수득 상금 (원) — KRA API: chaksunT
+  final int prizeTotalCareer;
+  /// 최근 1년 수득 상금 (원) — KRA API: chaksunY
+  final int prizeTotal1Year;
+  /// 최근 6개월 수득 상금 (원) — KRA API: chaksun_6m
+  final int prizeTotal6Month;
+
+  /// 상금 경쟁력 지수 (0.0~1.0 정규화) — 최근 1년 상금 기반 AI 가중치
+  /// 계산: (prizeTotal1Year / kPrizeNormalizeFactor).clamp(0.0, 1.0)
+  /// kPrizeNormalizeFactor = 100,000,000 (1억 기준 정규화)
+  double get prizeCompetitiveness =>
+      (prizeTotal1Year / 100000000.0).clamp(0.0, 1.0);
+
   HorseEntry({
     required this.gateNo,
     required this.horseName,
@@ -167,11 +191,20 @@ class HorseEntry {
     required this.odds,
     this.isCancelled = false,
     // API 원시 파라미터 (기본값: 미제공 시 중립값)
-    this.horseRegNo   = '',
-    this.rcWins       = 0.0,
-    this.jockeyRcWins = 0.0,
-    this.wgBudam      = 55.0,
-    this.g1fRating    = 0.5,
+    this.horseRegNo        = '',
+    this.rcWins            = 0.0,
+    this.jockeyRcWins      = 0.0,
+    this.wgBudam           = 55.0,
+    this.g1fRating         = 0.5,
+    // API26_2 상금 필드 (기본값: 0)
+    this.prizeWin          = 0,
+    this.prize2nd          = 0,
+    this.prize3rd          = 0,
+    this.prize4th          = 0,
+    this.prize5th          = 0,
+    this.prizeTotalCareer  = 0,
+    this.prizeTotal1Year   = 0,
+    this.prizeTotal6Month  = 0,
   });
 
   /// 최종 AI 점수 = 기본점수 + (유저가점(UserGValue) * 배당가중치)
@@ -186,29 +219,46 @@ class HorseEntry {
     double? jockeyRcWins,
     double? wgBudam,
     double? g1fRating,
+    // API26_2 상금 필드
+    int? prizeWin,
+    int? prize2nd,
+    int? prize3rd,
+    int? prize4th,
+    int? prize5th,
+    int? prizeTotalCareer,
+    int? prizeTotal1Year,
+    int? prizeTotal6Month,
   }) {
     return HorseEntry(
-      gateNo:       gateNo,
-      horseName:    horseName,
-      jockeyName:   jockeyName,
-      trainerName:  trainerName,
-      weight:       weight,
-      weightChange: weightChange,
-      rating:       rating,
-      speedStat:    speedStat,
-      staminaStat:  staminaStat,
-      formStat:     formStat,
-      trackFitStat: trackFitStat,
-      baseScore:    baseScore,
-      userBonus:    userBonus    ?? this.userBonus,
-      recentRecord: recentRecord,
-      odds:         odds,
-      isCancelled:  isCancelled  ?? this.isCancelled,
-      horseRegNo:   horseRegNo   ?? this.horseRegNo,
-      rcWins:       rcWins       ?? this.rcWins,
-      jockeyRcWins: jockeyRcWins ?? this.jockeyRcWins,
-      wgBudam:      wgBudam      ?? this.wgBudam,
-      g1fRating:    g1fRating    ?? this.g1fRating,
+      gateNo:            gateNo,
+      horseName:         horseName,
+      jockeyName:        jockeyName,
+      trainerName:       trainerName,
+      weight:            weight,
+      weightChange:      weightChange,
+      rating:            rating,
+      speedStat:         speedStat,
+      staminaStat:       staminaStat,
+      formStat:          formStat,
+      trackFitStat:      trackFitStat,
+      baseScore:         baseScore,
+      userBonus:         userBonus         ?? this.userBonus,
+      recentRecord:      recentRecord,
+      odds:              odds,
+      isCancelled:       isCancelled       ?? this.isCancelled,
+      horseRegNo:        horseRegNo        ?? this.horseRegNo,
+      rcWins:            rcWins            ?? this.rcWins,
+      jockeyRcWins:      jockeyRcWins      ?? this.jockeyRcWins,
+      wgBudam:           wgBudam           ?? this.wgBudam,
+      g1fRating:         g1fRating         ?? this.g1fRating,
+      prizeWin:          prizeWin          ?? this.prizeWin,
+      prize2nd:          prize2nd          ?? this.prize2nd,
+      prize3rd:          prize3rd          ?? this.prize3rd,
+      prize4th:          prize4th          ?? this.prize4th,
+      prize5th:          prize5th          ?? this.prize5th,
+      prizeTotalCareer:  prizeTotalCareer  ?? this.prizeTotalCareer,
+      prizeTotal1Year:   prizeTotal1Year   ?? this.prizeTotal1Year,
+      prizeTotal6Month:  prizeTotal6Month  ?? this.prizeTotal6Month,
     );
   }
 }

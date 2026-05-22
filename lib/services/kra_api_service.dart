@@ -5,29 +5,135 @@ import '../models/race_models.dart';
 import 'kra_mock_service.dart';
 import 'kra_server_status.dart';
 
-// ── HTTP 500 인터셉터 헬퍼 ──────────────────────────────────────
+// ── KRA 공식 에러 코드 정의 ────────────────────────────────────
+// 출처: KRA 공공데이터포털 API26_2 명세서 (OpenAPI 에러코드 정리)
+// https://apis.data.go.kr/B551015/API26_2
+class KraApiErrorCode {
+  static const String applicationError       = '1';   // 어플리케이션 에러
+  static const String invalidParam           = '10';  // 잘못된 요청 파라미터
+  static const String noService              = '12';  // 해당 오픈API 서비스 없거나 폐기됨
+  static const String accessDenied          = '20';  // 서비스 접근 거부
+  static const String requestLimitExceeded  = '22';  // 서비스 요청 제한 횟수 초과
+  static const String serviceKeyNotReg      = '30';  // 등록되지 않은 서비스키
+  static const String serviceKeyExpired     = '31';  // 기한 만료된 서비스키
+  static const String unregisteredIp        = '32';  // 등록되지 않은 IP
+  static const String unknown               = '99';  // 기타 에러
+  static const String normal                = '00';  // 정상
+
+  /// 에러 코드 → 사용자 친화 메시지 변환
+  static String toMessage(String code) {
+    switch (code) {
+      case '1':  return 'KRA API 어플리케이션 오류';
+      case '10': return 'KRA API 잘못된 요청 파라미터';
+      case '12': return 'KRA API 서비스가 존재하지 않거나 폐기되었습니다';
+      case '20': return 'KRA API 접근이 거부되었습니다 (서비스키 권한 확인 필요)';
+      case '22': return 'KRA API 일일 요청 한도를 초과하였습니다';
+      case '30': return 'KRA API 서비스키가 등록되지 않았습니다';
+      case '31': return 'KRA API 서비스키 사용 기한이 만료되었습니다';
+      case '32': return 'KRA API 등록되지 않은 IP에서 요청되었습니다';
+      case '99': return 'KRA API 알 수 없는 오류 (기타 에러)';
+      default:   return 'KRA API 오류 (코드: $code)';
+    }
+  }
+
+  /// 서비스키 관련 오류 여부 (30, 31, 32, 20)
+  static bool isAuthError(String code) =>
+      code == '20' || code == '30' || code == '31' || code == '32';
+
+  /// 일시적 오류 여부 (1, 10, 22, 99) — 재시도 의미 있음
+  static bool isRetryable(String code) =>
+      code == '1' || code == '10' || code == '22' || code == '99';
+
+  /// 영구적 오류 여부 (12) — 재시도 불필요
+  static bool isPermanent(String code) => code == '12';
+}
+
+// ── HTTP 500 / KRA 공식 에러코드 인터셉터 ───────────────────────
 // 모든 KRA API 응답을 통과시키며 장애 여부를 전역 KraServerStatus에 보고
+// 지원 에러코드: 1, 10, 12, 20, 22, 30, 31, 32, 99 (API 명세서 전체)
 class _KraInterceptor {
   static void check(http.Response resp) {
     final status = KraServerStatus();
+
+    // ── HTTP 레벨 장애 감지 ──────────────────────────────────────
     if (resp.statusCode == 500 ||
         resp.body.contains('Unexpected errors') ||
         resp.body.contains('unexpected errors')) {
-      // 🔴 장애 보고
       status.reportServerError(
-        errorMsg: 'HTTP ${resp.statusCode} — ${resp.body.trim()}',
+        errorMsg: 'HTTP ${resp.statusCode} — 서버 내부 오류 (Unexpected errors)',
       );
-    } else if (resp.statusCode == 200) {
+      return;
+    }
+
+    // ── HTTP 200 이지만 KRA 공식 에러코드 포함 여부 확인 ─────────
+    if (resp.statusCode == 200) {
       try {
-        final data = jsonDecode(resp.body);
-        final resultCode =
-            data['response']?['header']?['resultCode']?.toString() ?? '';
-        // resultCode 00=정상, 30=인증오류 — 둘 다 서버가 살아있음
-        if (resultCode.isNotEmpty) {
-          // ✅ 서버 정상 응답 → 장애 해제
-          status.reportServerOk();
+        // XML 응답인 경우 resultCode 태그로 추출
+        final body = resp.body;
+        String? resultCode;
+
+        if (body.contains('<resultCode>')) {
+          // XML 파싱: <resultCode>XX</resultCode>
+          final match = RegExp(r'<resultCode>(\d+)<\/resultCode>').firstMatch(body);
+          resultCode = match?.group(1);
+        } else {
+          // JSON 파싱
+          final data = jsonDecode(body);
+          resultCode = data['response']?['header']?['resultCode']?.toString();
         }
-      } catch (_) {}
+
+        if (resultCode == null || resultCode.isEmpty) {
+          // resultCode 없음 → JSON/XML 구조 이상
+          return;
+        }
+
+        if (resultCode == KraApiErrorCode.normal) {
+          // ✅ 00 = 정상 → 장애 해제
+          status.reportServerOk();
+          return;
+        }
+
+        // ── KRA 공식 에러코드 처리 ────────────────────────────────
+        final errMsg = KraApiErrorCode.toMessage(resultCode);
+        if (kDebugMode) {
+          debugPrint('[_KraInterceptor] ⚠️ KRA 에러코드 $resultCode: $errMsg');
+        }
+
+        // 서비스키·접근 권한 에러(20,30,31,32): 서버는 살아있음 → 장애로 취급하지 않음
+        if (KraApiErrorCode.isAuthError(resultCode)) {
+          // 서버 자체는 정상이므로 reportServerOk()
+          // 단, 인증 관련 에러이므로 디버그 로그만 출력
+          if (kDebugMode) {
+            debugPrint('[_KraInterceptor] 🔑 인증 관련 오류 ($resultCode) — 서버 자체는 정상');
+          }
+          status.reportServerOk();
+          return;
+        }
+
+        // 서비스 폐기(12): 영구 오류 → 장애로 보고
+        if (KraApiErrorCode.isPermanent(resultCode)) {
+          status.reportServerError(
+            errorMsg: '$errMsg (resultCode=$resultCode)',
+          );
+          return;
+        }
+
+        // 일시적 오류(1, 10, 22, 99): 장애로 보고 (재시도 가능)
+        if (KraApiErrorCode.isRetryable(resultCode)) {
+          status.reportServerError(
+            errorMsg: '$errMsg (resultCode=$resultCode)',
+          );
+          return;
+        }
+
+        // 그 외 알 수 없는 코드
+        if (kDebugMode) {
+          debugPrint('[_KraInterceptor] ❓ 미정의 resultCode=$resultCode');
+        }
+
+      } catch (_) {
+        // 파싱 실패 → 무시 (정상 응답으로 처리)
+      }
     }
   }
 }
@@ -172,43 +278,114 @@ class KraApiService {
     }).whereType<RaceInfo>().toList();
   }
 
-  // ── API26_2 파싱 ──
+  // ── API26_2 파싱 ──────────────────────────────────────────────
+  // entrySheet_2 응답 필드 전체 활용:
+  //   chulNo → gateNo
+  //   hrName → horseName
+  //   jkName → jockeyName
+  //   trName → trainerName
+  //   hrNo   → horseRegNo
+  //   wgBudam → wgBudam (부담중량, 실제 API 값 사용)
+  //   rating  → rating
+  //   ord1CntT / rcCntT → rcWins (통산 경주마 승률 직접 계산)
+  //   chaksun1~5   → prizeWin~prize5th (이번 경주 착순 상금)
+  //   chaksunT     → prizeTotalCareer  (통산 수득 상금)
+  //   chaksunY     → prizeTotal1Year   (최근 1년 수득 상금)
+  //   chaksun_6m   → prizeTotal6Month  (최근 6개월 수득 상금)
+  // ─────────────────────────────────────────────────────────────
   static List<HorseEntry> _parseHorseEntries(List<dynamic> items) {
     return items.map<HorseEntry?>((item) {
       try {
-        final gateNo = int.tryParse(item['chulNo']?.toString() ?? '1') ?? 1;
-        final horseName = item['hrName']?.toString() ?? '미정';
-        final jockeyName = item['jkName']?.toString() ?? '미정';
-        final trainerName = item['trName']?.toString() ?? '미정';
-        final weight = int.tryParse(item['hrWeight']?.toString() ?? '500') ?? 500;
+        // ── 기본 식별 정보 ──────────────────────────────────────
+        final gateNo       = int.tryParse(item['chulNo']?.toString() ?? '1') ?? 1;
+        final horseName    = item['hrName']?.toString() ?? '미정';
+        final jockeyName   = item['jkName']?.toString() ?? '미정';
+        final trainerName  = item['trName']?.toString() ?? '미정';
+        final horseRegNo   = item['hrNo']?.toString() ?? '';
+
+        // ── 체중 / 부담중량 ────────────────────────────────────
+        final weight       = int.tryParse(item['hrWeight']?.toString() ?? '500') ?? 500;
         final weightChange = int.tryParse(item['wgHr']?.toString() ?? '0') ?? 0;
-        final rating = double.tryParse(item['rating']?.toString() ?? '50') ?? 50.0;
-        final odds = double.tryParse(item['winOdds']?.toString() ?? '5.0') ?? 5.0;
+        // wgBudam: API26_2 실제 필드 (예: "53" → 53.0 kg)
+        final wgBudam      = double.tryParse(item['wgBudam']?.toString() ?? '55') ?? 55.0;
+
+        // ── 레이팅 / 배당 / 성적 ──────────────────────────────
+        final ratingRaw    = item['rating']?.toString() ?? '';
+        final rating       = double.tryParse(ratingRaw) ?? 50.0;
+        final odds         = double.tryParse(item['winOdds']?.toString() ?? '5.0') ?? 5.0;
         final recentRecord = item['rcResult']?.toString() ?? '미정';
 
-        // 스탯 계산 (레이팅 기반)
-        final speedStat = (rating * 0.8 + 20).clamp(0.0, 100.0);
-        final staminaStat = (rating * 0.7 + 25 + (weightChange < 0 ? 5 : 0)).clamp(0.0, 100.0);
-        final formStat = (rating * 0.6 + 30).clamp(0.0, 100.0);
-        final trackFitStat = (rating * 0.5 + 35).clamp(0.0, 100.0);
-        final baseScore = (speedStat * 0.35 + staminaStat * 0.25 +
-            formStat * 0.20 + trackFitStat * 0.10 + rating * 0.10).clamp(0.0, 100.0);
+        // ── 통산 경주마 승률 직접 계산 ─────────────────────────
+        // ord1CntT: 통산1위횟수 / rcCntT: 통산출주횟수
+        final ord1CntT = int.tryParse(item['ord1CntT']?.toString() ?? '0') ?? 0;
+        final rcCntT   = int.tryParse(item['rcCntT']?.toString() ?? '0') ?? 0;
+        // 0으로 나누기 방지: 출주 이력 없으면 0.0
+        final rcWins   = rcCntT > 0 ? (ord1CntT / rcCntT).clamp(0.0, 1.0) : 0.0;
+
+        // ── 최근 1년 승률 (복수 지표 가중 평균) ─────────────────
+        // ord1CntY / rcCntY 기반 최근 폼 반영
+        final ord1CntY = int.tryParse(item['ord1CntY']?.toString() ?? '0') ?? 0;
+        final rcCntY   = int.tryParse(item['rcCntY']?.toString() ?? '0') ?? 0;
+        final rcWins1Y = rcCntY > 0 ? (ord1CntY / rcCntY).clamp(0.0, 1.0) : 0.0;
+
+        // ── 착순 상금 파싱 (원 단위) ───────────────────────────
+        final prizeWin        = int.tryParse(item['chaksun1']?.toString()   ?? '0') ?? 0;
+        final prize2nd        = int.tryParse(item['chaksun2']?.toString()   ?? '0') ?? 0;
+        final prize3rd        = int.tryParse(item['chaksun3']?.toString()   ?? '0') ?? 0;
+        final prize4th        = int.tryParse(item['chaksun4']?.toString()   ?? '0') ?? 0;
+        final prize5th        = int.tryParse(item['chaksun5']?.toString()   ?? '0') ?? 0;
+        final prizeTotalCareer= int.tryParse(item['chaksunT']?.toString()   ?? '0') ?? 0;
+        final prizeTotal1Year = int.tryParse(item['chaksunY']?.toString()   ?? '0') ?? 0;
+        final prizeTotal6Month= int.tryParse(item['chaksun_6m']?.toString() ?? '0') ?? 0;
+
+        // ── 스탯 계산 ─────────────────────────────────────────
+        // rating 기반에 rcWins·rcWins1Y·상금 지수를 보정 인자로 활용
+        final prizeComp    = (prizeTotal1Year / 100000000.0).clamp(0.0, 1.0); // 1억 기준 정규화
+        final winBonus     = (rcWins * 10.0) + (rcWins1Y * 5.0);   // 통산+최근 승률 가산
+        final prizebonus   = prizeComp * 5.0;                        // 상금 경쟁력 가산 (max +5)
+
+        final speedStat    = (rating * 0.8 + 20 + winBonus * 0.4).clamp(0.0, 100.0);
+        final staminaStat  = (rating * 0.7 + 25 + (weightChange < 0 ? 5 : 0) + prizebonus * 0.3).clamp(0.0, 100.0);
+        final formStat     = (rating * 0.6 + 30 + rcWins1Y * 8.0).clamp(0.0, 100.0);
+        final trackFitStat = (rating * 0.5 + 35 + winBonus * 0.2).clamp(0.0, 100.0);
+        final baseScore    = (speedStat * 0.35 + staminaStat * 0.25 +
+            formStat * 0.20 + trackFitStat * 0.10 +
+            rating   * 0.07 + prizebonus   * 0.03).clamp(0.0, 100.0);
+
+        // ── g1fRating: 최근 6개월 상금 기반 추정 ─────────────
+        // 실제 G1F 데이터가 없을 때 상금 기반으로 근사 추정
+        final g1fRating = (prizeTotal6Month / 50000000.0).clamp(0.0, 1.0); // 5천만 기준
 
         return HorseEntry(
-          gateNo: gateNo,
-          horseName: horseName,
-          jockeyName: jockeyName,
-          trainerName: trainerName,
-          weight: weight,
-          weightChange: weightChange,
-          rating: rating,
-          speedStat: speedStat,
-          staminaStat: staminaStat,
-          formStat: formStat,
-          trackFitStat: trackFitStat,
-          baseScore: baseScore,
-          recentRecord: recentRecord,
-          odds: odds,
+          gateNo:           gateNo,
+          horseName:        horseName,
+          jockeyName:       jockeyName,
+          trainerName:      trainerName,
+          weight:           weight,
+          weightChange:     weightChange,
+          rating:           rating,
+          speedStat:        speedStat,
+          staminaStat:      staminaStat,
+          formStat:         formStat,
+          trackFitStat:     trackFitStat,
+          baseScore:        baseScore,
+          recentRecord:     recentRecord,
+          odds:             odds,
+          // API 원시 파라미터
+          horseRegNo:       horseRegNo,
+          rcWins:           rcWins,
+          jockeyRcWins:     0.0,   // API26_2에 기수 개인 승률 없음 → 별도 API 또는 0.0
+          wgBudam:          wgBudam,
+          g1fRating:        g1fRating,
+          // 상금 필드
+          prizeWin:         prizeWin,
+          prize2nd:         prize2nd,
+          prize3rd:         prize3rd,
+          prize4th:         prize4th,
+          prize5th:         prize5th,
+          prizeTotalCareer: prizeTotalCareer,
+          prizeTotal1Year:  prizeTotal1Year,
+          prizeTotal6Month: prizeTotal6Month,
         );
       } catch (_) {
         return null;
