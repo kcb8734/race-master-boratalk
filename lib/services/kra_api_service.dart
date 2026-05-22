@@ -3,6 +3,34 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import '../models/race_models.dart';
 import 'kra_mock_service.dart';
+import 'kra_server_status.dart';
+
+// ── HTTP 500 인터셉터 헬퍼 ──────────────────────────────────────
+// 모든 KRA API 응답을 통과시키며 장애 여부를 전역 KraServerStatus에 보고
+class _KraInterceptor {
+  static void check(http.Response resp) {
+    final status = KraServerStatus();
+    if (resp.statusCode == 500 ||
+        resp.body.contains('Unexpected errors') ||
+        resp.body.contains('unexpected errors')) {
+      // 🔴 장애 보고
+      status.reportServerError(
+        errorMsg: 'HTTP ${resp.statusCode} — ${resp.body.trim()}',
+      );
+    } else if (resp.statusCode == 200) {
+      try {
+        final data = jsonDecode(resp.body);
+        final resultCode =
+            data['response']?['header']?['resultCode']?.toString() ?? '';
+        // resultCode 00=정상, 30=인증오류 — 둘 다 서버가 살아있음
+        if (resultCode.isNotEmpty) {
+          // ✅ 서버 정상 응답 → 장애 해제
+          status.reportServerOk();
+        }
+      } catch (_) {}
+    }
+  }
+}
 
 /// 한국마사회 실제 API 연동 서비스
 /// 인증키: ef117e7bebbcea7586234f85acd8292dba6a6d95230131aec62a10b5b2610885
@@ -26,7 +54,9 @@ class KraApiService {
       if (kDebugMode) debugPrint('[KRA API187] $uri');
 
       final resp = await http.get(uri).timeout(const Duration(seconds: 8));
-      if (resp.statusCode == 200) {
+      _KraInterceptor.check(resp); // ★ HTTP 500 인터셉터
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
         final data = jsonDecode(resp.body);
         final items = _extractItems(data);
         if (items != null && items.isNotEmpty) {
@@ -56,7 +86,9 @@ class KraApiService {
       if (kDebugMode) debugPrint('[KRA API26_2] $uri');
 
       final resp = await http.get(uri).timeout(const Duration(seconds: 8));
-      if (resp.statusCode == 200) {
+      _KraInterceptor.check(resp); // ★ HTTP 500 인터셉터
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
         final data = jsonDecode(resp.body);
         final items = _extractItems(data);
         if (items != null && items.isNotEmpty) {
@@ -199,7 +231,9 @@ class KraApiService {
       if (kDebugMode) debugPrint('[KRA API4_3] $resultUri');
 
       final resp = await http.get(resultUri).timeout(const Duration(seconds: 8));
-      if (resp.statusCode == 200) {
+      _KraInterceptor.check(resp); // ★ HTTP 500 인터셉터
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
         final data = jsonDecode(resp.body);
         final items = _extractItems(data);
         if (items != null && items.isNotEmpty) {
@@ -283,8 +317,10 @@ class KraApiService {
           '&numOfRows=1&pageNo=1&meet=1&rc_date=${_formatDate(day.date)}&_type=json',
         );
         final resp = await http.get(uri).timeout(const Duration(seconds: 5));
+        _KraInterceptor.check(resp); // ★ HTTP 500 인터셉터
         bool hasData = false;
-        if (resp.statusCode == 200) {
+        if (resp.statusCode == 200 &&
+            !resp.body.contains('Unexpected errors')) {
           final data = jsonDecode(resp.body);
           final items = _extractItems(data);
           hasData = items != null && items.isNotEmpty;
