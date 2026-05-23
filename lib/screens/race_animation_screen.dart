@@ -1487,33 +1487,17 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
               ),
             ),
 
-            // ── 게이트뷰 Widget 오버레이 ──
+            // ── 게이트뷰 Flutter 위젯 오버레이 (가로 스크롤 지원) ──
             // _gateAnim: 1.0(대기)→0.0(페이드아웃완료)
-            // AnimatedBuilder로 _gateAnim 구독 → opacity 즉시 반영
             AnimatedBuilder(
               animation: _gateAnim,
               builder: (_, __) {
                 final op = _gateAnim.value;
-                if (op <= 0.01) return const SizedBox.shrink(); // 완전 투명 시 Widget 제거
+                if (op <= 0.01) return const SizedBox.shrink();
                 return Positioned.fill(
                   child: Opacity(
                     opacity: op,
-                    child: AnimatedBuilder(
-                      animation: _gatePulse,
-                      builder: (_, __) => CustomPaint(
-                        size: size,
-                        painter: _GatePainter(
-                          horses:    _horses,
-                          distance:  widget.race.distance,
-                          raceNo:    widget.race.raceNo,
-                          venueCode: widget.race.venueCode,
-                          venueName: _venueName,
-                          gatePulse: _gatePulse.value,
-                          isJeju:    _isJeju,
-                          isBusan:   _isBusan,
-                        ),
-                      ),
-                    ),
+                    child: _buildFlutterGateOverlay(size),
                   ),
                 );
               },
@@ -1667,6 +1651,312 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // ── Flutter 게이트뷰 오버레이 (가로 스크롤 지원 — Canvas 대체) ──
+  Widget _buildFlutterGateOverlay(Size size) {
+    final horses = _horses;
+    final n = horses.length;
+    if (n == 0) return const SizedBox.shrink();
+
+    // 순서: 서울/부산경남 = 오른쪽=1번(CCW), 제주 = 왼쪽=1번
+    // displayOrder: 화면에 표시될 말 순서 (왼쪽→오른쪽)
+    final List<_Horse> ordered;
+    if (_isJeju) {
+      // 제주: 1번→n번 (왼쪽→오른쪽)
+      ordered = List.from(horses)
+        ..sort((a, b) => a.entry.gateNo.compareTo(b.entry.gateNo));
+    } else {
+      // 서울/부산경남: n번→1번 (왼쪽→오른쪽, 오른쪽=1번)
+      ordered = List.from(horses)
+        ..sort((a, b) => b.entry.gateNo.compareTo(a.entry.gateNo));
+    }
+
+    // 박스 너비 (고정 — 스크롤로 처리하므로 최소 확보)
+    const double boxW = 56.0;
+    const double condH = 84.0; // 컨디션바 영역 높이
+    const double gateH = 148.0; // 게이트박스 영역 높이
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // ① 배경 (관중석 느낌)
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF050D1A), Color(0xFF0A1628), Color(0xFF071220)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+        ),
+
+        // ② 상단 배너: Canvas _paintRaceBanner 유지 (시나리오 정보)
+        Positioned(
+          top: size.height * 0.11,
+          left: 0, right: 0,
+          height: size.height * 0.40,
+          child: CustomPaint(
+            painter: _BannerOnlyPainter(
+              horses:    horses,
+              distance:  widget.race.distance,
+              raceNo:    widget.race.raceNo,
+              venueCode: widget.race.venueCode,
+              venueName: _venueName,
+              isJeju:    _isJeju,
+              isBusan:   _isBusan,
+            ),
+          ),
+        ),
+
+        // ③ 기수 컨디션 바 (가로 스크롤)
+        Positioned(
+          top: size.height * 0.11 + size.height * 0.40 + size.height * 0.012,
+          left: 0, right: 0,
+          height: condH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 12, bottom: 4),
+                child: Text(
+                  '🏇 기수 컨디션',
+                  style: const TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      const SizedBox(width: 8),
+                      ...ordered.map((horse) => _buildCondBar(horse, boxW)),
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // ④ 게이트 박스 (가로 스크롤)
+        Positioned(
+          top: size.height * 0.11 + size.height * 0.40
+              + size.height * 0.012 + condH + size.height * 0.008,
+          left: 0, right: 0,
+          height: gateH,
+          child: Column(
+            children: [
+              // 게이트 헤더 (금속 프레임 느낌)
+              Container(
+                height: 6,
+                color: const Color(0xFF4A3A20),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(width: 4),
+                      ...ordered.map((horse) => _buildGateBox(horse, boxW)),
+                      const SizedBox(width: 4),
+                    ],
+                  ),
+                ),
+              ),
+              // 하단 발판 (더트 구역)
+              Container(
+                height: 8,
+                color: const Color(0xFF4A3A20),
+              ),
+            ],
+          ),
+        ),
+
+        // ⑤ 경주 방향 바 (하단 고정)
+        Positioned(
+          bottom: 80, left: 0, right: 0,
+          child: _buildDirectionWidget(size),
+        ),
+      ],
+    );
+  }
+
+  // 단일 컨디션 바 위젯
+  Widget _buildCondBar(_Horse horse, double boxW) {
+    final cd = HorseCapColors.getCapData(horse.entry.gateNo);
+    final condF = (horse.entry.formStat / 100.0).clamp(0.0, 1.0);
+    final condColor = condF > 0.75
+        ? const Color(0xFF4CAF50)
+        : condF > 0.5
+            ? const Color(0xFFFFD700)
+            : const Color(0xFFFF5722);
+    final grade = condF > 0.8 ? '최상'
+        : condF > 0.6 ? '양호'
+        : condF > 0.4 ? '보통'
+        : '주의';
+
+    const double barMaxH = 38.0;
+    final fillH = barMaxH * condF;
+
+    return SizedBox(
+      width: boxW,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          // 등급 텍스트
+          Text(grade,
+            style: TextStyle(color: condColor, fontSize: 8, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 2),
+          // 세로 바
+          Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              // 배경
+              Container(
+                width: 10, height: barMaxH,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              // 채우기
+              Container(
+                width: 10, height: fillH.clamp(2.0, barMaxH),
+                decoration: BoxDecoration(
+                  color: condColor.withValues(alpha: 0.90),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // 마번 원 배지
+          Container(
+            width: 22, height: 22,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: cd.bg),
+            alignment: Alignment.center,
+            child: Text(
+              '${horse.entry.gateNo}',
+              style: TextStyle(
+                color: cd.text, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 단일 게이트 박스 위젯
+  Widget _buildGateBox(_Horse horse, double boxW) {
+    final cd = HorseCapColors.getCapData(horse.entry.gateNo);
+    final nameStr = horse.entry.horseName.length > 5
+        ? horse.entry.horseName.substring(0, 5)
+        : horse.entry.horseName;
+    final jockeyStr = horse.entry.jockeyName.length > 4
+        ? horse.entry.jockeyName.substring(0, 4)
+        : horse.entry.jockeyName;
+
+    return Container(
+      width: boxW,
+      margin: const EdgeInsets.symmetric(horizontal: 1),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            cd.bg.withValues(alpha: 0.95),
+            Color.lerp(cd.bg, Colors.black, 0.35)!,
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        border: Border.all(color: const Color(0xFFFFD700).withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          // 마번
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.black.withValues(alpha: 0.30),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '${horse.entry.gateNo}',
+              style: TextStyle(
+                color: cd.text,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          // 기수 저지 원
+          Container(
+            width: 22, height: 22,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: cd.bg,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.55), width: 1.2)),
+            alignment: Alignment.center,
+            child: Text('J',
+              style: TextStyle(color: cd.text, fontSize: 10, fontWeight: FontWeight.bold)),
+          ),
+          // 말이름
+          Text(
+            nameStr,
+            style: const TextStyle(
+              color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+          ),
+          // 기수이름
+          if (horse.entry.jockeyName.isNotEmpty)
+            Text(
+              jockeyStr,
+              style: TextStyle(
+                color: cd.text.withValues(alpha: 0.85), fontSize: 8),
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 경주 방향 안내 위젯
+  Widget _buildDirectionWidget(Size size) {
+    final n = _horses.length;
+    return Container(
+      height: 36,
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A1628).withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF2A4A6A).withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.swap_horiz, color: Color(0xFFFFD700), size: 14),
+          const SizedBox(width: 6),
+          Text(
+            _isJeju
+                ? '좌측 → $n번    경주 방향 CCW    우측 → 1번'
+                : '좌측 → $n번    경주 방향 CW     우측 → 1번',
+            style: const TextStyle(color: Color(0xFFFFD700), fontSize: 10),
+          ),
+        ],
       ),
     );
   }
@@ -3934,7 +4224,7 @@ class _RacePainter extends CustomPainter {
 
   // ── 범례 (세로형 트랙 우측 세로 배치) ──
   void _drawLegend(Canvas canvas, Size size, Rect tr) {
-    final n = horses.length.clamp(0, 16);
+    final n = horses.length.clamp(0, 20); // KRA 최대 20두 지원
     if (n == 0) return;
 
     // 세로형: 범례를 트랙 우측 바깥에 세로로 배치
@@ -4024,36 +4314,135 @@ class _RacePainter extends CustomPainter {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  게이트뷰 전용 Painter (Widget 레벨 AnimatedOpacity 오버레이용)
-//  _RacePainter를 extend해서 게이트뷰 메서드만 재사용
+//  배너 전용 Painter — 시나리오/레이스명 배너만 그리는 경량 페인터
+//  Flutter 게이트뷰 오버레이에서 배너 부분만 Canvas로 유지
 // ══════════════════════════════════════════════════════════════════════
-class _GatePainter extends _RacePainter {
-  _GatePainter({
-    required super.horses,
-    required super.distance,
-    required super.raceNo,
-    required super.venueCode,
-    required super.venueName,
-    required super.gatePulse,
-    required super.isJeju,
-    required super.isBusan,
-  }) : super(
-    startP:   0, goalP:  1, boost400: 0,
-    boost200: 0, spurt100: 0,
-    frameIdx: 0, glowVal:  0,
-    ranking:  const [],
-    isCW:     false,
-  );
+class _BannerOnlyPainter extends CustomPainter {
+  final List<_Horse> horses;
+  final int          distance;
+  final String       raceNo;
+  final String       venueCode;
+  final String       venueName;
+  final bool         isJeju;
+  final bool         isBusan;
+
+  const _BannerOnlyPainter({
+    required this.horses,
+    required this.distance,
+    required this.raceNo,
+    required this.venueCode,
+    required this.venueName,
+    required this.isJeju,
+    required this.isBusan,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final fullTr = _trackRect(size);
-    // opacity는 Widget 레벨(AnimatedOpacity)이 처리하므로 항상 1.0으로 그림
-    _paintGateView(canvas, size, fullTr, 1.0);
+    final w = size.width;
+    final h = size.height;
+    // 배너: _RacePainter._paintRaceBanner 와 동일 로직 인라인
+    final bannerRect = Rect.fromLTWH(0, 0, w, h);
+
+    // 배너 배경
+    canvas.drawRect(bannerRect, Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xFF0D1F35), Color(0xFF142035)],
+        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+      ).createShader(bannerRect));
+    canvas.drawLine(Offset(0, 0), Offset(w, 0),
+        Paint()..color = const Color(0xFFFFD700).withValues(alpha: 0.5)..strokeWidth = 1.5);
+    canvas.drawLine(Offset(0, h), Offset(w, h),
+        Paint()..color = const Color(0xFFFFD700).withValues(alpha: 0.3)..strokeWidth = 1.0);
+
+    void txt(String t, Offset o, Color c, double fs,
+        {bool bold = false, bool centered = false}) {
+      final tp = TextPainter(
+        text: TextSpan(text: t, style: TextStyle(
+          color: c, fontSize: fs,
+          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        )),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final dx = centered ? o.dx - tp.width / 2 : o.dx;
+      tp.paint(canvas, Offset(dx, o.dy - tp.height / 2));
+    }
+
+    // ── 섹션 1: 레이스명 바 ──
+    final sec1H = h * 0.14;
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, sec1H), Paint()
+      ..color = const Color(0xFF0A1628).withValues(alpha: 0.7));
+    txt('$venueName 제${raceNo}경주', Offset(w * 0.5, sec1H * 0.5),
+        Colors.white, 13, bold: true, centered: true);
+    txt('${distance}m  ·  ${horses.length}두 출전',
+        Offset(w * 0.5, sec1H * 0.85),
+        Colors.white.withValues(alpha: 0.6), 9.5, centered: true);
+
+    // ── 섹션 2: 전개 예상 시나리오 ──
+    if (horses.isEmpty) return;
+    final sec2Top = h * 0.15;
+    final sec2H   = h * 0.84;
+    final n = horses.length;
+
+    // 선행 그룹 (상위 스피드)
+    final sorted = [...horses]..sort((a, b) => b.entry.speedStat.compareTo(a.entry.speedStat));
+    final leaders = sorted.take(3).map((h) => h.entry.gateNo).toList()..sort();
+    final midField = sorted.skip(3).take(3).map((h) => h.entry.gateNo).toList()..sort();
+    final closers  = sorted.skip(6).take(3).map((h) => h.entry.gateNo).toList()..sort();
+
+    void scenRow(String icon, String label, List<int> gates, String desc, double topFrac) {
+      final rowTop = sec2Top + sec2H * topFrac;
+      final rowH   = sec2H * 0.28;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(Rect.fromLTWH(w * 0.03, rowTop, w * 0.94, rowH - 4),
+            const Radius.circular(8)),
+        Paint()..color = const Color(0xFF0F1F33).withValues(alpha: 0.85),
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(Rect.fromLTWH(w * 0.03, rowTop, w * 0.94, rowH - 4),
+            const Radius.circular(8)),
+        Paint()..color = const Color(0xFFFFD700).withValues(alpha: 0.25)
+          ..style = PaintingStyle.stroke ..strokeWidth = 1.0,
+      );
+      txt(icon, Offset(w * 0.08, rowTop + rowH * 0.35), Colors.white, 13, centered: true);
+      txt(label, Offset(w * 0.17, rowTop + rowH * 0.30),
+          const Color(0xFFFFD700), 10, bold: true);
+      final gateStr = gates.map((g) => '${g}번').join('·');
+      txt(gateStr, Offset(w * 0.17, rowTop + rowH * 0.62),
+          Colors.white, 11, bold: true);
+      txt(desc, Offset(w * 0.17, rowTop + rowH * 0.87),
+          Colors.white.withValues(alpha: 0.55), 8);
+    }
+
+    if (n > 0) {
+      scenRow('⚡', '선행', leaders,
+          '초반 선두 장악 · 페이스 메이킹 · 코너 내측 유리', 0.00);
+    }
+    if (n > 3) {
+      scenRow('↗', '선입', midField,
+          '선두 후방 2~3마신 위치 · 직선 400m서 추격', 0.32);
+    }
+    if (n > 6) {
+      // 주목마: AI 점수 최고
+      final star = sorted.first;
+      final starTop = sec2Top + sec2H * 0.64;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(w * 0.03, starTop, w * 0.94, sec2H * 0.10),
+          const Radius.circular(6)),
+        Paint()..color = const Color(0xFF1A2A10).withValues(alpha: 0.8),
+      );
+      txt('⭐ 주목마: ${star.entry.gateNo}번 ${star.entry.horseName}  AI ${star.entry.baseScore.toStringAsFixed(1)}pt',
+          Offset(w * 0.5, starTop + sec2H * 0.05),
+          const Color(0xFFFFD700), 9, bold: true, centered: true);
+
+      scenRow('🚀', '추입', closers,
+          '후반 지구력 부스터 발동 · 막판 역전 狙', 0.74);
+    }
   }
 
   @override
-  bool shouldRepaint(_RacePainter old) => true;
+  bool shouldRepaint(_BannerOnlyPainter old) =>
+      old.horses != horses || old.distance != distance;
 }
 
 // ══════════════════════════════════════════════════════════════════════

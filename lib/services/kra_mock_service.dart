@@ -144,7 +144,7 @@ class KraMockService {
         venueCode: venueCode,
         venueName: venueName,
         raceDate: dateStr,
-        totalHorses: 8 + _random.nextInt(9), // 8~16두
+        totalHorses: 8 + _random.nextInt(13), // 8~20두 (KRA 실제 범위)
         trackCondition: trackCond,
         isFinished: isFinished,
         isUpcoming: isUpcoming,
@@ -197,8 +197,8 @@ class KraMockService {
       // 부산경남 (11경주)
       return ['10:00','10:40','11:20','12:00','12:40','13:20','14:00','14:40','15:20','16:00','16:40'];
     } else {
-      // 서울 (11경주)
-      return ['11:00','11:40','12:20','13:00','13:40','14:20','15:00','15:40','16:20','17:00','17:40'];
+      // 서울 (11경주) — KRA 공식 시간표: 1R=10:35, 2R=11:25, 3R=12:10...
+      return ['10:35','11:25','12:10','12:50','13:30','14:10','14:50','15:30','16:10','16:50','17:30'];
     }
   }
 
@@ -237,7 +237,8 @@ class KraMockService {
 
   // ── 출전마 정보 API26_2 + API8_2 + API25_1 + API77 Mock ──
   static List<HorseEntry> getHorseEntries(RaceInfo race) {
-    final int count = race.totalHorses.clamp(8, 16);
+    // KRA 실제 경주: 최대 20두까지 출전 가능 (이전 16두 상한 제거)
+    final int count = race.totalHorses.clamp(8, 20);
     final List<HorseEntry> entries = [];
 
     final horseNames = _horseNamePool();

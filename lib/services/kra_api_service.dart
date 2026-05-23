@@ -209,7 +209,7 @@ String _formatTime(String timeStr) {
 /// KRA 공식 시작 시간표 기준
 String _getRaceStartTimeByNo(String raceNoStr, String meetCode) {
   final raceNo = int.tryParse(raceNoStr) ?? 1;
-  // 서울(meet=1): 제1경주 11:00, 이후 40분 간격
+  // 서울(meet=1): KRA 공식 1R=10:35 시작
   // 부산경남(meet=3): 제1경주 10:00, 이후 40분 간격
   // 제주(meet=2): 제1경주 10:00, 이후 35~40분 간격
   final List<String> times;
@@ -218,13 +218,13 @@ String _getRaceStartTimeByNo(String raceNoStr, String meetCode) {
     times = ['10:00','10:40','11:20','12:00','12:40','13:20',
              '14:00','14:40','15:20','16:00','16:40'];
   } else if (meetCode == '2') {
-    // 제주
-    times = ['10:00','10:35','11:10','11:45','12:20','12:55',
-             '13:35','14:15'];
-  } else {
-    // 서울 (기본)
+    // 제주 — KRA 공식: 1R=11:00 시작 (이미지2 확인)
     times = ['11:00','11:40','12:20','13:00','13:40','14:20',
-             '15:00','15:40','16:20','17:00','17:40'];
+             '15:00','15:40'];
+  } else {
+    // 서울 — KRA 공식: 1R=10:35, 2R=11:25, 3R=12:10...
+    times = ['10:35','11:25','12:10','12:50','13:30','14:10',
+             '14:50','15:30','16:10','16:50','17:30'];
   }
   final idx = (raceNo - 1).clamp(0, times.length - 1);
   return times[idx];
