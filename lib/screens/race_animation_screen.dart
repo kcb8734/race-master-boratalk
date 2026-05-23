@@ -271,19 +271,31 @@ class _TG {
   // GOAL = p3 + (p4-p3)*0.85 ≈ 0.4412 + 0.3529*0.85 ≈ 0.7412
   static double get goalP => p3 + (p4 - p3) * 0.85; // 좌직선 85% ≈ 화면 좌측 하단
 
-  // ── 출발 진행률 (GOAL 역산, CW 기준) ──
-  //  서울 경주거리: 1000, 1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 2300m
-  //  총 트랙 1700m 기준 각 위치 (goalP=0.7412 기준 역산):
-  //    1000m: goalP - 1000/1700 ≈ 0.1529  → 우직선 65%  (특별 경주 전용)
-  //    1200m: goalP - 1200/1700 ≈ 0.0353  → 우직선 15%
-  //    1300m: goalP - 1300/1700 ≈ (0.9647+1.0)%1 ≈ 0.9647 → 우직선 가장 하단
-  //    1400m: goalP - 1400/1700 ≈ 0.8882  → 우직선 중단~하단
-  //    1600m: goalP - 1600/1700 ≈ 0.7647→반전→ 하단코너 약50%
-  //    1700m: goalP - 1700/1700 = goalP   → 좌직선 85% (GOAL과 동일, 1바퀴)
-  //    1800m: goalP - 1800/1700 ≈ 0.6824  → 좌직선 67%
-  //    1900m: goalP - 1900/1700 ≈ 0.6235  → 좌직선 49%
-  //    2000m: goalP - 2000/1700 ≈ 0.5647  → 좌직선 31%
-  //    2300m: goalP - 2300/1700 ≈ 0.3882  → 상단코너 약57%
+  // ── 출발 진행률 (GOAL 역산, CW 기준) ─────────────────────────────────
+  //
+  //  [서울경마장 실측 스타트 게이트 위치 — KRA 공식 도면 기준]
+  //  총 트랙 1700m (내측 기준), goalP ≈ 0.7412 (좌직선 85% = 결승선)
+  //  공식: startP = (goalP - distance/total + 10.0) % 1.0
+  //
+  //  거리   startP   위치(구간)              비고
+  //  ──────────────────────────────────────────────────────────────
+  //  1000m  0.1529   우직선 65% (상단부)     KRA 특별경주 전용 출발선
+  //  1200m  0.0353   우직선 15% (하단부 근처) 단거리 스프린트 주력 거리
+  //  1300m  0.9647   우직선 최하단 (하단코너 직전) 단거리 연장선
+  //  1400m  0.8882   우직선 하단~중단        서울 주력 출전 거리
+  //  1600m  0.7647   하단코너 50% (코너 중앙) 중거리 기본 거리
+  //  1700m  0.7412   좌직선 85% = GOAL 동일  1바퀴 완주 (출발=GOAL)
+  //  1800m  0.6824   좌직선 67% (중하단)     중거리 연장
+  //  1900m  0.6235   좌직선 49% (중간)       중장거리
+  //  2000m  0.5647   좌직선 31% (중상단)     장거리 주력
+  //  2300m  0.3882   상단코너 57% (코너 중간) 장거리 스태미나 경주
+  //  ──────────────────────────────────────────────────────────────
+  //  [Zone 물리 계수 바인딩 요약]
+  //  Zone1 (출발~코너 진입):  initialDrive  → zone1SpeedMult = 1.0 + drive×0.15
+  //  Zone2 (코너 구간):       corneringEff  → cornerDeccelMult = 0.88 + eff×0.07
+  //  Zone3 (400m~코너 출구):  initialDrive  → driveBuff = drive×0.06 (추가 가속)
+  //  Zone4 (200m~GOAL):       finalSpurt    → zone4SpurtMult = 1.0 + spurt×0.20
+  //                           finalSpurt    → spurtResist = spurt×0.05 (fade 완화)
   static double startP(int distM) {
     final ratio = distM.clamp(1000, 2400) / total;
     return (goalP - ratio + 10.0) % 1.0;
@@ -1274,13 +1286,18 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
             (curMaxL > 4 ? 0.5 : curMaxL > 2 ? 0.6 : 0.8);
       }
 
-      // ── 2단계: Zone3(400m~200m) 부스터 ────────────────────────────────
+      // ── 2단계: Zone3(400m~200m 코너 진입) 부스터 ──────────────────────
+      // [physicsProfile 연동] initialDrive → 코너 진입 직전 가속 버프
+      //   initialDrive(0~1): S1F 초반 속도 → 코너 진입 시 관성 반영
+      //   buffScale = 0.06 × initialDrive (최대 +6% 추가 가속)
       if (inBoost) {
         final bf   = ((p - _boost400) / (_boost200 - _boost400)).clamp(0.0, 1.0);
         // ★ userBonus = UserGValue 실시간 합산 (-5~+5 → -1~+1 정규화)
         final user = (h.userBonus / 5.0).clamp(-1.0, 1.0);
         final stat = (h.speedNorm + h.formNorm) * 0.5;
-        speedMult  *= 1.12 + bf * 0.15 * stat + bf * 0.08 * user;
+        // [NEW] initialDrive 보정: 초반 가속력 강한 말이 코너 진입 속도 우위
+        final driveBuff = h.physicsProfile.initialDrive * 0.06;
+        speedMult  *= 1.12 + bf * 0.15 * stat + bf * 0.08 * user + driveBuff;
         h.boostActive = true;
         h.boostGlow   = (_glowAnim.value * 0.6 + bf * 0.4).clamp(0, 1);
       } else if (!inCorner) {
@@ -1289,11 +1306,16 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       }
 
       // ── 3단계: Zone4(스퍼트 100m~GOAL) 스테미나 소진 ──────────────────
+      // [physicsProfile 연동] finalSpurt → 종반 탄력 반영
+      //   finalSpurt(0~1): G1F 기록 기반 → 종반 스퍼트 저항 완화
+      //   spurtResist = finalSpurt × 0.05 → fade 손실 최대 -5% 완화
       if (inSpurt) {
         final sf   = ((p - _spurt100) / (_goalP - _spurt100)).clamp(0.0, 1.0);
         final stam = h.staminaNorm;
         final user = (h.userBonus / 5.0).clamp(-1.0, 1.0);
-        final fade = (1.0 - stam) * sf * 0.22;
+        // [NEW] finalSpurt 기반 스태미나 소진 저항: 종반 탄력 강한 말은 fade 감소
+        final spurtResist = h.physicsProfile.finalSpurt * 0.05;
+        final fade = ((1.0 - stam) * sf * 0.22 - spurtResist * sf).clamp(0.0, 0.22);
         final boost = stam * sf * 0.08 + user * sf * 0.06;
         speedMult *= (1.0 - fade + boost).clamp(0.6, 1.18);
         h.spurtFading = (stam < 0.5);
