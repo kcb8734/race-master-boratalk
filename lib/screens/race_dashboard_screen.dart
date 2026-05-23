@@ -58,6 +58,9 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
               _buildHeader(context),
               // 시즌오프 체험 모드 안내 배너
               if (widget.isDemoMode) _buildDemoBanner(),
+              // API 실패 → Mock 출전마 경고 배너
+              if (!widget.isDemoMode && provider.isHorsesMock)
+                _buildMockHorsesBanner(),
               if (provider.isLoadingHorses)
                 const Expanded(child: _LoadingPanel())
               else ...[
@@ -161,6 +164,61 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                   ),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── API 실패 → Mock 출전마 경고 배너 ──
+  Widget _buildMockHorsesBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: const Color(0xFF1A0E00),
+      child: Row(
+        children: [
+          const Text('⚠️', style: TextStyle(fontSize: 13)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: const TextSpan(
+                children: [
+                  TextSpan(
+                    text: '예시 출전마 표시 중  ',
+                    style: TextStyle(
+                      color: Color(0xFFFFAA00),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextSpan(
+                    text: 'KRA API 미연결 — 마명·기수·배당은 실제와 다릅니다',
+                    style: TextStyle(
+                      color: Color(0xFFAA7030),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFF6600).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                  color: const Color(0xFFFF6600).withValues(alpha: 0.5)),
+            ),
+            child: const Text(
+              'MOCK',
+              style: TextStyle(
+                color: Color(0xFFFF6600),
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.8,
+              ),
             ),
           ),
         ],

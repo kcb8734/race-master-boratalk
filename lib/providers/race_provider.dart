@@ -77,6 +77,17 @@ class RaceProvider extends ChangeNotifier {
   bool _isPremium = false;
   static const int _freeLimitPerDay = 3;
 
+  // ── Mock 데이터 여부 플래그 ──────────────────────────────────
+  // true = API 실패 → Mock 예시 데이터 사용 중
+  // false = KRA 실제 API 데이터 사용 중
+  bool _isRacesMock = false;
+  bool _isHorsesMock = false;
+
+  bool get isRacesMock  => _isRacesMock;
+  bool get isHorsesMock => _isHorsesMock;
+  /// 레이스 목록 또는 출전마 중 하나라도 Mock이면 true
+  bool get isAnyDataMock => _isRacesMock || _isHorsesMock;
+
   // AI 인사이트
   List<RaceInsight> _insights = [];
   List<RaceInsight> get insights => _insights;
@@ -475,6 +486,9 @@ class RaceProvider extends ChangeNotifier {
       _races = KraMockService.getRaces(_selectedVenue.code, day.date);
     }
 
+    // Mock 여부 기록 (UI 배지 표시용)
+    _isRacesMock = !apiSuccess;
+
     _isLoadingRaces = false;
     _evaluateDataStatus();
     notifyListeners();
@@ -509,6 +523,9 @@ class RaceProvider extends ChangeNotifier {
       // Mock도 정렬 보장
       _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
     }
+
+    // Mock 여부 기록 (UI 배지 표시용)
+    _isHorsesMock = !apiSuccess;
 
     if (_selectedRace != null) {
       _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);

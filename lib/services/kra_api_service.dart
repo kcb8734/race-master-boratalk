@@ -230,10 +230,29 @@ String _getRaceStartTimeByNo(String raceNoStr, String meetCode) {
   return times[idx];
 }
 
+/// 이번 주(또는 지난주)의 targetWeekday에 해당하는 날짜를 반환한다.
+///
+/// 규칙: 항상 과거 또는 오늘 날짜를 반환 (미래 날짜 절대 반환 안 함)
+///   - diff > 0 이면 → 지난주의 같은 요일 (diff - 7)
+///   - diff == 0 이면 → 오늘
+///   - diff < 0 이면 → 이번 주 이미 지난 날짜
+///
+/// targetWeekday: Dart 기준 1=월 ~ 7=일
+///   8을 입력하면 "다음 주 월요일(1)"로 처리 (mon 계산용 +7일 보정)
 DateTime _getWeekday(DateTime now, int targetWeekday) {
-  final diff = targetWeekday - now.weekday;
-  final date = now.add(Duration(days: diff < 0 ? diff + 7 : diff));
-  return DateTime(date.year, date.month, date.day);
+  // targetWeekday 8 = 다음 주 월요일 → 1로 정규화 후 +7일
+  if (targetWeekday == 8) {
+    // 이번 주 월요일 날짜를 구한 뒤 7일 더함 → 다음 주 월요일
+    int diffMon = 1 - now.weekday;
+    if (diffMon > 0) diffMon -= 7; // 이번 주 월요일도 과거로 고정
+    final thisMonday = DateTime(now.year, now.month, now.day + diffMon);
+    return DateTime(thisMonday.year, thisMonday.month, thisMonday.day + 7);
+  }
+
+  int diff = targetWeekday - now.weekday;
+  // diff > 0 이면 미래 요일 → 지난주 동일 요일로 되돌림
+  if (diff > 0) diff -= 7;
+  return DateTime(now.year, now.month, now.day + diff);
 }
 
 // ══════════════════════════════════════════════════════════════════════

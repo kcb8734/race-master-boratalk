@@ -459,62 +459,100 @@ class _HomeContent extends StatelessWidget {
       builder: (_, provider, __) {
         final day = provider.selectedDay;
         final venue = provider.selectedVenue;
-        return Container(
-          color: AppTheme.navyDeep,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-          child: Row(
-            children: [
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Mock 데이터 경고 배너 ───────────────────────────────
+            if (provider.isRacesMock)
               Container(
-                width: 3,
-                height: 16,
-                decoration: BoxDecoration(
-                  gradient: AppTheme.goldGradient,
-                  borderRadius: BorderRadius.circular(2),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                color: const Color(0xFF1A1000),
+                child: Row(
+                  children: [
+                    const Text('⚠️', style: TextStyle(fontSize: 13)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: RichText(
+                        text: const TextSpan(
+                          children: [
+                            TextSpan(
+                              text: '예시 데이터 표시 중  ',
+                              style: TextStyle(
+                                color: Color(0xFFFFAA00),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            TextSpan(
+                              text: 'KRA API 연결 실패 — 시간·거리·두수·등급은 실제와 다를 수 있습니다',
+                              style: TextStyle(
+                                color: Color(0xFFB08040),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Text(
-                day != null
-                    ? '${day.label}요일 ${venue.label} 경주 목록'
-                    : '경주 목록',
-                style: const TextStyle(
-                  color: AppTheme.textWhite,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const Spacer(),
-              Consumer<RaceProvider>(
-                builder: (_, p, __) => !p.isPremium
-                    ? Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: p.remainingFree > 0
-                              ? AppTheme.greenWin.withValues(alpha: 0.15)
-                              : AppTheme.redAlert.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: p.remainingFree > 0
-                                ? AppTheme.greenWin.withValues(alpha: 0.5)
-                                : AppTheme.redAlert.withValues(alpha: 0.5),
-                          ),
+            // ── 경주 목록 라벨 행 ────────────────────────────────────
+            Container(
+              color: AppTheme.navyDeep,
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 3,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      gradient: AppTheme.goldGradient,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    day != null
+                        ? '${day.label}요일 ${venue.label} 경주 목록'
+                        : '경주 목록',
+                    style: const TextStyle(
+                      color: AppTheme.textWhite,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (!provider.isPremium)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: provider.remainingFree > 0
+                            ? AppTheme.greenWin.withValues(alpha: 0.15)
+                            : AppTheme.redAlert.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: provider.remainingFree > 0
+                              ? AppTheme.greenWin.withValues(alpha: 0.5)
+                              : AppTheme.redAlert.withValues(alpha: 0.5),
                         ),
-                        child: Text(
-                          '무료 ${p.remainingFree}회 남음',
-                          style: TextStyle(
-                            color: p.remainingFree > 0
-                                ? AppTheme.greenWin
-                                : AppTheme.redAlert,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
+                      ),
+                      child: Text(
+                        '무료 ${provider.remainingFree}회 남음',
+                        style: TextStyle(
+                          color: provider.remainingFree > 0
+                              ? AppTheme.greenWin
+                              : AppTheme.redAlert,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
                         ),
-                      )
-                    : const SizedBox.shrink(),
+                      ),
+                    ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         );
       },
     );
