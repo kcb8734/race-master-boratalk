@@ -403,17 +403,10 @@ class KraApiService {
 
   static List<HorseEntry> _parseHorseEntriesXml(
       List<Map<String, String>> items, String venueCode) {
-    // ── stTime: 경주 전체 공통 출발시각 추출 (첫 item에서 읽기) ──────────
-    // API26_2는 모든 item에 동일한 stTime 포함 → 첫 번째 item으로 파싱
-    // Milestone 2에서 RaceInfo.startTime / totalHorses 바인딩 예정
-    // ignore: unused_local_variable
-    String? parsedStartTime;
-    // ignore: unused_local_variable
-    int? parsedDusu;
-    if (items.isNotEmpty) {
-      parsedStartTime = _parseStTime(items.first['stTime']);
-      parsedDusu = int.tryParse(items.first['dusu'] ?? '');
-    }
+    // ── 비고: stTime / dusu 파싱은 호출자(_parseHorseEntriesXml 상위) 책임 ─
+    // fetchHorseEntriesWithMeta() 및 fetchHorseEntries() 에서
+    // items.first['stTime'] / ['dusu'] 를 직접 추출하여 EntrySheetResult로 반환.
+    // 이 함수는 순수하게 HorseEntry 목록만 생성한다.
 
     final parsed = items.map<HorseEntry?>((item) {
       try {

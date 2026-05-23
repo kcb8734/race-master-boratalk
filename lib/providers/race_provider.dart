@@ -213,11 +213,43 @@ class RaceProvider extends ChangeNotifier {
         for (final h in _horses) h.gateNo: h.odds
       };
 
-      final rawEntries = await KraApiService.fetchHorseEntries(
+      // ── [Milestone 3] fetchHorseEntriesWithMeta() — 배당 폴링 시 stTime 갱신 ─
+      final meta       = await KraApiService.fetchHorseEntriesWithMeta(
           _selectedVenue.code, day.date, race.raceNo);
+      final rawEntries = meta.entries;
+
+      // stTime / totalHorses 변경 시 _selectedRace 동기화
+      if (_selectedRace != null) {
+        final newStartTime = meta.startTime;
+        final actualCount  = rawEntries.isNotEmpty ? rawEntries.length : meta.dusu;
+        final needUpdate   = (newStartTime != null &&
+                              newStartTime != _selectedRace!.startTime) ||
+                             (actualCount != _selectedRace!.totalHorses);
+        if (needUpdate) {
+          _selectedRace = _selectedRace!.copyWith(
+            startTime:   newStartTime,
+            totalHorses: actualCount,
+          );
+          _races = _races.map((r) {
+            if (r.raceNo == race.raceNo && r.venueCode == race.venueCode) {
+              return r.copyWith(
+                startTime:   newStartTime,
+                totalHorses: actualCount,
+              );
+            }
+            return r;
+          }).toList();
+          if (kDebugMode) {
+            debugPrint('[autoRefresh] RaceInfo 갱신: '
+                'startTime=${newStartTime ?? '유지'} '
+                'totalHorses=$actualCount');
+          }
+        }
+      }
+
       final enriched = await RaceStatEngine.enrichHorseStats(
         entries: rawEntries,
-        race: race,
+        race:    _selectedRace ?? race, // 갱신된 RaceInfo 사용
       );
 
       // 배당률 변동 감지
