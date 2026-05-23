@@ -251,8 +251,9 @@ class _OddsTile extends StatelessWidget {
     final col        = _oddsColor(entry.odds);
     final label      = _oddsLabel(entry.odds);     // 배당 강도 레이블
     final hasProfile = entry.physicsProfile != null;
-    // 연승식 배당은 단승식의 약 40% (실제 데이터 없으면 추정)
-    final plcOdds  = entry.odds * 0.4;
+    // 연승식 배당: API26_2 plcOdds1 실제 값 우선, 0이면 단승식 40% 추정
+    final plcOdds  = (entry.plcOdds > 0) ? entry.plcOdds : entry.odds * 0.4;
+    final hasPlcReal = entry.plcOdds > 0; // 실제 API 연승식 배당 유무
 
     return Container(
       width: 58,
@@ -302,13 +303,26 @@ class _OddsTile extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          // 연승식 배당
-          Text(
-            plcOdds.toStringAsFixed(1),
-            style: TextStyle(
-              color:    col.withValues(alpha: 0.65),
-              fontSize: 9,
-            ),
+          // 연승식 배당 (실제 API 값 또는 추정치)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                plcOdds.toStringAsFixed(1),
+                style: TextStyle(
+                  color:    col.withValues(alpha: 0.65),
+                  fontSize: 9,
+                ),
+              ),
+              if (!hasPlcReal)
+                Text(
+                  '~',
+                  style: TextStyle(
+                    color:    col.withValues(alpha: 0.35),
+                    fontSize: 7,
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 3),
 

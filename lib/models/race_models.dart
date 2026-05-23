@@ -131,7 +131,10 @@ class HorseEntry {
   final double baseScore;     // 기본 AI 점수
   double userBonus;           // 유저 배당 가점(-5~+5)  ← UserGValue
   final String recentRecord;  // 최근 성적
-  final double odds;          // 배당률
+  final double odds;          // 단승식 배당률 (winOdds)
+  /// 연승식 배당률 (plcOdds) — API26_2: plcOdds1 필드
+  /// 0.0 = 미발표 또는 해당 없음
+  final double plcOdds;
   bool isCancelled;           // 출전취소 여부
 
   // ── [NEW] API4_3 구간기록 기반 물리 프로필 ─────────────────────────
@@ -197,6 +200,7 @@ class HorseEntry {
     this.userBonus = 0.0,
     required this.recentRecord,
     required this.odds,
+    this.plcOdds           = 0.0,
     this.isCancelled = false,
     // API 원시 파라미터 (기본값: 미제공 시 중립값)
     this.horseRegNo        = '',
@@ -222,6 +226,7 @@ class HorseEntry {
 
   HorseEntry copyWith({
     double? userBonus,
+    double? plcOdds,
     bool? isCancelled,
     // API 원시 필드도 copyWith 지원
     String? horseRegNo,
@@ -257,6 +262,7 @@ class HorseEntry {
       userBonus:         userBonus         ?? this.userBonus,
       recentRecord:      recentRecord,
       odds:              odds,
+      plcOdds:           plcOdds           ?? this.plcOdds,
       isCancelled:       isCancelled       ?? this.isCancelled,
       horseRegNo:        horseRegNo        ?? this.horseRegNo,
       rcWins:            rcWins            ?? this.rcWins,

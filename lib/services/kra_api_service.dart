@@ -407,6 +407,8 @@ class KraApiService {
         // ── 레이팅 / 배당 / 최근 성적 ─────────────────────────
         final rating       = double.tryParse(item['rating']   ?? '') ?? 50.0;
         final odds         = _XmlParser.parseOdds(item['winOdds']);
+        // plcOdds1: 연승식 배당 (API26_2 명세서: plcOdds1)
+        final plcOdds      = _XmlParser.parseOdds(item['plcOdds1']);
         final recentRecord = item['rcResult'] ?? '미정';
 
         // ── 통산 경주마 승률 — 앱 내 직접 계산 ─────────────────
@@ -475,6 +477,7 @@ class KraApiService {
           baseScore:         baseScore,
           recentRecord:      recentRecord,
           odds:              odds,
+          plcOdds:           plcOdds,
           horseRegNo:        horseRegNo,
           rcWins:            rcWins,
           jockeyRcWins:      0.0,   // API26_2 명세서에 기수 개인 승률 없음

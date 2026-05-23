@@ -214,12 +214,29 @@ class SplitTimeRecord {
   /// 3코너 통과 순위 (없으면 중립값 5 반환)
   int get ord3c {
     if (venueCode == '1') return sj_3cOrd ?? 5;
+    // 부산경남: 1코너 전쪪H 데이터 없음 → 중립값
+    if (venueCode == '2') return 5;
+    // 제주: je_2cTime과 기준 시간의 차이로 코너 통과 순위 추정
+    // je_2cTime이 빠를수록 코너에서 좋은 위치 → 낙은 순위(=좋음) 추정
+    if (venueCode == '3' && je_2cTime != null) {
+      final avg = kAvgSplitTimes['jeju']?['c2'] ?? 35.0;
+      // avg보다 빠르면 상위권(ord=3), 느리면 하위권(ord=7)
+      final ratio = (je_2cTime! / avg).clamp(0.7, 1.3);
+      return (ratio * 5.0).round().clamp(1, 9);
+    }
     return 5;
   }
 
   /// 4코너 통과 순위 (없으면 중립값 5 반환)
   int get ord4c {
     if (venueCode == '1') return sj_4cOrd ?? 5;
+    if (venueCode == '2') return 5;
+    // 제주: je_3cTime과 기준 시간의 차이로 코너 통과 순위 추정
+    if (venueCode == '3' && je_3cTime != null) {
+      final avg = kAvgSplitTimes['jeju']?['c3'] ?? 55.0;
+      final ratio = (je_3cTime! / avg).clamp(0.7, 1.3);
+      return (ratio * 5.0).round().clamp(1, 9);
+    }
     return 5;
   }
 

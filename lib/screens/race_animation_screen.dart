@@ -746,6 +746,12 @@ class _Horse {
   /// null이면 HorsePhysicsProfile.neutral 사용 (시뮬 중단 없음)
   HorsePhysicsProfile physicsProfile = HorsePhysicsProfile.neutral;
 
+  /// [NEW] 사용자 오버라이드 전 원본 물리 프로필 (Zone1 슬라이더 실시간 재연산 기준)
+  HorsePhysicsProfile rawPhysicsProfile = HorsePhysicsProfile.neutral;
+
+  /// [NEW] oddsAdj 적용 후 순수 calibratedBase (Zone1 슬라이더 재계산 기준점)
+  double rawCalibratedBase = 0.0;
+
   // ── Jockey Engine 버프/페널티 플래그 ──────────────────────────
   /// 안전주행 모드: 엘리트 기수 당일 2승+ → G1F 가속도 -10%, 코너 aggressiveness -30%
   bool safeMode   = false;
@@ -1072,10 +1078,14 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         baseSpeed: calibratedBase,
         initLane:  initLane,
       );
+      // rawCalibratedBase 저장 — Zone1 슬라이더 실시간 재연산 기준점
+      horse.rawCalibratedBase = calibratedBase;
 
       // ── [NEW] HorseEntry에 physicsProfile 탑재 시 즉시 주입 ────────────
       // RaceDashboardScreen에서 미리 로딩한 경우 여기서 즉시 적용
       if (h.physicsProfile != null) {
+        // rawPhysicsProfile: 오버라이드 전 원본 보존 (슬라이더 재연산 기준)
+        horse.rawPhysicsProfile = h.physicsProfile!;
         final overriddenProfile =
             _calibCtrl.applyPhysicsOverride(h.physicsProfile!, h.gateNo);
         horse.physicsProfile = overriddenProfile;
@@ -1126,14 +1136,19 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       for (final horse in _horses) {
         final profile = profileMap[horse.entry.gateNo];
         if (profile != null) {
+          // rawPhysicsProfile: 오버라이드 전 원본 보존 (Zone1 슬라이더 재연산 기준)
+          horse.rawPhysicsProfile = profile;
           // 사용자 가중치 적용 후 물리 프로필 주입
           final overridden = _calibCtrl.applyPhysicsOverride(
               profile, horse.entry.gateNo);
           horse.physicsProfile = overridden;
-          // baseSpeed: zone1SpeedMult 재적용
-          // (출발 전 게이트뷰 단계라면 baseSpeed 재계산 가능)
+          // baseSpeed: rawCalibratedBase × zone1SpeedMult 로 깔끔하게 재계산
+          // (출발 전 게이트뷰 단계라면 중복 적용 방지를 위해 rawCalibratedBase 기준 사용)
           if (_phase == _Phase.waiting) {
-            horse.baseSpeed = horse.baseSpeed * overridden.zone1SpeedMult;
+            final base = horse.rawCalibratedBase > 0
+                ? horse.rawCalibratedBase
+                : horse.baseSpeed;
+            horse.baseSpeed = base * overridden.zone1SpeedMult;
           }
         }
       }
@@ -1202,6 +1217,16 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       // ── GridRailEngine: 진로 방해 해결 → speedMult 보정 ───────────────
       double blockMult = _GridRailEngine.resolveBlock(h, _horses, _goalP, _rng,
           isCW: _isJeju, isBusan: _isBusan);
+
+      // ── [NEW] Zone1 실시간 baseSpeed 재연산 (초반 슬라이더 동적 반영) ──────
+      // 조건: 출발~부스터 진입 전 직선 구간 (inCorner/inBoost/inSpurt 모두 false)
+      // 슬라이더 변경 → applyPhysicsOverride() 재호출 → zone1SpeedMult 최신값으로
+      // rawCalibratedBase × 새 zone1SpeedMult로 baseSpeed 갱신
+      if (!inCorner && !inBoost && !inSpurt && h.rawCalibratedBase > 0) {
+        final latestMult = _calibCtrl.zone1SpeedMultFinal(
+            h.rawPhysicsProfile, h.entry.gateNo);
+        h.baseSpeed = h.rawCalibratedBase * latestMult;
+      }
 
       // ── 1단계: Zone별 기본 속도 조정 ──────────────────────────────────
       double speedMult = blockMult;

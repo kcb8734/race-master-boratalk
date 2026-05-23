@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../models/race_models.dart';
 import '../models/race_horse_data.dart';
 import '../services/kra_mock_service.dart';
 import '../services/kra_api_service.dart';
 import '../services/race_stat_engine.dart';
+import '../services/split_time_fetcher.dart';
 
 // ──────────────────────────────────────────────────────────────
 // 데이터 상태 열거 (Null Fallback 파이프라인용)
@@ -536,10 +537,67 @@ class RaceProvider extends ChangeNotifier {
     _isLoadingHorses = false;
     notifyListeners();
 
+    // ── [API4_3] 물리 프로필 백그라운드 사전 로딩 ──────────────────────────────────────
+    // 경주 선택 시점에 즉시 백그라운드 실행
+    // → race_animation_screen.dart 게이트빰 진입 전에 미리 프로필 주입→ 대기시간 활용
+    // → 로딩 완료 시 notifyListeners()로 UI 자동 갱신 (AI✓ 인디케이터)
+    SplitTimeFetcher.clearCache(); // 새 경주 선택 시 캐시 초기화
+    _prefetchPhysicsProfiles(race);
+
     // 경주 미종료 시 자동 갱신 시작
     if (!race.isFinished) {
       startAutoRefresh(race);
     }
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // [API4_3] 물리 프로필 백그라운드 사전 로딩
+  //
+  // 연산:
+  //   경주 선택 시점에 selectRace() 끝에서 호출
+  //   → 물리 프로필이 없는 말들만 SplitTimeFetcher.fetchAllProfiles()
+  //   → 로딩 완료 시 _horses[] 각 HorseEntry에 physicsProfile 주입
+  //   → notifyListeners() 호출 → UI(AI✓/AI?) 인디케이터 자동 갱신
+  //
+  // 예외 처리:
+  //   • API 실패 → neutral 프로필 적용 (시미실 중단 없음)
+  //   • mounted 검사 없음 — ChangeNotifier는 dispose 후 notifyListeners() 내부 안전한 처리
+  // ───────────────────────────────────────────────────────────────
+  void _prefetchPhysicsProfiles(RaceInfo race) {
+    // 이미 physicsProfile이 주입된 말은 제외 (새로 불러올 필요 없음)
+    final needFetch = _horses.where((h) => h.physicsProfile == null).toList();
+    if (needFetch.isEmpty) return;
+
+    SplitTimeFetcher.fetchAllProfiles(
+      entries: needFetch,
+      race:    race,
+    ).then((profileMap) {
+      // 프로파이더가 dispose된 여부는 ChangeNotifier가 내부 처리
+      if (_horses.isEmpty) return;
+
+      bool updated = false;
+      final updatedHorses = _horses.map((h) {
+        final profile = profileMap[h.gateNo];
+        if (profile != null && h.physicsProfile == null) {
+          updated = true;
+          return h.copyWith(physicsProfile: profile);
+        }
+        return h;
+      }).toList();
+
+      if (updated) {
+        _horses = updatedHorses;
+        notifyListeners(); // AI✓ 인디케이터 즈시 업데이트
+        if (kDebugMode) {
+          debugPrint('[RaceProvider] 피직스 프로파일 주입 완료: '
+              '${profileMap.length}마 / ${_horses.length}마');
+        }
+      }
+    }).catchError((e) {
+      if (kDebugMode) {
+        debugPrint('[RaceProvider] 피직스 프로파일 사전로딩 실패: $e');
+      }
+    });
   }
 
   void updateUserBonus(int gateNo, double bonus) {

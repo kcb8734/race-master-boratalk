@@ -286,6 +286,8 @@ class KraMockService {
       final recentRecord = _genRecentRecord();
       // 배당률
       final odds = 1.5 + _random.nextDouble() * 48.5;
+      // 연승식 배당: 단승식의 35~45% 수준 (실제 경마 통계 기반)
+      final plcOdds = double.parse((odds * (0.35 + _random.nextDouble() * 0.10)).toStringAsFixed(1));
 
       entries.add(HorseEntry(
         gateNo: gateNo,
@@ -302,6 +304,7 @@ class KraMockService {
         baseScore: baseScore,
         recentRecord: recentRecord,
         odds: odds,
+        plcOdds: plcOdds,
       ));
     }
     return entries;
@@ -399,6 +402,7 @@ class KraMockService {
               formStat * 0.20 + trackFitStat * 0.10 + rating * 0.10)
           .clamp(0.0, 100.0);
       final odds = 1.8 + rng.nextDouble() * 28.0;
+      final plcOdds = double.parse((odds * (0.35 + rng.nextDouble() * 0.10)).toStringAsFixed(1));
       final weight = 480 + rng.nextInt(55);
       final weightChange = rng.nextInt(9) - 4;
 
@@ -417,6 +421,7 @@ class KraMockService {
         baseScore: baseScore,
         recentRecord: _genDemoRecord(rng),
         odds: double.parse(odds.toStringAsFixed(1)),
+        plcOdds: plcOdds,
       ));
     }
     return entries;
