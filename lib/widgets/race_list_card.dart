@@ -408,25 +408,51 @@ class _RaceListCardState extends State<RaceListCard>
   }
 
   Widget _buildActionButton(bool isFinished, bool isPast, RaceInfo race) {
-    // 경주 완전 종료 → 결과 보기
+    // ── 경주 완전 종료 → 결과 보기 버튼 (강조 디자인) ──────────────
     if (isFinished) {
       return GestureDetector(
         onTap: widget.onViewResult,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
           decoration: BoxDecoration(
-            color: AppTheme.navyBorder,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppTheme.textDisable),
-          ),
-          child: Text(
-            '결과\n보기',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: AppTheme.textMuted,
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
+            gradient: const LinearGradient(
+              colors: [Color(0xFF1A3A2A), Color(0xFF0D2018)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: const Color(0xFF2E7D52),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF2E7D52).withValues(alpha: 0.25),
+                blurRadius: 8,
+                spreadRadius: 0,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.emoji_events_rounded,
+                color: Color(0xFF4CAF7D),
+                size: 16,
+              ),
+              const SizedBox(height: 3),
+              const Text(
+                '결과\n보기',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF81D4A8),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  height: 1.3,
+                ),
+              ),
+            ],
           ),
         ),
       );

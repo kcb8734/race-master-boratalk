@@ -702,9 +702,20 @@ class _HomeContent extends StatelessWidget {
                   await navigateToDetail();
                 },
                 onViewResult: () async {
-                  // ── 종료 경주: 상세페이지(RaceDashboard) 진입 ──
-                  // RaceDashboard 내부에서 결과 탭/START 버튼 비활성 처리
-                  await navigateToDetail();
+                  // ── 종료 경주: 경주결과 화면(RaceResultScreen) 직접 진입 ──
+                  // API4_3 / racedetailresult 실결과 데이터 표시
+                  if (!ctx.mounted) return;
+                  Navigator.push(
+                    ctx,
+                    PageRouteBuilder(
+                      pageBuilder: (cc, a1, a2) =>
+                          RaceResultScreen(race: race),
+                      transitionsBuilder: (cc, a1, a2, child) =>
+                          FadeTransition(opacity: a1, child: child),
+                      transitionDuration:
+                          const Duration(milliseconds: 200),
+                    ),
+                  );
                 },
               );
             },
