@@ -241,6 +241,23 @@ class _OddsBoard extends StatelessWidget {
   }
 }
 
+// ── [NEW] 세션 4: TrainerFocus 상태 유틸 ──────────────────────────────
+// HorseEntry.trNo/jkNo 기반 실제 데이터가 없을 때의 기본 표시값
+// 실제 enrichHorseStats 후에는 entry에서 Focus 상태를 직접 읽음
+String _trainerFocusLabel(HorseEntry entry) {
+  // userSpeedWeight가 기본값(1.0)이면 데이터 미로딩 상태 → 중립 표시
+  // enrichHorseStats에서 TrainerFocus 계산 후에는 speedWeight에 반영됨
+  if (entry.userSpeedWeight > 1.05) return '🔥집중훈련';
+  if (entry.userSpeedWeight < 0.97) return '⚠️분산훈련';
+  return '✅보통';
+}
+
+Color _trainerFocusColor(HorseEntry entry) {
+  if (entry.userSpeedWeight > 1.05) return const Color(0xFFFF6F00);
+  if (entry.userSpeedWeight < 0.97) return const Color(0xFFFF7043);
+  return const Color(0xFF78909C);
+}
+
 // 개별 배당률 타일 (가로 정렬)
 class _OddsTile extends StatelessWidget {
   final HorseEntry entry;
@@ -252,11 +269,15 @@ class _OddsTile extends StatelessWidget {
     final label      = _oddsLabel(entry.odds);     // 배당 강도 레이블
     final hasProfile = entry.physicsProfile != null;
     // 연승식 배당: API26_2 plcOdds1 실제 값 우선, 0이면 단승식 40% 추정
-    final plcOdds  = (entry.plcOdds > 0) ? entry.plcOdds : entry.odds * 0.4;
+    final plcOdds    = (entry.plcOdds > 0) ? entry.plcOdds : entry.odds * 0.4;
     final hasPlcReal = entry.plcOdds > 0; // 실제 API 연승식 배당 유무
 
+    // [NEW] 세션 4: TrainerFocus 조교태세 상태
+    final focusLabel = _trainerFocusLabel(entry);
+    final focusColor = _trainerFocusColor(entry);
+
     return Container(
-      width: 58,
+      width: 66,    // 조교태세 배지 추가로 너비 소폭 증가
       margin: const EdgeInsets.only(right: 6),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
       decoration: BoxDecoration(
@@ -342,6 +363,27 @@ class _OddsTile extends StatelessWidget {
                     ? const Color(0xFF66BB6A)
                     : _kTextSecondary.withValues(alpha: 0.6),
                 fontSize: 7,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(height: 3),
+
+          // [NEW] 세션 4: 조교태세 배지 (🔥집중훈련 / ⚠️분산훈련 / ✅보통)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+            decoration: BoxDecoration(
+              color:        focusColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(4),
+              border:       Border.all(color: focusColor.withValues(alpha: 0.4)),
+            ),
+            child: Text(
+              focusLabel,
+              textAlign:  TextAlign.center,
+              style: TextStyle(
+                color:      focusColor,
+                fontSize:   6.5,
                 fontWeight: FontWeight.w700,
               ),
             ),

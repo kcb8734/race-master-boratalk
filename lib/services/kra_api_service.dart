@@ -385,8 +385,36 @@ class KraApiService {
   //   chaksunY    → prizeTotal1Year
   //   chaksun_6m  → prizeTotal6Month
   // ────────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
+  // API26_2 stTime 파싱 헬퍼
+  // 원시 형식 예: "출발 :10:45", "출발 : 10: 45", "10:45"
+  // 반환: "HH:MM" 형식 (파싱 실패 시 null)
+  // ────────────────────────────────────────────────────────────────
+  static String? _parseStTime(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    // "출발 :10:45" / "출발 : 10: 45" / 공백 제거 후 시:분 추출
+    final cleaned = raw.replaceAll(' ', ''); // 모든 공백 제거
+    final m = RegExp(r'(\d{1,2}):(\d{2})').firstMatch(cleaned);
+    if (m == null) return null;
+    final h = m.group(1)!.padLeft(2, '0');
+    final min = m.group(2)!;
+    return '$h:$min';
+  }
+
   static List<HorseEntry> _parseHorseEntriesXml(
       List<Map<String, String>> items, String venueCode) {
+    // ── stTime: 경주 전체 공통 출발시각 추출 (첫 item에서 읽기) ──────────
+    // API26_2는 모든 item에 동일한 stTime 포함 → 첫 번째 item으로 파싱
+    // Milestone 2에서 RaceInfo.startTime / totalHorses 바인딩 예정
+    // ignore: unused_local_variable
+    String? parsedStartTime;
+    // ignore: unused_local_variable
+    int? parsedDusu;
+    if (items.isNotEmpty) {
+      parsedStartTime = _parseStTime(items.first['stTime']);
+      parsedDusu = int.tryParse(items.first['dusu'] ?? '');
+    }
+
     final parsed = items.map<HorseEntry?>((item) {
       try {
         // ── 기본 식별 ─────────────────────────────────────────
@@ -397,6 +425,10 @@ class KraApiService {
         final jockeyName  = item['jkName']  ?? '미정';
         final trainerName = item['trName']  ?? '미정';
         final horseRegNo  = item['hrNo']    ?? '';
+
+        // ── [NEW] 기수번호 / 조교사번호 — TrainerFocus 연산 키 ─────────────
+        final jkNo = item['jkNo'] ?? '';  // 기수번호 (예: "080515")
+        final trNo = item['trNo'] ?? '';  // 조교사번호 (예: "070170")
 
         // ── 마체중 / 부담중량 ──────────────────────────────────
         final weight       = int.tryParse(item['hrWeight'] ?? '500') ?? 500;
@@ -491,6 +523,9 @@ class KraApiService {
           prizeTotalCareer:  prizeTotalCareer,
           prizeTotal1Year:   prizeTotal1Year,
           prizeTotal6Month:  prizeTotal6Month,
+          // [NEW] 기수번호 / 조교사번호 (TrainerFocus 계산 키)
+          jkNo:              jkNo,
+          trNo:              trNo,
         );
       } catch (_) {
         return null;
@@ -857,6 +892,237 @@ class KraApiService {
   }
 
   // ────────────────────────────────────────────────────────────────
+  // fetchHorseEntriesWithMeta — API26_2 파싱 결과 + stTime/dusu 반환
+  //
+  // race_provider.selectRace()에서 호출:
+  //   stTime → RaceInfo.startTime 갱신
+  //   dusu   → RaceInfo.totalHorses 초기값 (rawEntries.length로 재보정)
+  // ────────────────────────────────────────────────────────────────
+  static Future<EntrySheetResult> fetchHorseEntriesWithMeta(
+      String venueCode, DateTime date, String raceNo) async {
+    final dateStr  = _XmlParser.formatDate(date);
+    final meetCode = _venueToMeet(venueCode);
+
+    try {
+      final uri = Uri.parse(
+        '$_baseUrl/API26_2/entrySheet_2'
+        '?serviceKey=$_serviceKey'
+        '&numOfRows=20&pageNo=1'
+        '&meet=$meetCode'
+        '&rc_date=$dateStr'
+        '&rc_no=$raceNo',
+      );
+      if (kDebugMode) {
+        debugPrint('[API26_2 Meta] meet=$meetCode rc_date=$dateStr rc_no=$raceNo');
+      }
+      final resp = await http.get(uri).timeout(const Duration(seconds: 10));
+      _KraInterceptor.check(resp);
+
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
+        final items = _XmlParser.extractItems(resp.body);
+        if (items != null && items.isNotEmpty) {
+          // stTime / dusu 추출 (공통 필드 — 첫 item 기준)
+          final parsedStartTime = _parseStTime(items.first['stTime']);
+          final parsedDusu = int.tryParse(items.first['dusu'] ?? '');
+          final entries = _parseHorseEntriesXml(items, venueCode);
+          if (entries.isNotEmpty) {
+            return EntrySheetResult(
+              entries:   entries,
+              startTime: parsedStartTime,
+              dusu:      parsedDusu ?? entries.length,
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[API26_2 Meta] Error: $e → Mock');
+    }
+
+    // Fallback: Mock 데이터
+    final mockRace = RaceInfo(
+      raceNo: raceNo,
+      raceName: '제${raceNo}경주',
+      startTime: '13:00',
+      distance: 1400,
+      condition: '국6등급',
+      grade: '국6등급',
+      venueCode: venueCode,
+      venueName: _meetToVenueName(meetCode),
+      raceDate: dateStr,
+      totalHorses: 10,
+      trackCondition: '양호',
+    );
+    final mockEntries = KraMockService.getHorseEntries(mockRace);
+    return EntrySheetResult(
+      entries:   mockEntries,
+      startTime: null,
+      dusu:      mockEntries.length,
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // trnweekentry API — 조교사 차주 출전 예정마 조교 정보
+  //
+  // URL: GET /B551015/trnweekentry/gettrnweekentry
+  // 규격: XML 단독 / 갱신주기: 일1회
+  // 요청 파라미터: meet(경마장번호 1/2/3)
+  // 반환: hrName 기준으로 필터링된 조교 정보 (cnt, time1)
+  //
+  // time1 예: "14분", "47분"
+  //   → 정규식 파싱: RegExp(r'(\d+)분').group(1) → int(분)
+  //   → Fallback: 20분 (명세서 기준 기본값)
+  //
+  // TrainerFocus 공식:
+  //   trainingMinutes = time1 파싱값
+  //   count           = trtrdate.count (조교두수)
+  //   TrainerFocus    = trainingMinutes / count
+  // ────────────────────────────────────────────────────────────────
+  static Future<TrainingWeekData?> fetchTrainingData({
+    required String venueCode,
+    required String hrName,     // 경주마 이름 (마필 필터링 키)
+    required String hrNo,       // 마번(고유번호) — 보조 필터
+  }) async {
+    final meetCode = _venueToMeet(venueCode);
+
+    try {
+      // 전체 경마장 데이터를 충분히 받기 위해 numOfRows=500으로 설정
+      final uri = Uri.parse(
+        '$_baseUrl/trnweekentry/gettrnweekentry'
+        '?serviceKey=$_serviceKey'
+        '&numOfRows=500&pageNo=1'
+        '&meet=$meetCode',
+      );
+      if (kDebugMode) debugPrint('[trnweekentry] meet=$meetCode hrName=$hrName');
+
+      final resp = await http.get(uri).timeout(const Duration(seconds: 8));
+      _KraInterceptor.check(resp);
+
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
+        final items = _XmlParser.extractItems(resp.body);
+        if (items != null) {
+          // hrName 또는 hrNo 기준으로 해당 말 데이터 필터링
+          Map<String, String>? matched;
+          for (final item in items) {
+            final nameMatch = item['hrName']?.trim() == hrName.trim();
+            final noMatch   = hrNo.isNotEmpty && item['hrNo']?.trim() == hrNo.trim();
+            if (nameMatch || noMatch) {
+              matched = item;
+              break;
+            }
+          }
+
+          if (matched != null) {
+            // cnt: 조교일수
+            final cnt = int.tryParse(matched['cnt'] ?? '1') ?? 1;
+            // time1: "14분" → 정규식으로 분(int) 추출
+            // Fallback: 20분 (명세서 기준 기본값)
+            final time1Raw = matched['time1'] ?? '';
+            final timeMatch = RegExp(r'(\d+)분').firstMatch(time1Raw);
+            final trainingMinutes =
+                timeMatch != null ? int.tryParse(timeMatch.group(1)!) ?? 20 : 20;
+
+            if (kDebugMode) {
+              debugPrint('[trnweekentry] $hrName cnt=$cnt '
+                  'time1="$time1Raw" → ${trainingMinutes}분');
+            }
+
+            return TrainingWeekData(
+              hrName:           matched['hrName'] ?? hrName,
+              hrNo:             matched['hrNo'] ?? hrNo,
+              trName:           matched['trName'] ?? '',
+              cnt:              cnt,
+              trainingMinutes:  trainingMinutes,
+              rank:             matched['rank'] ?? '',
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[trnweekentry] Error: $e → Fallback');
+    }
+
+    // Fallback: 명세서 기준 기본값 (count=1, time=20분)
+    return TrainingWeekData(
+      hrName:          hrName,
+      hrNo:            hrNo,
+      trName:          '',
+      cnt:             1,
+      trainingMinutes: 20,  // 명세서 Fallback 기본값
+      rank:            '',
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // trtrdate API — 조교사 일일 조교두수 (당일 총 조교 마필 수)
+  //
+  // URL: GET /B551015/trtrdate/gettrtrdate
+  // 규격: XML 단독 / 갱신주기: 일1회
+  // 요청 파라미터: meet, tr_date(YYYYMMDD)
+  // 반환: trNo 기준 count(조교두수)
+  //
+  // TrainerFocus 공식에서 분모 역할:
+  //   count = 조교사가 당일 담당한 총 마필 수
+  //   → count가 크면 TrainerFocus 낮아짐 (집중도 분산)
+  //   → Fallback: 10 (명세서 기준 기본값)
+  // ────────────────────────────────────────────────────────────────
+  static Future<TrainerDailyData?> fetchTrainerDailyCount({
+    required String venueCode,
+    required String trNo,    // 조교사번호 (API26_2 파싱값)
+    required String trDate,  // 조교일자 YYYYMMDD
+  }) async {
+    final meetCode = _venueToMeet(venueCode);
+
+    try {
+      final uri = Uri.parse(
+        '$_baseUrl/trtrdate/gettrtrdate'
+        '?serviceKey=$_serviceKey'
+        '&numOfRows=100&pageNo=1'
+        '&meet=$meetCode'
+        '&tr_date=$trDate',
+      );
+      if (kDebugMode) debugPrint('[trtrdate] meet=$meetCode trDate=$trDate trNo=$trNo');
+
+      final resp = await http.get(uri).timeout(const Duration(seconds: 8));
+      _KraInterceptor.check(resp);
+
+      if (resp.statusCode == 200 &&
+          !resp.body.contains('Unexpected errors')) {
+        final items = _XmlParser.extractItems(resp.body);
+        if (items != null) {
+          // trNo 기준으로 해당 조교사 데이터 필터링
+          for (final item in items) {
+            if (item['trNo']?.trim() == trNo.trim()) {
+              final count = int.tryParse(item['count'] ?? '10') ?? 10;
+              final trName = item['trName'] ?? '';
+              if (kDebugMode) {
+                debugPrint('[trtrdate] trNo=$trNo trName=$trName count=$count');
+              }
+              return TrainerDailyData(
+                trNo:    trNo,
+                trName:  trName,
+                trDate:  item['trDate'] ?? trDate,
+                count:   count,
+              );
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[trtrdate] Error: $e → Fallback count=10');
+    }
+
+    // Fallback: 명세서 기준 기본값 (조교두수 10)
+    return TrainerDailyData(
+      trNo:   trNo,
+      trName: '',
+      trDate: trDate,
+      count:  10,  // 명세서 Fallback 기본값
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
   // JSON 아이템 추출 (API187 / API4_3 전용)
   // ────────────────────────────────────────────────────────────────
   static List<dynamic>? _extractJsonItems(dynamic data) {
@@ -872,5 +1138,136 @@ class KraApiService {
     } catch (_) {
       return null;
     }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// EntrySheetResult — API26_2 파싱 결과 래퍼
+// fetchHorseEntriesWithMeta()가 반환하는 복합 결과
+// ══════════════════════════════════════════════════════════════════════
+class EntrySheetResult {
+  /// API26_2 출전마 목록
+  final List<HorseEntry> entries;
+
+  /// 파싱된 출발시각 ("HH:MM" 형식, null=파싱 실패)
+  /// API26_2 stTime 원시값: "출발 :10:45" → "10:45"
+  final String? startTime;
+
+  /// API26_2 dusu 필드값 (두수)
+  /// rawEntries.length와 다를 경우 rawEntries.length를 우선 사용
+  final int dusu;
+
+  const EntrySheetResult({
+    required this.entries,
+    required this.startTime,
+    required this.dusu,
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TrainingWeekData — trnweekentry 파싱 결과
+// 조교사 차주 출전 예정마의 조교일수 + 조교시간 DTO
+// ══════════════════════════════════════════════════════════════════════
+class TrainingWeekData {
+  final String hrName;           // 마명
+  final String hrNo;             // 마번(고유번호)
+  final String trName;           // 조교사명
+  final int    cnt;              // 조교일수 (API: cnt)
+  final int    trainingMinutes;  // 조교시간(분) — time1 "14분" → 14
+  final String rank;             // 등급
+
+  const TrainingWeekData({
+    required this.hrName,
+    required this.hrNo,
+    required this.trName,
+    required this.cnt,
+    required this.trainingMinutes,
+    required this.rank,
+  });
+
+  /// TrainerFocus 공식의 분자: 조교 총 시간(분)
+  /// 하나의 세션(조교일수=cnt, 세션당 시간=trainingMinutes/cnt 가정)
+  /// → 실제로 trainingMinutes가 주간 총 조교시간이므로 그대로 사용
+  int get totalTrainingMinutes => trainingMinutes;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TrainerDailyData — trtrdate 파싱 결과
+// 조교사의 당일 총 조교두수 DTO
+// ══════════════════════════════════════════════════════════════════════
+class TrainerDailyData {
+  final String trNo;    // 조교사번호
+  final String trName;  // 조교사명
+  final String trDate;  // 조교일자 (YYYYMMDD)
+  final int    count;   // 당일 총 조교두수
+
+  const TrainerDailyData({
+    required this.trNo,
+    required this.trName,
+    required this.trDate,
+    required this.count,
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TrainerFocusCalculator — 조교사 집중도 지수 계산기
+//
+// [공식 1] TrainerFocus = trainingMinutes / count
+//   Focus Buff  (TrainerFocus ≥ 10.0): 스타트 딜레이 -15%, 게이트 부스트
+//   Focus Penalty(TrainerFocus ≤ 1.0): 제어력 -5%, 코너 저항 저하
+// ══════════════════════════════════════════════════════════════════════
+class TrainerFocusCalculator {
+  /// Focus Buff 임계값 — TrainerFocus ≥ 10.0
+  static const double kFocusBuffThreshold   = 10.0;
+  /// Focus Penalty 임계값 — TrainerFocus ≤ 1.0
+  static const double kFocusPenaltyThreshold = 1.0;
+
+  /// 스타트 딜레이 감소율 (Focus Buff 적용 시): -15%
+  static const double kStartDelayReduction  = 0.15;
+  /// 제어력 계수 감산율 (Focus Penalty 적용 시): -5%
+  static const double kControlPenalty        = 0.05;
+
+  /// TrainerFocus 지수 계산
+  ///   [trainingMinutes]: trnweekentry.time1 파싱값 (분)
+  ///   [count]:           trtrdate.count (당일 조교두수)
+  ///   Fallback: count=10, trainingMinutes=20 (명세서 기준)
+  static double compute({
+    required int trainingMinutes,
+    required int count,
+  }) {
+    if (count <= 0) return trainingMinutes.toDouble();
+    return trainingMinutes / count;
+  }
+
+  /// Focus 상태 레이블 (UI 표시용)
+  static String statusLabel(double focus) {
+    if (focus >= kFocusBuffThreshold)   return '🔥집중훈련';
+    if (focus <= kFocusPenaltyThreshold) return '⚠️분산훈련';
+    return '✅보통';
+  }
+
+  /// Focus 상태 색상 코드 (UI 표시용)
+  static int statusColor(double focus) {
+    if (focus >= kFocusBuffThreshold)   return 0xFFFF6B35; // 주황 (집중)
+    if (focus <= kFocusPenaltyThreshold) return 0xFFFF5252; // 빨강 (분산)
+    return 0xFF66BB6A;                                       // 초록 (보통)
+  }
+
+  /// 스타트 가속도 배율 반환 (물리 엔진 연산용)
+  ///   Buff:    startBoostMultiplier = 1.15 (+15% 스타트 부스트)
+  ///   Penalty: startBoostMultiplier = 0.95 (-5% 페널티)
+  ///   Normal:  startBoostMultiplier = 1.0
+  static double startBoostMultiplier(double focus) {
+    if (focus >= kFocusBuffThreshold)    return 1.0 + kStartDelayReduction;
+    if (focus <= kFocusPenaltyThreshold) return 1.0 - kControlPenalty;
+    return 1.0;
+  }
+
+  /// 코너 저항 계수 반환 (물리 엔진 연산용)
+  ///   Penalty: cornerResistance = 1.05 (저항 +5%)
+  ///   Normal:  cornerResistance = 1.0
+  static double cornerResistance(double focus) {
+    if (focus <= kFocusPenaltyThreshold) return 1.0 + kControlPenalty;
+    return 1.0;
   }
 }

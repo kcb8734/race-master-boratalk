@@ -23,17 +23,28 @@ import '../utils/horse_cap_colors.dart';
 import 'race_animation_screen.dart';
 
 // ──────────────────────────────────────────────────────────────────────
-// 사용자 보정 세팅
+// 사용자 보정 세팅 (세션 4 확장: userSpeedWeight + userStaminaWeight)
 // ──────────────────────────────────────────────────────────────────────
 class SandboxCalibration {
   final int gateNo;
-  double jockeyFatigue;  // 기수 피로도 감점 (-5.0 ~ 0.0)
-  double oddsWeight;     // 배당률 가중치 보정 (-5.0 ~ +5.0)
+  double jockeyFatigue;     // 기수 피로도 감점 (-5.0 ~ 0.0)
+  double oddsWeight;        // 배당률 가중치 보정 (-5.0 ~ +5.0)
+
+  // ── [NEW] 세션 4: 속도·지구력 가중치 슬라이더 (명세서 3절) ──────────
+  /// 초반 속도 가중치 — finalSpeed = baseSpeed × userSpeedWeight
+  /// 범위: 0.5 ~ 2.0 (기본 1.0 = 보정 없음)
+  double userSpeedWeight;
+
+  /// 후반 지구력 가중치 — finalStamina = baseStamina × userStaminaWeight
+  /// 범위: 0.5 ~ 2.0 (기본 1.0 = 보정 없음)
+  double userStaminaWeight;
 
   SandboxCalibration({
     required this.gateNo,
-    this.jockeyFatigue = 0.0,
-    this.oddsWeight    = 0.0,
+    this.jockeyFatigue    = 0.0,
+    this.oddsWeight       = 0.0,
+    this.userSpeedWeight   = 1.0,
+    this.userStaminaWeight = 1.0,
   });
 
   /// 최종 보정값 (finalScore에 더할 총 보정치)
@@ -220,22 +231,31 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
       // 최종 점수 = 배당 역산점 + 사용자 보정
       final finalBase = (oddsScore + cal.totalAdjust).clamp(1.0, 100.0);
 
+      // [NEW] 세션 4: userSpeedWeight/userStaminaWeight 곱연산 적용
+      // finalSpeed    = baseSpeed    × userSpeedWeight
+      // finalStamina  = baseStamina  × userStaminaWeight
+      final finalSpeed   = (finalBase * 0.9  * cal.userSpeedWeight).clamp(1.0, 100.0);
+      final finalStamina = (finalBase * 0.85 * cal.userStaminaWeight).clamp(1.0, 100.0);
+
       return HorseEntry(
-        gateNo:       h.gateNo,
-        horseName:    h.horseName,
-        jockeyName:   h.jockeyName,
-        trainerName:  h.trainerName,
-        weight:       h.weight,
-        weightChange: h.weightDiff,
-        rating:       finalBase,
-        speedStat:    finalBase * 0.9,
-        staminaStat:  finalBase * 0.85,
-        formStat:     finalBase * 0.8,
-        trackFitStat: finalBase * 0.75,
-        baseScore:    finalBase,
-        recentRecord: h.raceTime,
-        odds:         h.winOdds,
-        userBonus:    cal.totalAdjust,
+        gateNo:            h.gateNo,
+        horseName:         h.horseName,
+        jockeyName:        h.jockeyName,
+        trainerName:       h.trainerName,
+        weight:            h.weight,
+        weightChange:      h.weightDiff,
+        rating:            finalBase,
+        speedStat:         finalSpeed,
+        staminaStat:       finalStamina,
+        formStat:          finalBase * 0.8,
+        trackFitStat:      finalBase * 0.75,
+        baseScore:         finalBase,
+        recentRecord:      h.raceTime,
+        odds:              h.winOdds,
+        plcOdds:           h.placeOdds,
+        userBonus:         cal.totalAdjust,
+        userSpeedWeight:   cal.userSpeedWeight,
+        userStaminaWeight: cal.userStaminaWeight,
       );
     }).toList();
 
@@ -698,19 +718,26 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
     );
   }
 
-  // ── 사용자 보정 패널 ──────────────────────────────────────────────
+  // ── 사용자 보정 패널 (세션 4 재구성) ────────────────────────────────
+  // 명세서 3절: 실시간 배당현황판 + 초반속도/후반지구력 이중 슬라이더
   Widget _buildCalibrationPanel() {
-    final result = _selectedResult!;
-    final starters =
-        result.horses.where((h) => h.didStart).toList();
+    final result   = _selectedResult!;
+    final starters = result.horses.where((h) => h.didStart).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ━━ 실시간 배당 현황판 (명세서 UI 테이블) ━━━━━━━━━━━━━━━━━━━━━━━
+        _sectionTitle('📊 실시간 배당 현황판'),
+        const SizedBox(height: 8),
+        _buildOddsBoard(starters),
+        const SizedBox(height: 14),
+
+        // ━━ 사용자 수동 보정 슬라이더 패널 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         _sectionTitle('🎛️ 사용자 보정 변수 입력'),
         const SizedBox(height: 6),
         Text(
-          '출전마별 기수 피로도(-5~0)와 배당 가중치(-5~+5)를 직접 입력하세요.',
+          '초반 속도(×)와 후반 지구력(×) 가중치를 조정하세요. (1.0 = 기본값)',
           style: TextStyle(
               color: Colors.white.withValues(alpha: 0.45), fontSize: 10.5),
         ),
@@ -722,7 +749,7 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
 
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: const Color(0xFF0C1A2E),
               borderRadius: BorderRadius.circular(10),
@@ -731,13 +758,12 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 마번 + 마명 + 배당
+                // ── 마번 + 마명 + 단승식/복승식 배당 ─────────────────
                 Row(
                   children: [
                     Container(
-                      width: 26, height: 26,
-                      decoration:
-                          BoxDecoration(color: cd.bg, shape: BoxShape.circle),
+                      width: 28, height: 28,
+                      decoration: BoxDecoration(color: cd.bg, shape: BoxShape.circle),
                       child: Center(
                         child: Text('${h.gateNo}',
                             style: TextStyle(
@@ -747,92 +773,350 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(h.horseName,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12, fontWeight: FontWeight.w800)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(h.horseName,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12, fontWeight: FontWeight.w800)),
+                          Text(h.jockeyName,
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  fontSize: 10)),
+                        ],
+                      ),
                     ),
-                    Text(
-                        h.winOdds > 0
-                            ? '${h.winOdds.toStringAsFixed(1)}배'
-                            : '배당없음',
-                        style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.5),
-                            fontSize: 10.5)),
+                    // 단승식 배당
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (h.winOdds > 0)
+                          Text('단 ${h.winOdds.toStringAsFixed(1)}배',
+                              style: TextStyle(
+                                  color: _oddsColor(h.winOdds),
+                                  fontSize: 11, fontWeight: FontWeight.w800))
+                        else
+                          Text('배당없음',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.3),
+                                  fontSize: 10)),
+                        if (h.placeOdds > 0)
+                          Text('복 ${h.placeOdds.toStringAsFixed(1)}배',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.5),
+                                  fontSize: 9.5)),
+                      ],
+                    ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
 
-                // 기수 피로도 슬라이더
-                Row(
-                  children: [
-                    const SizedBox(width: 4),
-                    Text('😴 기수 피로도',
-                        style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.6),
-                            fontSize: 10)),
-                    const Spacer(),
-                    Text(cal.jockeyFatigue.toStringAsFixed(1),
-                        style: TextStyle(
-                            color: cal.jockeyFatigue < 0
-                                ? const Color(0xFFFF5252)
-                                : Colors.white.withValues(alpha: 0.5),
-                            fontSize: 11, fontWeight: FontWeight.w700)),
-                  ],
+                // ── ① 초반 속도 가중치 슬라이더 ─────────────────────
+                // finalSpeed = baseSpeed × userSpeedWeight (명세서 3절)
+                _buildWeightSlider(
+                  label:    '⚡ 초반 속도',
+                  value:    cal.userSpeedWeight,
+                  color:    const Color(0xFF64B5F6),
+                  onChanged: (v) => setState(() => cal.userSpeedWeight = v),
                 ),
-                Slider(
-                  value: cal.jockeyFatigue,
-                  min: -5.0, max: 0.0, divisions: 10,
-                  activeColor: const Color(0xFFFF5252),
-                  inactiveColor: Colors.white.withValues(alpha: 0.1),
-                  onChanged: (v) => setState(() => cal.jockeyFatigue = v),
-                ),
+                const SizedBox(height: 4),
 
-                // 배당률 가중치 슬라이더
-                Row(
-                  children: [
-                    const SizedBox(width: 4),
-                    Text('💰 배당 가중치',
-                        style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.6),
-                            fontSize: 10)),
-                    const Spacer(),
-                    Text(
-                        '${cal.oddsWeight >= 0 ? "+" : ""}${cal.oddsWeight.toStringAsFixed(1)}',
-                        style: TextStyle(
-                            color: cal.oddsWeight > 0
-                                ? const Color(0xFF4CAF50)
-                                : cal.oddsWeight < 0
-                                    ? const Color(0xFFFF5252)
-                                    : Colors.white.withValues(alpha: 0.5),
-                            fontSize: 11, fontWeight: FontWeight.w700)),
-                  ],
+                // ── ② 후반 지구력 가중치 슬라이더 ──────────────────
+                // finalStamina = baseStamina × userStaminaWeight
+                _buildWeightSlider(
+                  label:    '🏃 후반 지구력',
+                  value:    cal.userStaminaWeight,
+                  color:    const Color(0xFF81C784),
+                  onChanged: (v) => setState(() => cal.userStaminaWeight = v),
                 ),
-                Slider(
-                  value: cal.oddsWeight,
-                  min: -5.0, max: 5.0, divisions: 20,
-                  activeColor: const Color(0xFF64B5F6),
-                  inactiveColor: Colors.white.withValues(alpha: 0.1),
-                  onChanged: (v) => setState(() => cal.oddsWeight = v),
-                ),
+                const SizedBox(height: 4),
 
-                // 총 보정치
-                if (cal.totalAdjust != 0)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                        '총 보정 ${cal.totalAdjust >= 0 ? "+" : ""}${cal.totalAdjust.toStringAsFixed(1)}pt',
-                        style: TextStyle(
-                            color: cal.totalAdjust > 0
-                                ? const Color(0xFF4CAF50)
-                                : const Color(0xFFFF5252),
-                            fontSize: 10, fontWeight: FontWeight.w700)),
+                // ── ③ 기수 피로도 (기존 유지) ─────────────────────
+                _buildFatigueSlider(cal),
+
+                // ── 가중치 요약 표시 ─────────────────────────────
+                if (cal.userSpeedWeight != 1.0 || cal.userStaminaWeight != 1.0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        _weightBadge('속도 ×${cal.userSpeedWeight.toStringAsFixed(2)}',
+                            const Color(0xFF64B5F6)),
+                        const SizedBox(width: 6),
+                        _weightBadge('지구력 ×${cal.userStaminaWeight.toStringAsFixed(2)}',
+                            const Color(0xFF81C784)),
+                      ],
+                    ),
                   ),
               ],
             ),
           );
         }),
       ],
+    );
+  }
+
+  // ── 실시간 배당 현황판 (명세서 UI: 마번/마명/단승식/복승식/조교태세) ──
+  Widget _buildOddsBoard(List<HorseResult> starters) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF071220),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF1A3A6A)),
+      ),
+      child: Column(
+        children: [
+          // 컬럼 헤더
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                _boardHeader('마번', 36),
+                _boardHeader('마명', 0, flex: true),
+                _boardHeader('단승식', 52),
+                _boardHeader('복승식', 52),
+                _boardHeader('조교태세', 70),
+              ],
+            ),
+          ),
+          const Divider(color: Color(0xFF1A3A6A), height: 1),
+          const SizedBox(height: 6),
+          ...starters.map((h) => _buildOddsBoardRow(h)),
+        ],
+      ),
+    );
+  }
+
+  // 배당현황판 개별 행
+  Widget _buildOddsBoardRow(HorseResult h) {
+    final cd       = HorseCapColors.getCapData(h.gateNo);
+    final winColor = _oddsColor(h.winOdds);
+    // TrainerFocus 태세 표시 (현재 샌드박스에서는 임시 표시)
+    // race_stat_engine에서 enrichHorseStats 후에는 실제 Focus 데이터 사용
+    final trainerStatus = _getTrainerFocusLabel(h.gateNo);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          // 마번 원형 칩
+          SizedBox(
+            width: 36,
+            child: Center(
+              child: Container(
+                width: 24, height: 24,
+                decoration: BoxDecoration(color: cd.bg, shape: BoxShape.circle),
+                child: Center(
+                  child: Text('${h.gateNo}',
+                      style: TextStyle(
+                          color: cd.text,
+                          fontSize: 10, fontWeight: FontWeight.w900)),
+                ),
+              ),
+            ),
+          ),
+          // 마명
+          Expanded(
+            child: Text(h.horseName,
+                style: const TextStyle(color: Colors.white, fontSize: 11.5),
+                overflow: TextOverflow.ellipsis),
+          ),
+          // 단승식
+          SizedBox(
+            width: 52,
+            child: Text(
+              h.winOdds > 0 ? h.winOdds.toStringAsFixed(1) : '—',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: winColor,
+                  fontSize: 12, fontWeight: FontWeight.w800),
+            ),
+          ),
+          // 복승식
+          SizedBox(
+            width: 52,
+            child: Text(
+              h.placeOdds > 0 ? h.placeOdds.toStringAsFixed(1) : '—',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  fontSize: 11),
+            ),
+          ),
+          // 조교태세
+          SizedBox(
+            width: 70,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: trainerStatus.bgColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: trainerStatus.bgColor.withValues(alpha: 0.4)),
+              ),
+              child: Text(
+                trainerStatus.label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: trainerStatus.bgColor,
+                    fontSize: 9.5, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 조교태세 레이블/색상 (TrainerFocus 실데이터 없을 때 중립 표시)
+  _FocusStatus _getTrainerFocusLabel(int gateNo) {
+    // 실제 TrainerFocus 데이터가 있으면 해당 데이터 사용
+    // 현재는 샌드박스 기본값 (과거 데이터에는 trnweekentry 없음)
+    return _FocusStatus(label: '✅ 보통', bgColor: const Color(0xFF78909C));
+  }
+
+  // 배당 색상 (manual_calibration_panel과 동일)
+  Color _oddsColor(double odds) {
+    if (odds <= 3.0)  return const Color(0xFF4CAF50);
+    if (odds <= 6.0)  return const Color(0xFF8BC34A);
+    if (odds <= 10.0) return const Color(0xFFFFD700);
+    if (odds <= 20.0) return const Color(0xFFFF9800);
+    return const Color(0xFFEF5350);
+  }
+
+  // 배당현황판 헤더 셀
+  Widget _boardHeader(String text, double width, {bool flex = false}) {
+    final cell = Text(text,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 9.5, fontWeight: FontWeight.w600));
+    if (flex) return Expanded(child: cell);
+    return SizedBox(width: width, child: cell);
+  }
+
+  // 가중치 슬라이더 빌더 (초반속도 / 후반지구력 공통)
+  Widget _buildWeightSlider({
+    required String label,
+    required double value,
+    required Color color,
+    required ValueChanged<double> onChanged,
+  }) {
+    final pct = ((value - 1.0) * 100).round();
+    final pctStr = pct >= 0 ? '+$pct%' : '$pct%';
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 76,
+          child: Text(label,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.65), fontSize: 10)),
+        ),
+        Text('0.5',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25), fontSize: 9)),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              activeTrackColor: color,
+              inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
+              thumbColor: color,
+              overlayColor: color.withValues(alpha: 0.2),
+            ),
+            child: Slider(
+              value: value,
+              min: 0.5, max: 2.0, divisions: 30,
+              onChanged: onChanged,
+            ),
+          ),
+        ),
+        Text('2.0',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25), fontSize: 9)),
+        const SizedBox(width: 4),
+        Container(
+          width: 42,
+          alignment: Alignment.center,
+          child: Text(pctStr,
+              style: TextStyle(
+                  color: value > 1.0
+                      ? color
+                      : value < 1.0
+                          ? const Color(0xFFFF5252)
+                          : Colors.white.withValues(alpha: 0.4),
+                  fontSize: 11, fontWeight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
+
+  // 기수 피로도 슬라이더 (기존 유지)
+  Widget _buildFatigueSlider(SandboxCalibration cal) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 76,
+          child: Text('😴 피로도',
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.55), fontSize: 10)),
+        ),
+        Text('-5',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25), fontSize: 9)),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              activeTrackColor: const Color(0xFFFF5252),
+              inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
+              thumbColor: const Color(0xFFFF5252),
+              overlayColor: const Color(0x22FF5252),
+            ),
+            child: Slider(
+              value: cal.jockeyFatigue,
+              min: -5.0, max: 0.0, divisions: 10,
+              onChanged: (v) => setState(() => cal.jockeyFatigue = v),
+            ),
+          ),
+        ),
+        Text('0',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25), fontSize: 9)),
+        const SizedBox(width: 4),
+        Container(
+          width: 42,
+          alignment: Alignment.center,
+          child: Text(cal.jockeyFatigue.toStringAsFixed(1),
+              style: TextStyle(
+                  color: cal.jockeyFatigue < 0
+                      ? const Color(0xFFFF5252)
+                      : Colors.white.withValues(alpha: 0.4),
+                  fontSize: 11, fontWeight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
+
+  // 가중치 뱃지
+  Widget _weightBadge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              color: color, fontSize: 9.5, fontWeight: FontWeight.w700)),
     );
   }
 
@@ -1190,6 +1474,15 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
       return null;
     }
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// _FocusStatus — 조교태세 레이블/색상 래퍼 (배당현황판 조교태세 컬럼용)
+// ──────────────────────────────────────────────────────────────────────
+class _FocusStatus {
+  final String label;
+  final Color bgColor;
+  const _FocusStatus({required this.label, required this.bgColor});
 }
 
 // ══════════════════════════════════════════════════════════════════════

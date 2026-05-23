@@ -342,12 +342,32 @@ const double kSurgeBuffBonus = 0.20;           // +20%
 /// 오후 가중치 최대 보정 배율 (경주 9번 이후 최대)
 const double kAfternoonMaxScale = 1.35;
 
+// ── [NEW] 세션 4: 피로도 지수 (FatigueIndex) 상수 ──────────────────────
+/// 피로도 발동 조건: 당일 N회 이상 출전 시 누적 페널티 적용
+const int kFatigueTriggerRaces = 4;            // 4회 이상 출전 시 발동
+
+/// 출전 1회 초과당 maxAcceleration 감산율
+const double kFatigueAccelPenaltyPerRace = 0.03; // 회당 -3%
+
 // ── 기수 1명의 당일 성적 레코드 ─────────────────────────────────────
 class _JockeyRecord {
   int dailyWinCount  = 0; // 당일 승수
   int racesRidden    = 0; // 당일 출전 경기 수
   bool safeMode      = false; // 안전주행 모드
   bool mentalBuff    = false; // 독기 모드
+
+  // ── [NEW] 세션 4: 피로도 지수 ──────────────────────────────────────
+  /// 피로도 누적 maxAcceleration 감산율
+  /// 4회 이상 출전 시: (racesRidden - 3) × 3% 씩 누적 감산
+  double get fatigueAccelPenalty {
+    if (racesRidden < kFatigueTriggerRaces) return 0.0;
+    // 4회째부터 1회당 3% 누적, 최대 -15% 상한
+    final extraRaces = racesRidden - (kFatigueTriggerRaces - 1);
+    return (extraRaces * kFatigueAccelPenaltyPerRace).clamp(0.0, 0.15);
+  }
+
+  /// 피로도 발동 여부
+  bool get isFatigued => racesRidden >= kFatigueTriggerRaces;
 
   /// 승리 기록 → 상태 재계산
   void recordWin() {
@@ -423,6 +443,25 @@ class JockeyDailyTracker {
   /// 당일 승수 조회
   int getDailyWins(String jockeyName) =>
       _records[jockeyName]?.dailyWinCount ?? 0;
+
+  /// 당일 출전 횟수 조회
+  int getDailyRaces(String jockeyName) =>
+      _records[jockeyName]?.racesRidden ?? 0;
+
+  // ── [NEW] 세션 4: FatigueIndex 관련 공개 API ──────────────────────────
+
+  /// 피로도 발동 여부 (4회 이상 출전 기수)
+  bool isFatigued(String jockeyName, double jockeyRcWins) {
+    if (!isElite(jockeyRcWins)) return false;
+    return _records[jockeyName]?.isFatigued ?? false;
+  }
+
+  /// 피로도 누적 maxAcceleration 감산율 반환 (0.0~0.15)
+  /// 4회 출전 시 0.03, 5회 시 0.06, ... 최대 0.15
+  double fatigueAccelPenalty(String jockeyName, double jockeyRcWins) {
+    if (!isElite(jockeyRcWins)) return 0.0;
+    return _records[jockeyName]?.fatigueAccelPenalty ?? 0.0;
+  }
 
   /// 경주 번호 기반 오후 가중치 배율 (raceNo 1~12 기준)
   /// 오후 후반부일수록 엘리트 기수 피로/독기 효과 더 강해짐

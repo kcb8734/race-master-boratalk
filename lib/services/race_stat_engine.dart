@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/race_models.dart';
+import '../models/race_horse_data.dart';
+import 'kra_api_service.dart';
 
 /// ══════════════════════════════════════════════════════════════════════
 ///  경마통 AI 스탯 연산 엔진 (Race Stat Engine)
@@ -38,6 +40,10 @@ class RaceStatEngine {
     // 2. API10_1: 기수변경 체크
     final jockeyChanges = await _fetchJockeyChanges(race);
 
+    // 3. [NEW] 세션 4: trtrdate API — 조교사 당일 조교두수 선취득
+    //    경주일(raceDate) + 경주장 코드(venueCode) 기준 전체 조교사 데이터 수집
+    final trainerCountCache = <String, int>{}; // trNo → count 캐시
+
     // 3. 각 말별 스탯 정교화
     final enriched = <HorseEntry>[];
     for (final entry in entries) {
@@ -56,38 +62,136 @@ class RaceStatEngine {
       // API155: 통계 분포 보정
       final ai155Factor = _calcAI155Factor(entry, race);
 
+      // ── [NEW] 세션 4: TrainerFocus 연동 ────────────────────────────────
+      // trnweekentry → 해당 말의 주간 조교 데이터
+      // trtrdate     → 해당 조교사 당일 조교두수
+      double trainerFocusBoostStart = 1.0;    // 스타트 딜레이 보정 배율
+      double trainerFocusCornerPenalty = 0.0; // 코너 저항 감산값
+
+      if (entry.trNo.isNotEmpty || entry.trainerName.isNotEmpty) {
+        try {
+          // trnweekentry: 해당 말의 주간 조교 정보
+          final trainingData = await KraApiService.fetchTrainingData(
+            venueCode: race.venueCode,
+            hrName:    entry.horseName,
+            hrNo:      entry.horseRegNo,
+          );
+
+          // trtrdate: 조교사 당일 조교두수 (캐시 우선)
+          int trainerCount;
+          if (trainerCountCache.containsKey(entry.trNo)) {
+            trainerCount = trainerCountCache[entry.trNo]!;
+          } else {
+            final dailyData = await KraApiService.fetchTrainerDailyCount(
+              venueCode: race.venueCode,
+              trNo:      entry.trNo.isNotEmpty ? entry.trNo : '000000',
+              trDate:    race.raceDate,
+            );
+            trainerCount = dailyData?.count ?? 10; // Fallback: 10
+            if (entry.trNo.isNotEmpty) {
+              trainerCountCache[entry.trNo] = trainerCount;
+            }
+          }
+
+          // TrainerFocus 계산: trainingMinutes / count
+          final trainingMinutes = trainingData?.trainingMinutes ?? 20; // Fallback: 20분
+          final focus = TrainerFocusCalculator.compute(
+            trainingMinutes: trainingMinutes,
+            count:           trainerCount,
+          );
+
+          // Focus Buff (≥10.0): 스타트 딜레이 -15%, 게이트 부스트
+          // Focus Penalty (≤1.0): 제어력 -5%, 코너 저항 저하
+          trainerFocusBoostStart  = TrainerFocusCalculator.startBoostMultiplier(focus);
+          trainerFocusCornerPenalty = TrainerFocusCalculator.cornerResistance(focus) - 1.0;
+
+          if (kDebugMode) {
+            debugPrint('[TrainerFocus] ${entry.horseName}: '
+                'minutes=$trainingMinutes count=$trainerCount '
+                'focus=${focus.toStringAsFixed(2)} '
+                'status=${TrainerFocusCalculator.statusLabel(focus)} '
+                'startBoost=$trainerFocusBoostStart');
+          }
+        } catch (e) {
+          if (kDebugMode) debugPrint('[TrainerFocus] ${entry.horseName} 오류: $e → 기본값');
+          // Fallback: 보정 없음
+        }
+      }
+
+      // ── [NEW] 세션 4: FatigueIndex 적용 ──────────────────────────────
+      // JockeyDailyTracker에서 해당 기수의 피로도 감산율 조회
+      final tracker = JockeyDailyTracker.instance;
+      final fatiguePenalty = tracker.fatigueAccelPenalty(
+        entry.jockeyName,
+        entry.jockeyRcWins,
+      );
+
       // 최종 스탯 합산 (가중 평균)
       final newSpeedStat   = (speedResult  * 0.85 + jockeyBonus * 0.15).clamp(0.0, 100.0);
       final newStaminaStat = (staminaResult * 0.9  + jockeyBonus * 0.10).clamp(0.0, 100.0);
       final newFormStat    = (entry.formStat * 0.7 + jockeyBonus * 0.3).clamp(0.0, 100.0);
       final newTrackFit    = (trackFitResult * 0.95 + trackFactor * 5.0).clamp(0.0, 100.0);
 
-      // P_final 기반 baseScore 재계산
+      // ── [NEW] 세션 4: userSpeedWeight / userStaminaWeight 곱연산 ───────
+      // finalSpeed    = baseSpeed    × userSpeedWeight   (명세서 3절)
+      // finalStamina  = baseStamina  × userStaminaWeight
+      // FatigueIndex: maxAcceleration -3% × (racesRidden - 3) 누적
+      final finalSpeedStat   = (newSpeedStat
+          * entry.userSpeedWeight
+          * trainerFocusBoostStart
+          * (1.0 - fatiguePenalty)        // FatigueIndex 감산
+      ).clamp(0.0, 100.0);
+
+      final finalStaminaStat = (newStaminaStat
+          * entry.userStaminaWeight
+          * (1.0 + trainerFocusCornerPenalty) // TrainerFocus 코너 보정
+      ).clamp(0.0, 100.0);
+
+      // P_final 기반 baseScore 재계산 (userWeight 반영 후 스탯 사용)
       final newBaseScore = (
-        newSpeedStat   * 0.35 +
-        newStaminaStat * 0.25 +
-        newFormStat    * 0.20 +
-        newTrackFit    * 0.10 +
-        entry.rating   * 0.10
+        finalSpeedStat   * 0.35 +
+        finalStaminaStat * 0.25 +
+        newFormStat      * 0.20 +
+        newTrackFit      * 0.10 +
+        entry.rating     * 0.10
       ).clamp(0.0, 100.0) * ai155Factor;
 
       enriched.add(HorseEntry(
-        gateNo:       entry.gateNo,
-        horseName:    entry.horseName,
-        jockeyName:   entry.jockeyName,
-        trainerName:  entry.trainerName,
-        weight:       entry.weight,
-        weightChange: entry.weightChange,
-        rating:       entry.rating,
-        speedStat:    newSpeedStat,
-        staminaStat:  newStaminaStat,
-        formStat:     newFormStat,
-        trackFitStat: newTrackFit,
-        baseScore:    newBaseScore,
-        userBonus:    entry.userBonus,
-        recentRecord: entry.recentRecord,
-        odds:         entry.odds,
-        isCancelled:  entry.isCancelled,
+        gateNo:            entry.gateNo,
+        horseName:         entry.horseName,
+        jockeyName:        entry.jockeyName,
+        trainerName:       entry.trainerName,
+        weight:            entry.weight,
+        weightChange:      entry.weightChange,
+        rating:            entry.rating,
+        speedStat:         finalSpeedStat,
+        staminaStat:       finalStaminaStat,
+        formStat:          newFormStat,
+        trackFitStat:      newTrackFit,
+        baseScore:         newBaseScore,
+        userBonus:         entry.userBonus,
+        recentRecord:      entry.recentRecord,
+        odds:              entry.odds,
+        plcOdds:           entry.plcOdds,
+        isCancelled:       entry.isCancelled,
+        horseRegNo:        entry.horseRegNo,
+        rcWins:            entry.rcWins,
+        jockeyRcWins:      entry.jockeyRcWins,
+        wgBudam:           entry.wgBudam,
+        g1fRating:         entry.g1fRating,
+        prizeWin:          entry.prizeWin,
+        prize2nd:          entry.prize2nd,
+        prize3rd:          entry.prize3rd,
+        prize4th:          entry.prize4th,
+        prize5th:          entry.prize5th,
+        prizeTotalCareer:  entry.prizeTotalCareer,
+        prizeTotal1Year:   entry.prizeTotal1Year,
+        prizeTotal6Month:  entry.prizeTotal6Month,
+        physicsProfile:    entry.physicsProfile,
+        jkNo:              entry.jkNo,
+        trNo:              entry.trNo,
+        userSpeedWeight:   entry.userSpeedWeight,
+        userStaminaWeight: entry.userStaminaWeight,
       ));
     }
 

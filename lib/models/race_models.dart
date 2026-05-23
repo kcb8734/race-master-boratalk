@@ -211,6 +211,24 @@ class HorseEntry {
   double get prizeCompetitiveness =>
       (prizeTotal1Year / 100000000.0).clamp(0.0, 1.0);
 
+  // ── [NEW] 세션 4: API26_2 기수번호 / 조교사번호 (TrainerFocus 계산 키) ──
+  /// 기수번호 (예: "080515") — API26_2: jkNo 필드
+  /// TrainerFocus 계산 및 FatigueIndex 추적의 기준 키
+  final String jkNo;
+
+  /// 조교사번호 (예: "070170") — API26_2: trNo 필드
+  /// trtrdate API 조교사 집중도 계산의 매핑 키
+  final String trNo;
+
+  // ── [NEW] 세션 4: 사용자 수동 보정 가중치 (명세서 3절 Calibration 엔진) ──
+  /// 초반 속도 가중치 — 슬라이더 범위 0.5~2.0, 기본값 1.0
+  /// 물리 엔진: finalSpeed = baseSpeed × userSpeedWeight
+  double userSpeedWeight;
+
+  /// 후반 지구력 가중치 — 슬라이더 범위 0.5~2.0, 기본값 1.0
+  /// 물리 엔진: finalStamina = baseStamina × userStaminaWeight
+  double userStaminaWeight;
+
   HorseEntry({
     required this.gateNo,
     required this.horseName,
@@ -246,6 +264,12 @@ class HorseEntry {
     this.prizeTotal6Month  = 0,
     // [NEW] API4_3 물리 프로필 (기본값: null → 물리 엔진에서 neutral 사용)
     this.physicsProfile,
+    // [NEW] 세션 4: 기수번호/조교사번호 (TrainerFocus 계산 키)
+    this.jkNo              = '',
+    this.trNo              = '',
+    // [NEW] 세션 4: 사용자 수동 보정 가중치 (기본값 1.0 = 보정 없음)
+    this.userSpeedWeight   = 1.0,
+    this.userStaminaWeight = 1.0,
   });
 
   /// 최종 AI 점수 = 기본점수 + (유저가점(UserGValue) * 배당가중치)
@@ -272,6 +296,12 @@ class HorseEntry {
     int? prizeTotal6Month,
     // [NEW] 물리 프로필
     HorsePhysicsProfile? physicsProfile,
+    // [NEW] 세션 4: 기수번호/조교사번호
+    String? jkNo,
+    String? trNo,
+    // [NEW] 세션 4: 사용자 수동 보정 가중치
+    double? userSpeedWeight,
+    double? userStaminaWeight,
   }) {
     return HorseEntry(
       gateNo:            gateNo,
@@ -305,6 +335,10 @@ class HorseEntry {
       prizeTotal1Year:   prizeTotal1Year   ?? this.prizeTotal1Year,
       prizeTotal6Month:  prizeTotal6Month  ?? this.prizeTotal6Month,
       physicsProfile:    physicsProfile    ?? this.physicsProfile,
+      jkNo:              jkNo              ?? this.jkNo,
+      trNo:              trNo              ?? this.trNo,
+      userSpeedWeight:   userSpeedWeight   ?? this.userSpeedWeight,
+      userStaminaWeight: userStaminaWeight ?? this.userStaminaWeight,
     );
   }
 }
