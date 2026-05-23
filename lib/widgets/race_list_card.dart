@@ -94,7 +94,7 @@ class _RaceListCardState extends State<RaceListCard>
     final hasActivateTime = race.activateTime != null;
 
     return Opacity(
-      opacity: isFinished ? 0.50 : 1.0,
+      opacity: isFinished ? 0.60 : 1.0,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
         decoration: BoxDecoration(
@@ -132,8 +132,8 @@ class _RaceListCardState extends State<RaceListCard>
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
-            // 카드 전체 탭 → 상세페이지 이동 (항상 활성)
-            onTap: isFinished ? null : widget.onDetail,
+            // 카드 전체 탭 → 상세페이지 이동 (종료 경주 포함 항상 허용)
+            onTap: widget.onDetail,
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(

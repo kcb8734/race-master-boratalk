@@ -701,19 +701,10 @@ class _HomeContent extends StatelessWidget {
                 onDetail: () async {
                   await navigateToDetail();
                 },
-                onViewResult: () {
-                  // ── 경주결과 조회 (시즌오프 중에도 항상 허용) ──
-                  Navigator.push(
-                    ctx,
-                    PageRouteBuilder(
-                      pageBuilder: (cc, a1, a2) =>
-                          RaceResultScreen(race: race),
-                      transitionsBuilder: (cc, a1, a2, child) =>
-                          FadeTransition(opacity: a1, child: child),
-                      transitionDuration:
-                          const Duration(milliseconds: 150),
-                    ),
-                  );
+                onViewResult: () async {
+                  // ── 종료 경주: 상세페이지(RaceDashboard) 진입 ──
+                  // RaceDashboard 내부에서 결과 탭/START 버튼 비활성 처리
+                  await navigateToDetail();
                 },
               );
             },

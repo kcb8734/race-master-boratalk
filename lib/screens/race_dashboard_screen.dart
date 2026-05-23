@@ -486,9 +486,59 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
       final dd = nextSame.day.toString().padLeft(2, '0');
       const dayNames = ['월', '화', '수', '목', '금', '토', '일'];
       final dn = dayNames[nextSame.weekday - 1];
-      return '다음 주 $mo/$dd($dn) ${race.startTime} 활성화 예정';
+      return '다음 주 $mo/$dd($dn) 출전마 공시 후 활성화';
     }
-    return '다음 주 동일 시간 활성화 예정';
+    return '다음 주 출전마 공시 후 활성화 예정';
+  }
+
+  /// isFinished 경주 전용 잠금 배너 (상세 안내 포함)
+  Widget _buildFinishedBanner() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1F0F),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2A4A2A).withValues(alpha: 0.7)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('🏁', style: TextStyle(fontSize: 14)),
+              const SizedBox(width: 6),
+              const Text(
+                '경주 종료 — AI 모의 레이스 비활성',
+                style: TextStyle(
+                  color: Color(0xFF7A9A7A),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const SizedBox(width: 20),
+              const Icon(Icons.update_rounded, size: 11, color: Color(0xFF4A7A4A)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  '${_nextActiveLabel()} 예정',
+                  style: const TextStyle(
+                    color: Color(0xFF4A7A4A),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   // ── START 버튼 ──
@@ -505,16 +555,22 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
     // 경주 시간 경과 시에도 잠금 처리
     final isLocked = lockState != RaceLockState.active || isRacePast;
 
+    // isFinished 여부 (완전 종료 판정)
+    final isFinished = widget.race.isFinished;
+
     // 잠금 상태별 버튼 표시 정보
+    // isFinished 최우선: 종료 경주는 전용 배너로 처리
     // isRacePast 우선: 경주 시간 경과 시 별도 표시
-    final (lockIcon, lockLabel, lockColor) = isRacePast && lockState == RaceLockState.active
-        ? ('🏁', _nextActiveLabel(), const Color(0xFF7A7A9A))
-        : switch (lockState) {
-            RaceLockState.seasonOff    => ('🚫', '시즌 오프 — 모의 레이스 제한',  const Color(0xFFFF3B30)),
-            RaceLockState.dataPending  => ('⏳', '데이터 업데이트 대기 중',        const Color(0xFFFFAA00)),
-            RaceLockState.raceLocked   => ('🏁', '경주 종료 — 모의 레이서 비활성', const Color(0xFF7A7A9A)),
-            RaceLockState.active       => ('', '', Colors.transparent),
-          };
+    final (lockIcon, lockLabel, lockColor) = isFinished
+        ? ('🏁', '경주 종료 — AI 모의 레이스 비활성', const Color(0xFF4A7A4A))
+        : isRacePast && lockState == RaceLockState.active
+            ? ('🏁', _nextActiveLabel(), const Color(0xFF7A7A9A))
+            : switch (lockState) {
+                RaceLockState.seasonOff    => ('🚫', '시즌 오프 — 모의 레이스 제한',  const Color(0xFFFF3B30)),
+                RaceLockState.dataPending  => ('⏳', '데이터 업데이트 대기 중',        const Color(0xFFFFAA00)),
+                RaceLockState.raceLocked   => ('🏁', '경주 종료 — 모의 레이서 비활성', const Color(0xFF7A7A9A)),
+                RaceLockState.active       => ('', '', Colors.transparent),
+              };
 
     return Container(
       decoration: const BoxDecoration(
@@ -532,8 +588,11 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── 라이프사이클 잠금 배너 (잠금 상태일 때만) ──
-          if (isLocked)
+          // ── isFinished: 전용 종료 배너 (다음 출전마 업데이트 안내 포함) ──
+          if (isFinished)
+            _buildFinishedBanner()
+          // ── 그 외 잠금 상태별 배너 ──
+          else if (isLocked)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Container(
@@ -560,8 +619,8 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                 ),
               ),
             ),
-          // 무료 잔여 횟수 (잠금 해제 + 비프리미엄 시)
-          if (!isLocked && !provider.isPremium)
+          // 무료 잔여 횟수 (잠금 해제 + 비프리미엄 + 종료 경주 아닐 시)
+          if (!isLocked && !isFinished && !provider.isPremium)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
@@ -597,6 +656,20 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
             animation: _pulseCtrl,
             builder: (_, __) => GestureDetector(
               onTap: () {
+                // ── 최우선: isFinished 완전 종료 경주 차단 ──────────
+                if (isFinished) {
+                  _showLifecycleLockDialog(
+                    icon: '🏁',
+                    title: '경주 종료',
+                    message:
+                        '해당 경주는 이미 종료되었습니다.\n'
+                        'AI 모의 레이스는 비활성화 상태입니다.\n\n'
+                        '다음 출전마 공시 후 활성화 예정:\n'
+                        '${_nextActiveLabel()}',
+                    accentColor: const Color(0xFF4A7A4A),
+                  );
+                  return;
+                }
                 // ── 0순위: 경주 시간 경과 체크 (START 버튼 비활성) ──
                 if (isRacePast && lockState == RaceLockState.active) {
                   _showLifecycleLockDialog(
@@ -605,7 +678,7 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                     message:
                         '해당 경주 출발 시간이 지났습니다.\n'
                         'AI 모의 레이스는 비활성화 되었습니다.\n\n'
-                        '${_nextActiveLabel()}',
+                        '${_nextActiveLabel()} 예정',
                     accentColor: const Color(0xFF7A7A9A),
                   );
                   return;
