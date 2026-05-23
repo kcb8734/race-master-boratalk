@@ -501,9 +501,13 @@ class RaceProvider extends ChangeNotifier {
         entries: rawEntries,
         race: race,
       );
+      // gateNo(마번) 기준 오름차순 정렬 — API 응답 순서 불일치 방지
+      _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
       apiSuccess = true;
     } catch (_) {
       _horses = KraMockService.getHorseEntries(race);
+      // Mock도 정렬 보장
+      _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
     }
 
     if (_selectedRace != null) {

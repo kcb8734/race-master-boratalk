@@ -1001,13 +1001,17 @@ class _HorseStatCardState extends State<_HorseStatCard>
                                     color: Color(0xFF5A7A9A), fontSize: 11)),
                             const SizedBox(width: 8),
                             Text(
-                              '배당 ${h.odds.toStringAsFixed(1)}배',
+                              h.odds <= 0.0
+                                  ? '배당 미발표'
+                                  : '배당 ${h.odds.toStringAsFixed(1)}배',
                               style: TextStyle(
-                                color: h.odds <= 5
-                                    ? const Color(0xFF4CAF50)
-                                    : h.odds <= 15
-                                        ? const Color(0xFFFFD700)
-                                        : const Color(0xFFFF7043),
+                                color: h.odds <= 0.0
+                                    ? const Color(0xFF5A7A9A)
+                                    : h.odds <= 5
+                                        ? const Color(0xFF4CAF50)
+                                        : h.odds <= 15
+                                            ? const Color(0xFFFFD700)
+                                            : const Color(0xFFFF7043),
                                 fontSize: 11, fontWeight: FontWeight.w700,
                               ),
                             ),

@@ -368,10 +368,12 @@ class KraApiService {
   // ────────────────────────────────────────────────────────────────
   static List<HorseEntry> _parseHorseEntriesXml(
       List<Map<String, String>> items, String venueCode) {
-    return items.map<HorseEntry?>((item) {
+    final parsed = items.map<HorseEntry?>((item) {
       try {
         // ── 기본 식별 ─────────────────────────────────────────
-        final gateNo      = int.tryParse(item['chulNo']   ?? '1') ?? 1;
+        final gateNo      = int.tryParse(item['chulNo']   ?? '0') ?? 0;
+        // gateNo 0 = 파싱 실패 → null 반환으로 걸러냄
+        if (gateNo <= 0) return null;
         final horseName   = item['hrName']  ?? '미정';
         final jockeyName  = item['jkName']  ?? '미정';
         final trainerName = item['trName']  ?? '미정';
@@ -472,6 +474,14 @@ class KraApiService {
         return null;
       }
     }).whereType<HorseEntry>().toList();
+
+    // ── gateNo 기준 오름차순 정렬 + 중복 제거 ───────────────────────────
+    // KRA API XML은 응답 순서가 보장되지 않으므로 chulNo(마번) 기준 정렬
+    parsed.sort((a, b) => a.gateNo.compareTo(b.gateNo));
+
+    // 동일 gateNo 중복 항목 제거 (첫 번째 항목 유지)
+    final seen = <int>{};
+    return parsed.where((h) => seen.add(h.gateNo)).toList();
   }
 
   // ────────────────────────────────────────────────────────────────

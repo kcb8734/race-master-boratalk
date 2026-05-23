@@ -813,6 +813,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
   late AnimationController _gatePulse;  // 게이트뷰 펄스
   late AnimationController _gateAnim;   // ★ 게이트뷰 페이드아웃 (Timer 대체)
 
+  // 컨디션바+게이트박스 공유 스크롤 컨트롤러 (동기화)
+  late ScrollController _gateScrollCtrl;
+
   late List<_Horse>    _horses;
   final List<_Horse>   _ranking = [];
   _Phase _phase = _Phase.waiting;
@@ -892,6 +895,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       duration: const Duration(milliseconds: 600),
       value: 1.0, // 초기값: 완전 불투명
     );
+
+    // 컨디션바+게이트박스 공유 스크롤 컨트롤러
+    _gateScrollCtrl = ScrollController();
   }
 
   void _calcParams() {
@@ -1441,7 +1447,8 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     _zoomAnim.dispose();
     _fadeAnim.dispose();
     _gatePulse.dispose();
-    _gateAnim.dispose(); // ★ 추가
+    _gateAnim.dispose();
+    _gateScrollCtrl.dispose(); // 공유 스크롤 컨트롤러
     super.dispose();
   }
 
@@ -1661,28 +1668,35 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     final n = horses.length;
     if (n == 0) return const SizedBox.shrink();
 
-    // 순서: 서울/부산경남 = 오른쪽=1번(CCW), 제주 = 왼쪽=1번
-    // displayOrder: 화면에 표시될 말 순서 (왼쪽→오른쪽)
+    // ── 표시 순서 계산 (중복 없이, gateNo 기준 정렬된 리스트 직접 사용) ──
+    // 서울/부산경남: 오른쪽=1번 → 왼쪽부터 n번,n-1번,...1번
+    // 제주: 왼쪽=1번 → 왼쪽부터 1번,2번,...n번
     final List<_Horse> ordered;
     if (_isJeju) {
-      // 제주: 1번→n번 (왼쪽→오른쪽)
       ordered = List.from(horses)
         ..sort((a, b) => a.entry.gateNo.compareTo(b.entry.gateNo));
     } else {
-      // 서울/부산경남: n번→1번 (왼쪽→오른쪽, 오른쪽=1번)
       ordered = List.from(horses)
         ..sort((a, b) => b.entry.gateNo.compareTo(a.entry.gateNo));
     }
 
-    // 박스 너비 (고정 — 스크롤로 처리하므로 최소 확보)
-    const double boxW = 56.0;
-    const double condH = 84.0; // 컨디션바 영역 높이
-    const double gateH = 148.0; // 게이트박스 영역 높이
+    // 박스 너비: 말이 많을수록 좁게, 최소 52px 보장 (스크롤로 처리)
+    final double boxW = n > 14
+        ? 52.0
+        : n > 10
+            ? 56.0
+            : 62.0;
+
+    const double condH = 92.0;   // 컨디션바 영역 높이
+    const double gateH = 148.0;  // 게이트박스 영역 높이
+    final double panelTop =
+        size.height * 0.11 + size.height * 0.40 + size.height * 0.010;
+    final double totalPanelH = condH + gateH + 14; // 14 = 구분선+발판
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        // ① 배경 (관중석 느낌)
+        // ① 배경
         Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -1693,7 +1707,7 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
           ),
         ),
 
-        // ② 상단 배너: Canvas _paintRaceBanner 유지 (시나리오 정보)
+        // ② 상단 배너 (Canvas — 시나리오 정보 유지)
         Positioned(
           top: size.height * 0.11,
           left: 0, right: 0,
@@ -1711,27 +1725,37 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
           ),
         ),
 
-        // ③ 기수 컨디션 바 (가로 스크롤)
+        // ③ 기수 컨디션바 + 게이트박스 — 단일 ScrollController 공유 (동기 스크롤)
         Positioned(
-          top: size.height * 0.11 + size.height * 0.40 + size.height * 0.012,
+          top: panelTop,
           left: 0, right: 0,
-          height: condH,
+          height: totalPanelH,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 섹션 헤더
               Padding(
-                padding: const EdgeInsets.only(left: 12, bottom: 4),
-                child: Text(
-                  '🏇 기수 컨디션',
-                  style: const TextStyle(
-                    color: Color(0xFFFFD700),
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
+                padding: const EdgeInsets.only(left: 12, bottom: 3),
+                child: Row(
+                  children: [
+                    const Text('🏇 기수 컨디션',
+                      style: TextStyle(
+                        color: Color(0xFFFFD700), fontSize: 10,
+                        fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 8),
+                    Text('← 스크롤',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.35),
+                        fontSize: 8)),
+                  ],
                 ),
               ),
-              Expanded(
+
+              // ── 컨디션바 (공유 스크롤 컨트롤러) ──
+              SizedBox(
+                height: condH - 18, // 헤더 높이 제외
                 child: SingleChildScrollView(
+                  controller: _gateScrollCtrl,
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
                   child: Row(
@@ -1744,47 +1768,27 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
                   ),
                 ),
               ),
-            ],
-          ),
-        ),
 
-        // ④ 게이트 박스 (가로 스크롤)
-        Positioned(
-          top: size.height * 0.11 + size.height * 0.40
-              + size.height * 0.012 + condH + size.height * 0.008,
-          left: 0, right: 0,
-          height: gateH,
-          child: Column(
-            children: [
-              // 게이트 헤더 (금속 프레임 느낌)
-              Container(
-                height: 6,
-                color: const Color(0xFF4A3A20),
-              ),
+              // 구분선 (게이트 헤더 프레임)
+              Container(height: 6, color: const Color(0xFF4A3A20)),
+
+              // ── 게이트박스 (동일 ScrollController → 동기 스크롤) ──
               Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const SizedBox(width: 4),
-                      ...ordered.map((horse) => _buildGateBox(horse, boxW)),
-                      const SizedBox(width: 4),
-                    ],
-                  ),
+                child: _GateSyncScrollView(
+                  linkedController: _gateScrollCtrl,
+                  boxW: boxW,
+                  ordered: ordered,
+                  buildGateBox: _buildGateBox,
                 ),
               ),
-              // 하단 발판 (더트 구역)
-              Container(
-                height: 8,
-                color: const Color(0xFF4A3A20),
-              ),
+
+              // 하단 발판
+              Container(height: 8, color: const Color(0xFF4A3A20)),
             ],
           ),
         ),
 
-        // ⑤ 경주 방향 바 (하단 고정)
+        // ④ 경주 방향 바 (하단 고정)
         Positioned(
           bottom: 80, left: 0, right: 0,
           child: _buildDirectionWidget(size),
@@ -4311,6 +4315,84 @@ class _RacePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RacePainter old) => true;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  게이트박스 동기화 스크롤 위젯
+//  — 컨디션바의 ScrollController position을 listener로 구독하여
+//    게이트박스 ScrollView를 동일 위치로 동기화
+// ══════════════════════════════════════════════════════════════════════
+class _GateSyncScrollView extends StatefulWidget {
+  final ScrollController linkedController; // 컨디션바 컨트롤러
+  final double           boxW;
+  final List<_Horse>     ordered;
+  final Widget Function(_Horse, double) buildGateBox;
+
+  const _GateSyncScrollView({
+    required this.linkedController,
+    required this.boxW,
+    required this.ordered,
+    required this.buildGateBox,
+  });
+
+  @override
+  State<_GateSyncScrollView> createState() => _GateSyncScrollViewState();
+}
+
+class _GateSyncScrollViewState extends State<_GateSyncScrollView> {
+  late final ScrollController _ownCtrl;
+  bool _syncing = false; // 재귀 방지 플래그
+
+  @override
+  void initState() {
+    super.initState();
+    _ownCtrl = ScrollController();
+    // 컨디션바 컨트롤러 → 게이트박스 동기화
+    widget.linkedController.addListener(_onLinkedScroll);
+    _ownCtrl.addListener(_onOwnScroll);
+  }
+
+  void _onLinkedScroll() {
+    if (_syncing) return;
+    if (!_ownCtrl.hasClients || !widget.linkedController.hasClients) return;
+    _syncing = true;
+    _ownCtrl.jumpTo(widget.linkedController.offset);
+    _syncing = false;
+  }
+
+  void _onOwnScroll() {
+    if (_syncing) return;
+    if (!_ownCtrl.hasClients || !widget.linkedController.hasClients) return;
+    _syncing = true;
+    widget.linkedController.jumpTo(_ownCtrl.offset);
+    _syncing = false;
+  }
+
+  @override
+  void dispose() {
+    widget.linkedController.removeListener(_onLinkedScroll);
+    _ownCtrl.removeListener(_onOwnScroll);
+    _ownCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      controller: _ownCtrl,
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(width: 4),
+          ...widget.ordered.map(
+              (horse) => widget.buildGateBox(horse, widget.boxW)),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
