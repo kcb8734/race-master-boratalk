@@ -1874,8 +1874,13 @@ class _CalendarModalState extends State<_CalendarModal> {
                         color: const Color(0xFF1A3A5A),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.chevron_left_rounded,
-                          color: Color(0xFF64B5F6), size: 20),
+                      child: const Text('‹',
+                          style: TextStyle(
+                            color: Color(0xFF64B5F6),
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            height: 1.0,
+                          )),
                     ),
                   ),
                   Text(
@@ -1892,8 +1897,13 @@ class _CalendarModalState extends State<_CalendarModal> {
                         color: const Color(0xFF1A3A5A),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.chevron_right_rounded,
-                          color: Color(0xFF64B5F6), size: 20),
+                      child: const Text('›',
+                          style: TextStyle(
+                            color: Color(0xFF64B5F6),
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            height: 1.0,
+                          )),
                     ),
                   ),
                 ],
@@ -2122,7 +2132,7 @@ class _RaceNoPickerModalState extends State<_RaceNoPickerModal> {
               ),
               child: Row(
                 children: [
-                  const Text('🔢', style: TextStyle(fontSize: 18)),
+                  const Icon(Icons.tag_rounded, color: Color(0xFFB388FF), size: 22),
                   const SizedBox(width: 8),
                   const Text('경주번호 선택',
                       style: TextStyle(
