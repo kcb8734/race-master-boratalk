@@ -519,6 +519,26 @@ class RaceProvider extends ChangeNotifier {
       // gateNo(마번) 기준 오름차순 정렬 — API 응답 순서 불일치 방지
       _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
       apiSuccess = true;
+
+      // ── [신규] API26_2 응답 기반 RaceInfo 동적 갱신 ────────────────
+      // 실제 출전마 수(entries.length)로 totalHorses 일치 보정
+      // 출발 시간(startTime)은 API 응답 첫 번째 항목의 postTime 기반 반영
+      if (rawEntries.isNotEmpty && _selectedRace != null) {
+        final actualHorseCount = rawEntries.length;
+        // 실제 출전 두수가 기존 totalHorses와 다르면 갱신
+        if (actualHorseCount != _selectedRace!.totalHorses) {
+          _selectedRace = _selectedRace!.copyWith(
+            totalHorses: actualHorseCount,
+          );
+          // _races 목록의 해당 경주도 동기화
+          _races = _races.map((r) {
+            if (r.raceNo == race.raceNo && r.venueCode == race.venueCode) {
+              return r.copyWith(totalHorses: actualHorseCount);
+            }
+            return r;
+          }).toList();
+        }
+      }
     } catch (_) {
       _horses = KraMockService.getHorseEntries(race);
       // Mock도 정렬 보장

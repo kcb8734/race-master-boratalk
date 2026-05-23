@@ -610,9 +610,40 @@ class _HomeContent extends StatelessWidget {
             itemCount: provider.races.length,
             itemBuilder: (c, i) {
               final race = provider.races[i];
+              // ── 경주 시간 경과 여부 판정 (AI 모의 경주 입장 버튼 비활성화용) ──
+              final bool isRacePast = () {
+                if (race.isFinished) return true;
+                final parts = race.startTime.split(':');
+                if (parts.length != 2) return false;
+                final h = int.tryParse(parts[0]);
+                final m = int.tryParse(parts[1]);
+                if (h == null || m == null) return false;
+                final now = DateTime.now();
+                final raceTime = DateTime(now.year, now.month, now.day, h, m);
+                return now.isAfter(raceTime.add(const Duration(minutes: 30)));
+              }();
+
+              // ── 상세페이지 이동 콜백 (카드 탭 — 항상 허용) ──────
+              Future<void> navigateToDetail() async {
+                if (!ctx.mounted) return;
+                unawaited(provider.selectRace(race));
+                Navigator.push(
+                  ctx,
+                  PageRouteBuilder(
+                    pageBuilder: (cc, a1, a2) =>
+                        RaceDashboardScreen(race: race),
+                    transitionsBuilder: (cc, a1, a2, child) =>
+                        FadeTransition(opacity: a1, child: child),
+                    transitionDuration:
+                        const Duration(milliseconds: 180),
+                  ),
+                );
+              }
+
               return RaceListCard(
                 race: race,
-                onEnter: () async {
+                // AI 모의 경주 입장 버튼: 시간 경과 시 null → 버튼 비활성
+                onEnter: isRacePast ? null : () async {
                   // ★ [최우선] KRA 서버 장애 잠금 체크 ─────────────
                   final kraStatus = ctx.read<KraServerStatus>();
                   if (kraStatus.isDown) {
@@ -664,20 +695,11 @@ class _HomeContent extends StatelessWidget {
                   }
 
                   // ── 정상 진입 — 화면 전환 즉시, 데이터 로드 백그라운드 ──
-                  if (!ctx.mounted) return;
-                  // 화면 전환을 먼저 수행하고 데이터 로드는 뒤에서 처리
-                  unawaited(provider.selectRace(race));
-                  Navigator.push(
-                    ctx,
-                    PageRouteBuilder(
-                      pageBuilder: (cc, a1, a2) =>
-                          RaceDashboardScreen(race: race),
-                      transitionsBuilder: (cc, a1, a2, child) =>
-                          FadeTransition(opacity: a1, child: child),
-                      transitionDuration:
-                          const Duration(milliseconds: 180),
-                    ),
-                  );
+                  await navigateToDetail();
+                },
+                // 카드 탭 → 상세페이지 이동 (경주 종료 후에도 항상 허용)
+                onDetail: () async {
+                  await navigateToDetail();
                 },
                 onViewResult: () {
                   // ── 경주결과 조회 (시즌오프 중에도 항상 허용) ──

@@ -457,23 +457,64 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
     );
   }
 
+  // ── 경주 시작 시간 경과 여부 (상세페이지 START 버튼 비활성 판정) ──
+  bool get _isRacePast {
+    final race = widget.race;
+    if (race.isFinished) return true;
+    final parts = race.startTime.split(':');
+    if (parts.length != 2) return false;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return false;
+    final now = DateTime.now();
+    final raceTime = DateTime(now.year, now.month, now.day, h, m);
+    return now.isAfter(raceTime.add(const Duration(minutes: 30)));
+  }
+
+  /// 다음 주 동일 요일 활성화 예정 문자열
+  String _nextActiveLabel() {
+    final race = widget.race;
+    final raceDateStr = race.raceDate;
+    final now = DateTime.now();
+    if (raceDateStr.length == 8) {
+      final year  = int.tryParse(raceDateStr.substring(0, 4)) ?? now.year;
+      final month = int.tryParse(raceDateStr.substring(4, 6)) ?? now.month;
+      final day   = int.tryParse(raceDateStr.substring(6, 8)) ?? now.day;
+      final raceDate = DateTime(year, month, day);
+      final nextSame = raceDate.add(const Duration(days: 7));
+      final mo = nextSame.month.toString().padLeft(2, '0');
+      final dd = nextSame.day.toString().padLeft(2, '0');
+      const dayNames = ['월', '화', '수', '목', '금', '토', '일'];
+      final dn = dayNames[nextSame.weekday - 1];
+      return '다음 주 $mo/$dd($dn) ${race.startTime} 활성화 예정';
+    }
+    return '다음 주 동일 시간 활성화 예정';
+  }
+
   // ── START 버튼 ──
   Widget _buildStartButton(RaceProvider provider) {
     final canSim = provider.canSimulate;
+    // ── 경주 시간 경과 여부 (상세페이지 START 버튼 전용 비활성) ──
+    final isRacePast = _isRacePast;
+
     // ── 라이프사이클 잠금 상태 체크 ──
     // 데모 모드(시즌오프 체험)는 seasonOff 잠금을 건너뜀
     final lockState = widget.isDemoMode
         ? RaceLockState.active
         : provider.raceLockFor(widget.race);
-    final isLocked = lockState != RaceLockState.active;
+    // 경주 시간 경과 시에도 잠금 처리
+    final isLocked = lockState != RaceLockState.active || isRacePast;
 
     // 잠금 상태별 버튼 표시 정보
-    final (lockIcon, lockLabel, lockColor) = switch (lockState) {
-      RaceLockState.seasonOff    => ('🚫', '시즌 오프 — 모의 레이스 제한',  const Color(0xFFFF3B30)),
-      RaceLockState.dataPending  => ('⏳', '데이터 업데이트 대기 중',        const Color(0xFFFFAA00)),
-      RaceLockState.raceLocked   => ('🏁', '경주 종료 — 모의 레이서 비활성', const Color(0xFF7A7A9A)),
-      RaceLockState.active       => ('', '', Colors.transparent),
-    };
+    // isRacePast 우선: 경주 시간 경과 시 별도 표시
+    final (lockIcon, lockLabel, lockColor) = isRacePast && lockState == RaceLockState.active
+        ? ('🏁', _nextActiveLabel(), const Color(0xFF7A7A9A))
+        : switch (lockState) {
+            RaceLockState.seasonOff    => ('🚫', '시즌 오프 — 모의 레이스 제한',  const Color(0xFFFF3B30)),
+            RaceLockState.dataPending  => ('⏳', '데이터 업데이트 대기 중',        const Color(0xFFFFAA00)),
+            RaceLockState.raceLocked   => ('🏁', '경주 종료 — 모의 레이서 비활성', const Color(0xFF7A7A9A)),
+            RaceLockState.active       => ('', '', Colors.transparent),
+          };
 
     return Container(
       decoration: const BoxDecoration(
@@ -556,6 +597,19 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
             animation: _pulseCtrl,
             builder: (_, __) => GestureDetector(
               onTap: () {
+                // ── 0순위: 경주 시간 경과 체크 (START 버튼 비활성) ──
+                if (isRacePast && lockState == RaceLockState.active) {
+                  _showLifecycleLockDialog(
+                    icon: '🏁',
+                    title: '경주 시간 종료',
+                    message:
+                        '해당 경주 출발 시간이 지났습니다.\n'
+                        'AI 모의 레이스는 비활성화 되었습니다.\n\n'
+                        '${_nextActiveLabel()}',
+                    accentColor: const Color(0xFF7A7A9A),
+                  );
+                  return;
+                }
                 // ── 1순위: 라이프사이클 잠금 체크 ──
                 if (lockState == RaceLockState.seasonOff) {
                   _showLifecycleLockDialog(

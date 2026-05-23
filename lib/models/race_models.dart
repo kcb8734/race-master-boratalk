@@ -113,6 +113,33 @@ class RaceInfo {
     this.isUpcoming = false,
     this.activateTime,
   });
+
+  /// API26_2 응답 기반으로 출발시간·출전두수 등 동적 갱신용 copyWith
+  RaceInfo copyWith({
+    String? startTime,
+    int? totalHorses,
+    String? trackCondition,
+    bool? isFinished,
+    bool? isUpcoming,
+    DateTime? activateTime,
+  }) {
+    return RaceInfo(
+      raceNo:         raceNo,
+      raceName:       raceName,
+      startTime:      startTime      ?? this.startTime,
+      distance:       distance,
+      condition:      condition,
+      grade:          grade,
+      venueCode:      venueCode,
+      venueName:      venueName,
+      raceDate:       raceDate,
+      totalHorses:    totalHorses    ?? this.totalHorses,
+      trackCondition: trackCondition ?? this.trackCondition,
+      isFinished:     isFinished     ?? this.isFinished,
+      isUpcoming:     isUpcoming     ?? this.isUpcoming,
+      activateTime:   activateTime   ?? this.activateTime,
+    );
+  }
 }
 
 /// 출전마 정보 (API26_2 + API8_2 기반)

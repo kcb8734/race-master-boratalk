@@ -4,13 +4,17 @@ import '../utils/app_theme.dart';
 
 class RaceListCard extends StatefulWidget {
   final RaceInfo race;
-  final VoidCallback onEnter;
+  /// 'AI 모의 경주 입장' 버튼 탭 콜백 — 시간 경과 시 null
+  final VoidCallback? onEnter;
+  /// 카드 전체 탭(상세페이지 이동) 콜백 — 항상 활성
+  final VoidCallback onDetail;
   final VoidCallback onViewResult;
 
   const RaceListCard({
     super.key,
     required this.race,
     required this.onEnter,
+    required this.onDetail,
     required this.onViewResult,
   });
 
@@ -44,11 +48,48 @@ class _RaceListCardState extends State<RaceListCard>
     super.dispose();
   }
 
+  /// 경주 시작 시간이 현재 시간보다 30분 이상 지났는지 (AI 모의 경주 입장 비활성 판정)
+  bool get _isRacePast {
+    final race = widget.race;
+    if (race.isFinished) return true;
+    // startTime 파싱 ("HH:MM" 형식)
+    final parts = race.startTime.split(':');
+    if (parts.length != 2) return false;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return false;
+    final now = DateTime.now();
+    final raceTime = DateTime(now.year, now.month, now.day, h, m);
+    return now.isAfter(raceTime.add(const Duration(minutes: 30)));
+  }
+
+  /// 다음 주 해당 요일 안내 문자열
+  String _nextActiveLabel() {
+    final now = DateTime.now();
+    // 다음 주 해당 요일
+    final race = widget.race;
+    final raceDateStr = race.raceDate; // YYYYMMDD
+    if (raceDateStr.length == 8) {
+      final year   = int.tryParse(raceDateStr.substring(0, 4)) ?? now.year;
+      final month  = int.tryParse(raceDateStr.substring(4, 6)) ?? now.month;
+      final day    = int.tryParse(raceDateStr.substring(6, 8)) ?? now.day;
+      final raceDate = DateTime(year, month, day);
+      final nextSame = raceDate.add(const Duration(days: 7));
+      final m = nextSame.month.toString().padLeft(2, '0');
+      final d = nextSame.day.toString().padLeft(2, '0');
+      const dayNames = ['월', '화', '수', '목', '금', '토', '일'];
+      final dn = dayNames[nextSame.weekday - 1];
+      return '다음 주 $m/$d($dn) ${race.startTime} 활성화 예정';
+    }
+    return '다음 주 동일 시간 활성화 예정';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final race = widget.race;
+    final race      = widget.race;
     final isFinished = race.isFinished;
     final isUpcoming = race.isUpcoming;
+    final isPast     = _isRacePast;   // 경주 시간 경과 여부
 
     final hasActivateTime = race.activateTime != null;
 
@@ -91,7 +132,8 @@ class _RaceListCardState extends State<RaceListCard>
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
-            onTap: isFinished ? null : widget.onEnter,
+            // 카드 전체 탭 → 상세페이지 이동 (항상 활성)
+            onTap: isFinished ? null : widget.onDetail,
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
@@ -99,13 +141,16 @@ class _RaceListCardState extends State<RaceListCard>
                   // 마감 임박 배지
                   if (isUpcoming) _buildUpcomingBadge(),
 
+                  // 경주 종료 후 다음 활성화 예정 안내
+                  if (isPast && !isFinished) _buildNextActiveBanner(),
+
                   // 종료 경주 활성화 예정 안내
                   if (isFinished && hasActivateTime)
                     _buildActivateTimeRow(race.activateTime!),
 
                   Row(
                     children: [
-                      // 레이스 번호 원형 배지
+                      // 레이스 번호 원형 배지 (황금색)
                       _buildRaceNumberBadge(race.raceNo, isFinished),
                       const SizedBox(width: 12),
 
@@ -209,7 +254,7 @@ class _RaceListCardState extends State<RaceListCard>
                       ),
 
                       // 액션 버튼
-                      _buildActionButton(isFinished, race),
+                      _buildActionButton(isFinished, isPast, race),
                     ],
                   ),
                 ],
@@ -217,6 +262,38 @@ class _RaceListCardState extends State<RaceListCard>
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // 경주 시간 지남 → 다음 활성화 안내 배너
+  Widget _buildNextActiveBanner() {
+    final label = _nextActiveLabel();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            color: const Color(0xFF5A5A8A).withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('🏁', style: TextStyle(fontSize: 11)),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: const Color(0xFF8A8AB8).withValues(alpha: 0.9),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -293,6 +370,7 @@ class _RaceListCardState extends State<RaceListCard>
     );
   }
 
+  // ★ 황금색 원형 배지 (D4AF37 계열 — 더 진한 골드)
   Widget _buildRaceNumberBadge(String raceNo, bool isFinished) {
     return Container(
       width: 44,
@@ -301,7 +379,7 @@ class _RaceListCardState extends State<RaceListCard>
         gradient: isFinished
             ? null
             : const LinearGradient(
-                colors: [Color(0xFFFFD700), Color(0xFFB8960C)],
+                colors: [Color(0xFFD4AF37), Color(0xFF8B6914)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -311,7 +389,7 @@ class _RaceListCardState extends State<RaceListCard>
             ? null
             : [
                 BoxShadow(
-                  color: AppTheme.goldPrimary.withValues(alpha: 0.3),
+                  color: const Color(0xFFD4AF37).withValues(alpha: 0.35),
                   blurRadius: 8,
                 )
               ],
@@ -320,7 +398,7 @@ class _RaceListCardState extends State<RaceListCard>
         child: Text(
           raceNo,
           style: TextStyle(
-            color: isFinished ? AppTheme.textDisable : AppTheme.navyDeep,
+            color: isFinished ? AppTheme.textDisable : const Color(0xFF1A1200),
             fontSize: 16,
             fontWeight: FontWeight.w900,
           ),
@@ -329,7 +407,8 @@ class _RaceListCardState extends State<RaceListCard>
     );
   }
 
-  Widget _buildActionButton(bool isFinished, RaceInfo race) {
+  Widget _buildActionButton(bool isFinished, bool isPast, RaceInfo race) {
+    // 경주 완전 종료 → 결과 보기
     if (isFinished) {
       return GestureDetector(
         onTap: widget.onViewResult,
@@ -353,6 +432,38 @@ class _RaceListCardState extends State<RaceListCard>
       );
     }
 
+    // 경주 시간 경과 → AI 모의 경주 비활성 버튼 (탭 효과 없음)
+    if (isPast) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: const Color(0xFF3A3A5A).withValues(alpha: 0.6),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('🏁', style: TextStyle(fontSize: 14)),
+            const SizedBox(height: 3),
+            Text(
+              'AI 모의\n경주 종료',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: const Color(0xFF5A5A8A).withValues(alpha: 0.8),
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                height: 1.3,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 정상 활성 버튼
     return GestureDetector(
       onTap: widget.onEnter,
       child: Container(
@@ -371,9 +482,9 @@ class _RaceListCardState extends State<RaceListCard>
             )
           ],
         ),
-        child: Column(
+        child: const Column(
           mainAxisSize: MainAxisSize.min,
-          children: const [
+          children: [
             Text('🏇', style: TextStyle(fontSize: 16)),
             SizedBox(height: 3),
             Text(
