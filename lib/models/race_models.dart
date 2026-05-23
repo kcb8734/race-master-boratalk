@@ -1,3 +1,5 @@
+import 'horse_physics_profile.dart';
+
 /// 경주장 코드
 enum VenueCode {
   seoul('서울', '1', '서울경마공원'),
@@ -132,6 +134,12 @@ class HorseEntry {
   final double odds;          // 배당률
   bool isCancelled;           // 출전취소 여부
 
+  // ── [NEW] API4_3 구간기록 기반 물리 프로필 ─────────────────────────
+  /// 경주마 고유 물리 프로필 (API4_3 Split Time → HorsePhysicsProfile 변환)
+  /// null = 아직 로딩 전 또는 API 실패 → HorsePhysicsProfile.neutral 사용
+  /// SplitTimeFetcher.fetchAllProfiles()로 경주 선택 시 자동 주입
+  HorsePhysicsProfile? physicsProfile;
+
   // ── KRA API 원시 파라미터 (데이터 매핑 엔진용) ────────────
   /// 경주마 고유등록번호 (예: "KRA20190001234")
   final String horseRegNo;
@@ -205,6 +213,8 @@ class HorseEntry {
     this.prizeTotalCareer  = 0,
     this.prizeTotal1Year   = 0,
     this.prizeTotal6Month  = 0,
+    // [NEW] API4_3 물리 프로필 (기본값: null → 물리 엔진에서 neutral 사용)
+    this.physicsProfile,
   });
 
   /// 최종 AI 점수 = 기본점수 + (유저가점(UserGValue) * 배당가중치)
@@ -228,6 +238,8 @@ class HorseEntry {
     int? prizeTotalCareer,
     int? prizeTotal1Year,
     int? prizeTotal6Month,
+    // [NEW] 물리 프로필
+    HorsePhysicsProfile? physicsProfile,
   }) {
     return HorseEntry(
       gateNo:            gateNo,
@@ -259,6 +271,7 @@ class HorseEntry {
       prizeTotalCareer:  prizeTotalCareer  ?? this.prizeTotalCareer,
       prizeTotal1Year:   prizeTotal1Year   ?? this.prizeTotal1Year,
       prizeTotal6Month:  prizeTotal6Month  ?? this.prizeTotal6Month,
+      physicsProfile:    physicsProfile    ?? this.physicsProfile,
     );
   }
 }

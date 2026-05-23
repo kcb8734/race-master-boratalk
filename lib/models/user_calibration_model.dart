@@ -52,46 +52,73 @@ class HorseCalibration {
   /// Zone4 진입 prog 오프셋으로 변환 (SpurtTimingSlot.progOffset)
   final SpurtTimingSlot spurtTiming;
 
+  // ── [NEW] HorsePhysicsProfile 물리 가중치 슬라이더 ───────────────────
+  /// [userInitialDriveWeight] — 초반 속도(Zone1) 주도력 가중치
+  /// 범위: -1.0 ~ +1.0 (기본값: 0.0)
+  /// 물리 엔진 반영: HorsePhysicsProfile.zone1SpeedMult × (1.0 + userInitialDriveWeight)
+  /// +1.0 = 초반 가속도 최대 증폭,  -1.0 = 초반 주도력 억제
+  final double userInitialDriveWeight;
+
+  /// [userFinalSpurtWeight] — 후반 지구력(Zone4) 가중치
+  /// 범위: -1.0 ~ +1.0 (기본값: 0.0)
+  /// 물리 엔진 반영: HorsePhysicsProfile.zone4SpurtMult × (1.0 + userFinalSpurtWeight)
+  /// +1.0 = 종반 스퍼트 최대 증폭,  -1.0 = 후반 탄력 억제
+  final double userFinalSpurtWeight;
+
   const HorseCalibration({
     required this.gateNo,
-    this.userOddsWeight = 0.0,
-    this.userJockeyBuff = 0.0,
-    this.spurtTiming    = SpurtTimingSlot.standard,
+    this.userOddsWeight        = 0.0,
+    this.userJockeyBuff        = 0.0,
+    this.spurtTiming           = SpurtTimingSlot.standard,
+    this.userInitialDriveWeight = 0.0,
+    this.userFinalSpurtWeight   = 0.0,
   });
 
   HorseCalibration copyWith({
     double?          userOddsWeight,
     double?          userJockeyBuff,
     SpurtTimingSlot? spurtTiming,
+    double?          userInitialDriveWeight,
+    double?          userFinalSpurtWeight,
   }) => HorseCalibration(
-    gateNo:         gateNo,
-    userOddsWeight: userOddsWeight ?? this.userOddsWeight,
-    userJockeyBuff: userJockeyBuff ?? this.userJockeyBuff,
-    spurtTiming:    spurtTiming    ?? this.spurtTiming,
+    gateNo:                 gateNo,
+    userOddsWeight:         userOddsWeight         ?? this.userOddsWeight,
+    userJockeyBuff:         userJockeyBuff         ?? this.userJockeyBuff,
+    spurtTiming:            spurtTiming            ?? this.spurtTiming,
+    userInitialDriveWeight: userInitialDriveWeight ?? this.userInitialDriveWeight,
+    userFinalSpurtWeight:   userFinalSpurtWeight   ?? this.userFinalSpurtWeight,
   );
 
   /// 모든 보정값이 기본값인지 확인 (패널 리셋 판정용)
   bool get isDefault =>
-      userOddsWeight == 0.0 &&
-      userJockeyBuff == 0.0 &&
-      spurtTiming    == SpurtTimingSlot.standard;
+      userOddsWeight         == 0.0 &&
+      userJockeyBuff         == 0.0 &&
+      spurtTiming            == SpurtTimingSlot.standard &&
+      userInitialDriveWeight == 0.0 &&
+      userFinalSpurtWeight   == 0.0;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is HorseCalibration &&
-          gateNo         == other.gateNo &&
-          userOddsWeight == other.userOddsWeight &&
-          userJockeyBuff == other.userJockeyBuff &&
-          spurtTiming    == other.spurtTiming;
+          gateNo                 == other.gateNo &&
+          userOddsWeight         == other.userOddsWeight &&
+          userJockeyBuff         == other.userJockeyBuff &&
+          spurtTiming            == other.spurtTiming &&
+          userInitialDriveWeight == other.userInitialDriveWeight &&
+          userFinalSpurtWeight   == other.userFinalSpurtWeight;
 
   @override
-  int get hashCode => Object.hash(gateNo, userOddsWeight, userJockeyBuff, spurtTiming);
+  int get hashCode => Object.hash(
+    gateNo, userOddsWeight, userJockeyBuff, spurtTiming,
+    userInitialDriveWeight, userFinalSpurtWeight,
+  );
 
   @override
   String toString() =>
       'HorseCalibration(gate=$gateNo, oddsW=$userOddsWeight, '
-      'jockeyB=$userJockeyBuff, spurt=${spurtTiming.label})';
+      'jockeyB=$userJockeyBuff, spurt=${spurtTiming.label}, '
+      'initDrive=$userInitialDriveWeight, finalSpurt=$userFinalSpurtWeight)';
 }
 
 // ──────────────────────────────────────────────────────────────

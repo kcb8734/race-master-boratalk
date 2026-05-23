@@ -27,6 +27,7 @@
 import 'package:flutter/foundation.dart';
 import '../models/user_calibration_model.dart';
 import '../models/race_models.dart';
+import '../models/horse_physics_profile.dart';
 
 // ──────────────────────────────────────────────────────────────
 //  물리 엔진 오버라이드 상수
@@ -52,6 +53,19 @@ const double kOddsWeightMax =  2.0;
 /// userJockeyBuff 유효 범위
 const double kJockeyBuffMin = -1.0;
 const double kJockeyBuffMax =  1.0;
+
+// ── [NEW] 물리 프로필 가중치 상수 ────────────────────────────────────
+/// userInitialDriveWeight / userFinalSpurtWeight 유효 범위
+const double kPhysicsWeightMin = -1.0;
+const double kPhysicsWeightMax =  1.0;
+
+/// 초반 주도력 가중치 → zone1SpeedMult 보정 스케일
+/// +1.0 → zone1SpeedMult × (1.0 + kInitDriveUserScale)
+const double kInitDriveUserScale   = 0.10; // 최대 ±10% 추가 보정
+/// 종반 탄력 가중치 → zone4SpurtMult 보정 스케일
+const double kFinalSpurtUserScale  = 0.10; // 최대 ±10% 추가 보정
+/// 코너 손실 방지력 — 사용자 개입 없음 (자동 적용)
+const double kCornerEffAutoScale   = 1.0;  // 기본 배수 (변경 없음)
 
 // ──────────────────────────────────────────────────────────────
 //  UserCalibrationController
@@ -219,6 +233,128 @@ class UserCalibrationController extends ChangeNotifier {
     if (calib.userOddsWeight == 0.0) return 1.0;
     return (1.0 + calib.userOddsWeight * kOddsWeightSpeedDelta)
         .clamp(0.97, 1.03);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  [NEW 공개 API] ④ 초반 주도력 가중치 슬라이더 업데이트
+  //  호출처: CalibrationPhysicsSlider (초반 속도 가중치)
+  //
+  //  물리 엔진 반영 경로:
+  //    userInitialDriveWeight → applyPhysicsOverride(profile, gateNo)
+  //    → zone1SpeedMult × (1.0 + userInitialDriveWeight × kInitDriveUserScale)
+  //    +1.0: Zone1 baseSpeed 최대 +10% 증폭
+  //    -1.0: Zone1 baseSpeed 최대 -10% 억제
+  // ──────────────────────────────────────────────────────────
+  void setInitialDriveWeight(int gateNo, double value) {
+    if (!_panelEnabled) return;
+    final clamped = value.clamp(kPhysicsWeightMin, kPhysicsWeightMax);
+    final current = _snapshot.forGate(gateNo);
+    if (current.userInitialDriveWeight == clamped) return;
+
+    _snapshot    = _snapshot.update(
+        current.copyWith(userInitialDriveWeight: clamped));
+    _lastUpdated = DateTime.now();
+    notifyListeners();
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  [NEW 공개 API] ⑤ 종반 지구력 가중치 슬라이더 업데이트
+  //  호출처: CalibrationPhysicsSlider (후반 지구력 가중치)
+  //
+  //  물리 엔진 반영 경로:
+  //    userFinalSpurtWeight → applyPhysicsOverride(profile, gateNo)
+  //    → zone4SpurtMult × (1.0 + userFinalSpurtWeight × kFinalSpurtUserScale)
+  //    +1.0: Zone4 스퍼트 최대 +10% 증폭
+  //    -1.0: Zone4 스퍼트 최대 -10% 억제
+  // ──────────────────────────────────────────────────────────
+  void setFinalSpurtWeight(int gateNo, double value) {
+    if (!_panelEnabled) return;
+    final clamped = value.clamp(kPhysicsWeightMin, kPhysicsWeightMax);
+    final current = _snapshot.forGate(gateNo);
+    if (current.userFinalSpurtWeight == clamped) return;
+
+    _snapshot    = _snapshot.update(
+        current.copyWith(userFinalSpurtWeight: clamped));
+    _lastUpdated = DateTime.now();
+    notifyListeners();
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  [NEW 핵심 API] applyPhysicsOverride
+  //  정적 물리 프로필(HorsePhysicsProfile) × 동적 사용자 가중치 곱연산
+  //
+  //  ┌──────────────────────────────────────────────────────────┐
+  //  │  P_physics_final 연산식                                   │
+  //  │                                                          │
+  //  │  zone1Mult_final =                                       │
+  //  │    profile.zone1SpeedMult                                │
+  //  │    × (1.0 + userInitialDriveWeight × kInitDriveUserScale)│
+  //  │                                                          │
+  //  │  zone4Mult_final =                                       │
+  //  │    profile.zone4SpurtMult                                │
+  //  │    × (1.0 + userFinalSpurtWeight × kFinalSpurtUserScale) │
+  //  │                                                          │
+  //  │  cornerDeccel_final =                                    │
+  //  │    profile.cornerDeccelMult (사용자 개입 없음, 자동 적용)  │
+  //  └──────────────────────────────────────────────────────────┘
+  //
+  //  반환값: 새 HorsePhysicsProfile (불변 객체, 원본 보존)
+  //  호출처: race_animation_screen.dart _initHorses() 및 매 물리 틱
+  // ──────────────────────────────────────────────────────────
+  HorsePhysicsProfile applyPhysicsOverride(
+      HorsePhysicsProfile profile, int gateNo) {
+    final calib = _snapshot.forGate(gateNo);
+
+    // 가중치가 기본값이면 원본 프로필 반환 (zero-cost)
+    if (calib.userInitialDriveWeight == 0.0 &&
+        calib.userFinalSpurtWeight   == 0.0) {
+      return profile;
+    }
+
+    // ① 초반 주도력 보정:
+    //    zone1SpeedMult = 1.0 + initialDrive×0.15  (원본)
+    //    initialDrive_effective = initialDrive + userInitialDriveWeight × kInitDriveUserScale / 0.15
+    //    → 단순히 initialDrive 자체를 보정해 나머지 getter도 일관성 유지
+    final driveAdj = (calib.userInitialDriveWeight * kInitDriveUserScale)
+        .clamp(-0.10, 0.10);
+    final newDrive = (profile.initialDrive + driveAdj).clamp(0.0, 1.0);
+
+    // ② 종반 탄력 보정:
+    //    zone4SpurtMult = 1.0 + finalSpurt×0.20  (원본)
+    final spurtAdj = (calib.userFinalSpurtWeight * kFinalSpurtUserScale)
+        .clamp(-0.10, 0.10);
+    final newSpurt = (profile.finalSpurt + spurtAdj).clamp(0.0, 1.0);
+
+    // ③ 코너 손실 방지력: 사용자 개입 없이 원본 그대로
+    return HorsePhysicsProfile(
+      initialDrive:        newDrive,
+      corneringEfficiency: profile.corneringEfficiency, // 불변
+      finalSpurt:          newSpurt,
+      rawS1fTime:          profile.rawS1fTime,
+      rawG1fTime:          profile.rawG1fTime,
+      rawOrd3c:            profile.rawOrd3c,
+      rawOrd4c:            profile.rawOrd4c,
+      rawG1fOrd:           profile.rawG1fOrd,
+      isDefault:           profile.isDefault,
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  [공개 API] zone1SpeedMultFinal — Zone1 최종 배수 반환
+  //  호출처: _initHorses() baseSpeed 계산 블록
+  //    baseSpeed *= ctrl.zone1SpeedMultFinal(profile, gateNo)
+  // ──────────────────────────────────────────────────────────
+  double zone1SpeedMultFinal(HorsePhysicsProfile profile, int gateNo) {
+    return applyPhysicsOverride(profile, gateNo).zone1SpeedMult;
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  [공개 API] zone4SpurtMultFinal — Zone4 최종 배수 반환
+  //  호출처: 물리 루프 inZone4Straight 블록
+  //    speedMult *= ctrl.zone4SpurtMultFinal(profile, gateNo)
+  // ──────────────────────────────────────────────────────────
+  double zone4SpurtMultFinal(HorsePhysicsProfile profile, int gateNo) {
+    return applyPhysicsOverride(profile, gateNo).zone4SpurtMult;
   }
 
   // ──────────────────────────────────────────────────────────

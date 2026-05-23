@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/race_models.dart';
 import '../models/race_horse_data.dart';
+import '../models/horse_physics_profile.dart';
+import '../services/split_time_fetcher.dart';
 import '../providers/user_calibration_controller.dart';
 import '../utils/horse_cap_colors.dart';
 
@@ -739,6 +741,11 @@ class _Horse {
   late double userBonus;   // -5~+5  ← UserGValue
   late double g1fNorm;     // 0~1  후반 G1F 성적 (Zone4 가속도 버프 판정용)
 
+  // ── [NEW] API4_3 물리 프로필 ────────────────────────────────────────
+  /// HorsePhysicsProfile (SplitTimeFetcher 비동기 로딩 후 주입)
+  /// null이면 HorsePhysicsProfile.neutral 사용 (시뮬 중단 없음)
+  HorsePhysicsProfile physicsProfile = HorsePhysicsProfile.neutral;
+
   // ── Jockey Engine 버프/페널티 플래그 ──────────────────────────
   /// 안전주행 모드: 엘리트 기수 당일 2승+ → G1F 가속도 -10%, 코너 aggressiveness -30%
   bool safeMode   = false;
@@ -1065,6 +1072,16 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         baseSpeed: calibratedBase,
         initLane:  initLane,
       );
+
+      // ── [NEW] HorseEntry에 physicsProfile 탑재 시 즉시 주입 ────────────
+      // RaceDashboardScreen에서 미리 로딩한 경우 여기서 즉시 적용
+      if (h.physicsProfile != null) {
+        final overriddenProfile =
+            _calibCtrl.applyPhysicsOverride(h.physicsProfile!, h.gateNo);
+        horse.physicsProfile = overriddenProfile;
+        // Zone1 baseSpeed에 zone1SpeedMult 즉시 반영
+        horse.baseSpeed = calibratedBase * overriddenProfile.zone1SpeedMult;
+      }
       // 부산경남: 거리별 레인 타입 설정
       if (_isBusan) {
         horse.busanLane = _TGBusan.laneType(widget.race.distance);
@@ -1083,6 +1100,46 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         }
       }
     }
+
+    // ── [NEW] SplitTimeFetcher: 물리 프로필 아직 없는 말만 비동기 로딩 ──
+    // HorseEntry.physicsProfile == null 인 말들만 API4_3 조회
+    // (HorseEntry에 이미 로딩된 경우 스킵 — 위 즉시 주입 블록에서 처리됨)
+    final needFetch = entries.where((e) => e.physicsProfile == null).toList();
+    if (needFetch.isNotEmpty) {
+      _loadPhysicsProfilesAsync(needFetch);
+    }
+  }
+
+  // ── [NEW] 비동기 물리 프로필 로딩 (레이스 시작 전 게이트뷰 중 백그라운드 조회) ──
+  //
+  //  설계 원칙:
+  //    - 게이트뷰 대기 시간(약 3~5초) 동안 API4_3 배치 조회 완료 목표
+  //    - API 실패 → HorsePhysicsProfile.neutral (시뮬 중단 없음)
+  //    - 로딩 완료 후 _horses[i].physicsProfile 업데이트
+  //    - mounted 체크 → dispose 후 setState 방지
+  void _loadPhysicsProfilesAsync(List<HorseEntry> needFetch) {
+    SplitTimeFetcher.fetchAllProfiles(
+      entries: needFetch,
+      race:    widget.race,
+    ).then((profileMap) {
+      if (!mounted) return;
+      for (final horse in _horses) {
+        final profile = profileMap[horse.entry.gateNo];
+        if (profile != null) {
+          // 사용자 가중치 적용 후 물리 프로필 주입
+          final overridden = _calibCtrl.applyPhysicsOverride(
+              profile, horse.entry.gateNo);
+          horse.physicsProfile = overridden;
+          // baseSpeed: zone1SpeedMult 재적용
+          // (출발 전 게이트뷰 단계라면 baseSpeed 재계산 가능)
+          if (_phase == _Phase.waiting) {
+            horse.baseSpeed = horse.baseSpeed * overridden.zone1SpeedMult;
+          }
+        }
+      }
+    }).catchError((_) {
+      // API 전체 실패 → neutral 유지 (시뮬 중단 없음)
+    });
   }
 
   // ── 게임루프: dart:async Timer.periodic (16ms ≈ 60fps) ──
@@ -1172,6 +1229,15 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
           laneF,
         );
         speedMult *= trackMult;
+
+        // ③ [NEW] 코너 손실 방지력: HorsePhysicsProfile.cornerDeccelMult
+        //    기본 0.88 + corneringEfficiency×0.07 (0.88~0.95)
+        //    높을수록 코너 구간 감속 페널티 감소 → speedMult 보정치 상향
+        final cornerPhysicsMult = h.physicsProfile.cornerDeccelMult;
+        // cornerDeccelMult가 1.0보다 크면 코너 감속 저항이 강함 → speedMult 소폭 보정
+        // 적용: 코너 감속(speedMult < 1.0) 구간에서 cornerDeccelMult를 곱해 손실 완화
+        // 예: speedMult=0.88 × cornerDeccelMult=0.93 → 코너 효율 반영
+        speedMult *= cornerPhysicsMult;
 
         // ③ 코너 clusterOff: 트랙 너비 안에 머물도록 스케일 대폭 축소
         // safeMode: 보정된 laneF 기준으로 외곽 렌더링 좌표 산출
@@ -1264,6 +1330,20 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
           speedMult *= userMultOverride;
           if (userMultOverride > 1.0 && !h.boostActive) {
             h.boostGlow = (h.boostGlow + (userMultOverride - 1.0) * 0.5)
+                          .clamp(0, 1);
+          }
+        }
+
+        // [5] [NEW] HorsePhysicsProfile: zone4SpurtMult × userFinalSpurtWeight
+        //     정적 물리 프로필 × 동적 사용자 가중치 곱연산
+        //     zone4SpurtMult = 1.0 + finalSpurt × 0.20 (0.10~0.20 범위 버프)
+        //     userFinalSpurtWeight ±1.0 → ±10% 추가 보정
+        final zone4PhysMult = _calibCtrl.zone4SpurtMultFinal(
+            h.physicsProfile, h.entry.gateNo);
+        if (zone4PhysMult != 1.0) {
+          speedMult *= zone4PhysMult;
+          if (zone4PhysMult > 1.0 && !h.boostActive) {
+            h.boostGlow = (h.boostGlow + (zone4PhysMult - 1.0) * 0.6)
                           .clamp(0, 1);
           }
         }
@@ -2099,8 +2179,10 @@ class _RacePainter extends CustomPainter {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  //  정면 게이트 뷰 (Round 11 — 정보 배너 확대 + 색상바 최소화)
+  //  정면 게이트 뷰 (Round 11 — Widget 레벨 AnimatedOpacity로 대체)
+  //  ※ paint() 메서드에서 직접 호출하지 않음: Widget 레벨에서 렌더링
   // ────────────────────────────────────────────────────────────────────────
+  // ignore: unused_element
   void _paintGateView(Canvas canvas, Size size, Rect fullTr, double zv) {
     // ★ saveLayer 완전 제거 — Flutter Web에서 렌더 블록킹 원인
     // opacity는 Widget 레벨(AnimatedOpacity)에서 처리하므로 여기서는 항상 불투명하게 그림

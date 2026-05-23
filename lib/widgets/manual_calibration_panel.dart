@@ -28,6 +28,7 @@ import 'package:provider/provider.dart';
 import '../providers/user_calibration_controller.dart';
 import '../models/user_calibration_model.dart';
 import '../models/race_models.dart';
+import '../models/horse_physics_profile.dart';
 
 // ── 디자인 상수 ────────────────────────────────────────────────
 const _kPanelBg       = Color(0xFF0E1E3A);
@@ -80,10 +81,14 @@ class ManualCalibrationPanel extends StatelessWidget {
           const _PanelHeader(),
           const Divider(color: Color(0x22FFFFFF), height: 1),
 
-          // ② 마번별 보정 타일 목록
+          // ② 실시간 배당률 현황판
+          _OddsBoard(entries: entries),
+          const Divider(color: Color(0x22FFFFFF), height: 1),
+
+          // ③ 마번별 보정 타일 목록
           ...entries.map((e) => _HorseCalibTile(entry: e)),
 
-          // ③ 푸터 (적용 확인 + 타임스탬프)
+          // ④ 푸터 (적용 확인 + 타임스탬프)
           const _PanelFooter(),
         ],
       ),
@@ -159,8 +164,184 @@ class _PanelHeader extends StatelessWidget {
 }
 
 // ──────────────────────────────────────────────────────────────
+//  _OddsBoard — 실시간 배당률 현황판
+//
+//  【UI 명세】
+//  - 단승식(winOdds) + 연승식(plcOdds) 나란히 표시
+//  - 배당 낮을수록(강함) 초록, 높을수록 주황/빨강 색상 분기
+//  - 물리 프로필 탑재 여부 인디케이터 (AI 분석 완료/대기)
+//  - 상단 섹션 타이틀 + 현황판 테이블 (가로 스크롤 지원)
+// ──────────────────────────────────────────────────────────────
+// ── 배당률 색상/레이블 유틸 (모듈 공유) ──────────────────────────────────
+Color _oddsColor(double odds) {
+  if (odds <= 3.0)  return const Color(0xFF4CAF50);  // 최강 (초록)
+  if (odds <= 6.0)  return const Color(0xFF8BC34A);  // 강함 (연초록)
+  if (odds <= 10.0) return const Color(0xFFFFD700);  // 보통 (골드)
+  if (odds <= 20.0) return const Color(0xFFFF9800);  // 약함 (오렌지)
+  return const Color(0xFFEF5350);                    // 고배당 (빨강)
+}
+
+String _oddsLabel(double odds) {
+  if (odds <= 3.0)  return '최강';
+  if (odds <= 6.0)  return '강함';
+  if (odds <= 10.0) return '보통';
+  if (odds <= 20.0) return '약함';
+  return '고배당';
+}
+
+class _OddsBoard extends StatelessWidget {
+  final List<HorseEntry> entries;
+  const _OddsBoard({required this.entries});
+
+  @override
+  Widget build(BuildContext context) {
+    // 배당률 오름차순 정렬 (최저배당 → 최고배당)
+    final sorted = [...entries]..sort((a, b) => a.odds.compareTo(b.odds));
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 섹션 헤더
+          Row(
+            children: [
+              const Icon(Icons.bar_chart_rounded, color: _kAccent, size: 14),
+              const SizedBox(width: 6),
+              const Text(
+                '실시간 배당률 현황',
+                style: TextStyle(
+                  color:      _kTextPrimary,
+                  fontSize:   12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '단승식 / 연승식',
+                style: TextStyle(
+                  color:    _kTextSecondary.withValues(alpha: 0.7),
+                  fontSize: 9,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // 배당률 현황 테이블 (가로 스크롤)
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: sorted.map((e) => _OddsTile(entry: e)).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// 개별 배당률 타일 (가로 정렬)
+class _OddsTile extends StatelessWidget {
+  final HorseEntry entry;
+  const _OddsTile({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final col        = _oddsColor(entry.odds);
+    final label      = _oddsLabel(entry.odds);     // 배당 강도 레이블
+    final hasProfile = entry.physicsProfile != null;
+    // 연승식 배당은 단승식의 약 40% (실제 데이터 없으면 추정)
+    final plcOdds  = entry.odds * 0.4;
+
+    return Container(
+      width: 58,
+      margin: const EdgeInsets.only(right: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      decoration: BoxDecoration(
+        color:        col.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border:       Border.all(color: col.withValues(alpha: 0.35), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 마번 칩
+          Container(
+            width: 22, height: 22,
+            decoration: BoxDecoration(
+              color:  col.withValues(alpha: 0.18),
+              border: Border.all(color: col, width: 1.2),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '${entry.gateNo}',
+              style: TextStyle(
+                color: col, fontSize: 11, fontWeight: FontWeight.w900),
+            ),
+          ),
+          const SizedBox(height: 4),
+
+          // 단승식 배당
+          Text(
+            entry.odds.toStringAsFixed(1),
+            style: TextStyle(
+              color:      col,
+              fontSize:   13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          // 배당 강도 레이블 (최강/강함/보통/약함/고배당)
+          Text(
+            label,
+            style: TextStyle(
+              color:      col.withValues(alpha: 0.80),
+              fontSize:   7,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          // 연승식 배당
+          Text(
+            plcOdds.toStringAsFixed(1),
+            style: TextStyle(
+              color:    col.withValues(alpha: 0.65),
+              fontSize: 9,
+            ),
+          ),
+          const SizedBox(height: 3),
+
+          // 물리 프로필 상태 인디케이터
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+            decoration: BoxDecoration(
+              color: hasProfile
+                  ? const Color(0xFF1B5E20).withValues(alpha: 0.4)
+                  : const Color(0xFF37474F).withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              hasProfile ? 'AI✓' : 'AI?',
+              style: TextStyle(
+                color:    hasProfile
+                    ? const Color(0xFF66BB6A)
+                    : _kTextSecondary.withValues(alpha: 0.6),
+                fontSize: 7,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
 //  _HorseCalibTile — 마번 1개 전체 보정 행
 //  [마번칩] [배당률입력] [기수슬라이더] [스퍼트드롭다운] [초기화]
+//  [초반 주도력 슬라이더] [후반 지구력 슬라이더]
 // ──────────────────────────────────────────────────────────────
 class _HorseCalibTile extends StatelessWidget {
   final HorseEntry entry;
@@ -250,6 +431,39 @@ class _HorseCalibTile extends StatelessWidget {
             gateNo:  entry.gateNo,
             current: calib.spurtTiming,
             enabled: !isLocked,
+          ),
+
+          // ── [NEW] 물리 프로필 슬라이더 섹션 ────────────────────────
+          // 물리 프로필이 로딩된 경우에만 슬라이더 표시 (API4_3 데이터)
+          if (entry.physicsProfile != null) ...[
+            const SizedBox(height: 6),
+            _PhysicsProfileBar(profile: entry.physicsProfile!),
+            const SizedBox(height: 6),
+          ] else ...[
+            const SizedBox(height: 4),
+            _PhysicsLoadingHint(),
+            const SizedBox(height: 4),
+          ],
+
+          // ④ 초반 속도 가중치 슬라이더 (userInitialDriveWeight)
+          CalibrationPhysicsSlider(
+            gateNo:    entry.gateNo,
+            label:     '초반 주도력',
+            subLabel:  'Zone1 속도 보정',
+            iconData:  Icons.rocket_launch_rounded,
+            isInitial: true,
+            enabled:   !isLocked,
+          ),
+          const SizedBox(height: 6),
+
+          // ⑤ 후반 지구력 가중치 슬라이더 (userFinalSpurtWeight)
+          CalibrationPhysicsSlider(
+            gateNo:    entry.gateNo,
+            label:     '후반 지구력',
+            subLabel:  'Zone4 스퍼트 보정',
+            iconData:  Icons.bolt_rounded,
+            isInitial: false,
+            enabled:   !isLocked,
           ),
         ],
       ),
@@ -644,6 +858,271 @@ class CalibrationSpurtDropdown extends StatelessWidget {
                 }).toList(),
               ),
             ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+//  _PhysicsProfileBar — API4_3 기반 물리 프로필 3대 지표 바
+//  초반 주도력 / 코너 방지력 / 종반 탄력 시각화
+// ──────────────────────────────────────────────────────────────
+class _PhysicsProfileBar extends StatelessWidget {
+  final HorsePhysicsProfile profile;
+  const _PhysicsProfileBar({required this.profile});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color:        const Color(0x0BFFFFFF),
+        borderRadius: BorderRadius.circular(8),
+        border:       Border.all(color: const Color(0x18FFFFFF), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.analytics_outlined, color: _kAccent, size: 11),
+              const SizedBox(width: 4),
+              Text(
+                'AI 물리 프로필',
+                style: TextStyle(
+                  color:    _kAccent.withValues(alpha: 0.9),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              if (profile.isDefault) ...[
+                const SizedBox(width: 4),
+                Text(
+                  '(등급 평균)',
+                  style: TextStyle(
+                    color:    _kTextSecondary.withValues(alpha: 0.6),
+                    fontSize: 8,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 5),
+          _StatBar(label: '초반', value: profile.initialDrive,
+              color: const Color(0xFF42A5F5)),
+          const SizedBox(height: 3),
+          _StatBar(label: '코너', value: profile.corneringEfficiency,
+              color: const Color(0xFF66BB6A)),
+          const SizedBox(height: 3),
+          _StatBar(label: '종반', value: profile.finalSpurt,
+              color: const Color(0xFFFFCA28)),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBar extends StatelessWidget {
+  final String label;
+  final double value;   // 0.0 ~ 1.0
+  final Color  color;
+  const _StatBar({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 24,
+          child: Text(label,
+            style: TextStyle(color: _kTextSecondary, fontSize: 8)),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value:            value.clamp(0.0, 1.0),
+              backgroundColor:  const Color(0x22FFFFFF),
+              valueColor:       AlwaysStoppedAnimation<Color>(color),
+              minHeight:        5,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          (value * 100).toStringAsFixed(0),
+          style: TextStyle(color: color, fontSize: 8, fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
+// 물리 프로필 로딩 힌트 (API4_3 미로딩 시)
+class _PhysicsLoadingHint extends StatelessWidget {
+  const _PhysicsLoadingHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          Icons.hourglass_empty_rounded,
+          color: _kTextSecondary.withValues(alpha: 0.4),
+          size: 10,
+        ),
+        const SizedBox(width: 4),
+        Text(
+          'AI 구간기록 분석 대기 중...',
+          style: TextStyle(
+            color:    _kTextSecondary.withValues(alpha: 0.5),
+            fontSize: 9,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+//  CalibrationPhysicsSlider — 물리 가중치 슬라이더
+//
+//  【UI 컴포넌트 명세】
+//  - 위젯 타입: Slider (-1.0 ~ +1.0, divisions: 20)
+//  - isInitial=true  → userInitialDriveWeight (Zone1 초반 속도)
+//  - isInitial=false → userFinalSpurtWeight   (Zone4 후반 지구력)
+//  - 데이터 바인딩: onChanged → ctrl.setInitialDriveWeight / setFinalSpurtWeight
+//  - 물리 엔진 반영:
+//      isInitial: zone1SpeedMult × (1.0 + weight × kInitDriveUserScale)
+//      !isInitial: zone4SpurtMult × (1.0 + weight × kFinalSpurtUserScale)
+// ──────────────────────────────────────────────────────────────
+class CalibrationPhysicsSlider extends StatelessWidget {
+  final int      gateNo;
+  final String   label;
+  final String   subLabel;
+  final IconData iconData;
+  final bool     isInitial;  // true=초반, false=후반
+  final bool     enabled;
+
+  const CalibrationPhysicsSlider({
+    super.key,
+    required this.gateNo,
+    required this.label,
+    required this.subLabel,
+    required this.iconData,
+    required this.isInitial,
+    required this.enabled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl  = context.read<UserCalibrationController>();
+    final calib = context.watch<UserCalibrationController>()
+                         .calibrationFor(gateNo);
+
+    final val   = isInitial
+        ? calib.userInitialDriveWeight
+        : calib.userFinalSpurtWeight;
+
+    final trackColor = val > 0.05
+        ? const Color(0xFF42A5F5)   // 양수 = 파란색 (강화)
+        : val < -0.05
+            ? const Color(0xFFEF5350)  // 음수 = 빨간색 (억제)
+            : _kTextSecondary;
+
+    void onChanged(double v) {
+      if (isInitial) {
+        ctrl.setInitialDriveWeight(gateNo, v);
+      } else {
+        ctrl.setFinalSpurtWeight(gateNo, v);
+      }
+    }
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 80,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Icon(iconData, color: _kTextSecondary, size: 10),
+                  const SizedBox(width: 3),
+                  Text(
+                    label,
+                    style: const TextStyle(color: _kTextSecondary, fontSize: 11),
+                  ),
+                ],
+              ),
+              Text(
+                subLabel,
+                style: TextStyle(
+                  color:    _kTextSecondary.withValues(alpha: 0.5),
+                  fontSize: 8,
+                ),
+              ),
+            ],
+          ),
+        ),
+        // 억제 레이블
+        Text(
+          '억제',
+          style: TextStyle(
+            color:    _kNegative.withValues(alpha: 0.6),
+            fontSize: 8,
+          ),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor:   trackColor,
+              inactiveTrackColor: const Color(0x22FFFFFF),
+              thumbColor:         trackColor,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape:       SliderComponentShape.noOverlay,
+              trackHeight:        3,
+            ),
+            child: Slider(
+              value:     val.clamp(kPhysicsWeightMin, kPhysicsWeightMax),
+              min:       kPhysicsWeightMin,
+              max:       kPhysicsWeightMax,
+              divisions: 20,
+              label:     val == 0.0
+                  ? '기본'
+                  : val > 0
+                      ? '+${(val * 100).toStringAsFixed(0)}%'
+                      : '${(val * 100).toStringAsFixed(0)}%',
+              onChanged: enabled ? onChanged : null,
+            ),
+          ),
+        ),
+        // 강화 레이블
+        Text(
+          '강화',
+          style: TextStyle(
+            color:    _kPositive.withValues(alpha: 0.6),
+            fontSize: 8,
+          ),
+        ),
+        const SizedBox(width: 4),
+        // 현재 수치
+        SizedBox(
+          width: 32,
+          child: Text(
+            val == 0.0
+                ? '기본'
+                : '${val > 0 ? "+" : ""}${(val * 100).toStringAsFixed(0)}%',
+            style: TextStyle(
+              color:      trackColor,
+              fontSize:   9,
+              fontWeight: FontWeight.w700,
+            ),
+            textAlign: TextAlign.right,
           ),
         ),
       ],
