@@ -5,9 +5,126 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/race_provider.dart';
 import '../utils/app_theme.dart';
 import 'sandbox_mode_screen.dart';
+import 'login_screen.dart';
 
-class MyPageScreen extends StatelessWidget {
+class MyPageScreen extends StatefulWidget {
   const MyPageScreen({super.key});
+
+  @override
+  State<MyPageScreen> createState() => _MyPageScreenState();
+}
+
+class _MyPageScreenState extends State<MyPageScreen> {
+  bool   _isLoggedIn = false;
+  String _userName   = '';
+  String _userEmail  = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLoginState();
+  }
+
+  Future<void> _loadLoginState() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _isLoggedIn = prefs.getBool('kmt_logged_in') ?? false;
+      _userName   = prefs.getString('kmt_name')  ?? '';
+      _userEmail  = prefs.getString('kmt_email') ?? '';
+    });
+  }
+
+  Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.75),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C1A2E),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFF1A3A5A)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('🚪', style: TextStyle(fontSize: 32)),
+              const SizedBox(height: 12),
+              const Text('로그아웃',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 8),
+              Text('정말 로그아웃하시겠습니까?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      fontSize: 13)),
+              const SizedBox(height: 20),
+              Row(children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(ctx, false),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A2A3A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF3A5A7A)),
+                      ),
+                      child: const Center(child: Text('취소',
+                          style: TextStyle(color: Color(0xFF8A9ABB),
+                              fontSize: 13, fontWeight: FontWeight.w700))),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(ctx, true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2A0A0A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: const Color(0xFFFF3B30).withValues(alpha: 0.6)),
+                      ),
+                      child: const Center(child: Text('로그아웃',
+                          style: TextStyle(color: Color(0xFFFF5252),
+                              fontSize: 13, fontWeight: FontWeight.w700))),
+                    ),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (ok == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('kmt_logged_in', false);
+      if (!mounted) return;
+      setState(() { _isLoggedIn = false; _userName = ''; _userEmail = ''; });
+    }
+  }
+
+  Future<void> _goToLogin() async {
+    final result = await Navigator.push<bool>(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (c, a1, a2) => const LoginScreen(),
+        transitionsBuilder: (c, a1, a2, child) =>
+            FadeTransition(opacity: a1, child: child),
+        transitionDuration: const Duration(milliseconds: 300),
+      ),
+    );
+    if (result == true) await _loadLoginState();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -87,62 +204,178 @@ class MyPageScreen extends StatelessWidget {
           border: Border.all(
               color: const Color(0xFFFFD700).withValues(alpha: 0.3)),
         ),
-        child: Row(
+        child: Column(
           children: [
-            Container(
-              width: 60, height: 60,
-              decoration: BoxDecoration(
-                gradient: AppTheme.goldGradient,
-                shape: BoxShape.circle,
-              ),
-              child: const Center(
-                child: Text('🏇', style: TextStyle(fontSize: 28)),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    provider.isPremium ? '프리미엄 회원' : '일반 회원',
-                    style: TextStyle(
-                        color: provider.isPremium
-                            ? const Color(0xFFFFD700)
-                            : Colors.white.withValues(alpha: 0.6),
-                        fontSize: 11, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 2),
-                  const Text('경마통 사용자',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 17, fontWeight: FontWeight.w900)),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      _statBadge('사용', provider.isPremium ? '무제한' : '무료 ${provider.remainingFree}회'),
-                      const SizedBox(width: 8),
-                      _statBadge('레이스', '시뮬레이션'),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            if (!provider.isPremium)
-              GestureDetector(
-                onTap: () => _showUpgradeDialog(context, provider),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            // ── 프로필 행 ─────────────────────────────────────────
+            Row(
+              children: [
+                Container(
+                  width: 60, height: 60,
                   decoration: BoxDecoration(
                     gradient: AppTheme.goldGradient,
-                    borderRadius: BorderRadius.circular(10),
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.25),
+                      blurRadius: 12)],
                   ),
-                  child: const Text('업그레이드',
-                      style: TextStyle(
-                          color: Color(0xFF1A1A1A),
-                          fontSize: 10, fontWeight: FontWeight.w900)),
+                  child: Center(
+                    child: Text(
+                      _isLoggedIn ? '🏇' : '👤',
+                      style: const TextStyle(fontSize: 28),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 로그인 상태 + 회원등급 배지
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _isLoggedIn
+                                  ? const Color(0xFF1A3A1A)
+                                  : const Color(0xFF2A1A1A),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: _isLoggedIn
+                                    ? const Color(0xFF2ECC71).withValues(alpha: 0.5)
+                                    : const Color(0xFFFF5252).withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: Text(
+                              _isLoggedIn ? '● 로그인' : '● 비로그인',
+                              style: TextStyle(
+                                  color: _isLoggedIn
+                                      ? const Color(0xFF2ECC71)
+                                      : const Color(0xFFFF7070),
+                                  fontSize: 9, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            provider.isPremium ? '프리미엄 회원' : '일반 회원',
+                            style: TextStyle(
+                                color: provider.isPremium
+                                    ? const Color(0xFFFFD700)
+                                    : Colors.white.withValues(alpha: 0.5),
+                                fontSize: 10, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _isLoggedIn && _userName.isNotEmpty
+                            ? _userName
+                            : '경마통 사용자',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17, fontWeight: FontWeight.w900),
+                      ),
+                      if (_isLoggedIn && _userEmail.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(_userEmail,
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.4),
+                                fontSize: 10)),
+                      ],
+                      const SizedBox(height: 6),
+                      Row(children: [
+                        _statBadge('시뮬', provider.isPremium
+                            ? '무제한' : '${provider.remainingFree}회 남음'),
+                        const SizedBox(width: 6),
+                        _statBadge('레이스', 'AI 모의'),
+                      ]),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            // ── 로그인/로그아웃 + 업그레이드 버튼 행 ─────────────
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: _isLoggedIn ? _logout : _goToLogin,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _isLoggedIn
+                            ? const Color(0xFF2A1A1A)
+                            : const Color(0xFF1A2A3A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _isLoggedIn
+                              ? const Color(0xFFFF3B30).withValues(alpha: 0.5)
+                              : const Color(0xFF2979FF).withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Center(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _isLoggedIn
+                                  ? Icons.logout_rounded
+                                  : Icons.login_rounded,
+                              color: _isLoggedIn
+                                  ? const Color(0xFFFF5252)
+                                  : const Color(0xFF64B5F6),
+                              size: 14,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              _isLoggedIn ? '로그아웃' : '로그인',
+                              style: TextStyle(
+                                  color: _isLoggedIn
+                                      ? const Color(0xFFFF5252)
+                                      : const Color(0xFF64B5F6),
+                                  fontSize: 12, fontWeight: FontWeight.w800),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (!provider.isPremium) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => _showUpgradeDialog(context, provider),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          gradient: AppTheme.goldGradient,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: [BoxShadow(
+                            color: const Color(0xFFFFD700).withValues(alpha: 0.3),
+                            blurRadius: 8)],
+                        ),
+                        child: const Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('👑', style: TextStyle(fontSize: 13)),
+                              SizedBox(width: 4),
+                              Text('프리미엄 업그레이드',
+                                  style: TextStyle(
+                                      color: Color(0xFF1A1A1A),
+                                      fontSize: 10, fontWeight: FontWeight.w900)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),

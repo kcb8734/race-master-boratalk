@@ -351,9 +351,38 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
   Widget _buildHeader() {
     return Container(
       color: const Color(0xFF0A1628),
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: Row(
         children: [
+          // ── 이전 페이지 돌아가기 버튼 ────────────────────────────
+          GestureDetector(
+            onTap: () {
+              if (Navigator.canPop(context)) {
+                Navigator.pop(context);
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A2A3A),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF3A5A7A)),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.arrow_back_ios_new_rounded,
+                      color: Color(0xFF64B5F6), size: 14),
+                  SizedBox(width: 3),
+                  Text('이전',
+                      style: TextStyle(
+                          color: Color(0xFF64B5F6),
+                          fontSize: 12, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
@@ -375,36 +404,83 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               _selectedMeta != null
                   ? '${_selectedMeta!.venueLabel} ${_selectedMeta!.displayDate} 제${_selectedMeta!.raceNo}경주'
                   : '과거 경주 재현 & 보정 시뮬레이터',
               style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.6), fontSize: 11),
+                  color: Colors.white.withValues(alpha: 0.6), fontSize: 10),
               overflow: TextOverflow.ellipsis,
             ),
           ),
           if (_accuracyReport != null)
             GestureDetector(
-              onTap: () => setState(() {
-                _accuracyReport = null;
-              }),
+              onTap: () => setState(() => _accuracyReport = null),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A3A5A),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: const Text('← 뒤로',
+                child: const Text('← 결과닫기',
                     style: TextStyle(
-                        color: Color(0xFF64B5F6), fontSize: 11)),
+                        color: Color(0xFF64B5F6), fontSize: 10)),
               ),
             ),
         ],
       ),
     );
+  }
+
+  // ── 캘린더 모달 ───────────────────────────────────────────────────
+  Future<void> _showCalendarModal() async {
+    // _dateCtrl.text(YYYYMMDD) → DateTime 파싱
+    DateTime initialDate = DateTime.now().subtract(const Duration(days: 7));
+    if (_dateCtrl.text.length == 8) {
+      final y = int.tryParse(_dateCtrl.text.substring(0, 4));
+      final m = int.tryParse(_dateCtrl.text.substring(4, 6));
+      final d = int.tryParse(_dateCtrl.text.substring(6, 8));
+      if (y != null && m != null && d != null) {
+        try { initialDate = DateTime(y, m, d); } catch (_) {}
+      }
+    }
+    final firstDate = DateTime(2020, 1, 1);
+    final lastDate  = DateTime.now().subtract(const Duration(days: 1));
+    if (initialDate.isBefore(firstDate)) initialDate = firstDate;
+    if (initialDate.isAfter(lastDate))   initialDate = lastDate;
+
+    final picked = await showDialog<DateTime>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.75),
+      builder: (ctx) => _CalendarModal(
+        initialDate: initialDate,
+        firstDate: firstDate,
+        lastDate: lastDate,
+      ),
+    );
+    if (picked != null) {
+      final y = picked.year.toString().padLeft(4, '0');
+      final m = picked.month.toString().padLeft(2, '0');
+      final d = picked.day.toString().padLeft(2, '0');
+      setState(() => _dateCtrl.text = '$y$m$d');
+    }
+  }
+
+  // ── 경주번호 숫자패드 모달 ─────────────────────────────────────────
+  Future<void> _showRaceNoPicker() async {
+    final current = int.tryParse(_raceNoCtrl.text.trim()) ?? 1;
+    final picked = await showDialog<int>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.75),
+      builder: (ctx) => _RaceNoPickerModal(current: current),
+    );
+    if (picked != null) {
+      setState(() => _raceNoCtrl.text = picked.toString());
+    }
   }
 
   // ── 수동 API 호출 패널 ────────────────────────────────────────────
@@ -440,25 +516,44 @@ class _SandboxModeScreenState extends State<SandboxModeScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              // 날짜 입력
+              // ── 날짜 — 탭 시 캘린더 모달 ──────────────────────────
               Expanded(
                 flex: 4,
-                child: TextField(
-                  controller: _dateCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  keyboardType: TextInputType.number,
-                  decoration: _inputDeco('날짜 (YYYYMMDD)'),
+                child: GestureDetector(
+                  onTap: _showCalendarModal,
+                  child: AbsorbPointer(
+                    child: TextField(
+                      controller: _dateCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      readOnly: true,
+                      decoration: _inputDeco('날짜').copyWith(
+                        prefixIcon: const Icon(
+                          Icons.calendar_today_rounded,
+                          color: Color(0xFF64B5F6), size: 15),
+                        hintText: 'YYYYMMDD',
+                      ),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
-              // 경주번호
+              // ── 경주번호 — 탭 시 숫자패드 모달 ───────────────────
               Expanded(
                 flex: 2,
-                child: TextField(
-                  controller: _raceNoCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  keyboardType: TextInputType.number,
-                  decoration: _inputDeco('경주번호'),
+                child: GestureDetector(
+                  onTap: _showRaceNoPicker,
+                  child: AbsorbPointer(
+                    child: TextField(
+                      controller: _raceNoCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      readOnly: true,
+                      decoration: _inputDeco('경주번호').copyWith(
+                        prefixIcon: const Icon(
+                          Icons.tag_rounded,
+                          color: Color(0xFF64B5F6), size: 15),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -1647,5 +1742,547 @@ class AccuracyReport {
           '기수 피로도 감점 또는 배당 가중치를 재조정하고 '
           '다시 시도해 보세요.';
     }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 캘린더 모달 위젯
+// ══════════════════════════════════════════════════════════════════════
+class _CalendarModal extends StatefulWidget {
+  final DateTime initialDate;
+  final DateTime firstDate;
+  final DateTime lastDate;
+  const _CalendarModal({
+    required this.initialDate,
+    required this.firstDate,
+    required this.lastDate,
+  });
+
+  @override
+  State<_CalendarModal> createState() => _CalendarModalState();
+}
+
+class _CalendarModalState extends State<_CalendarModal> {
+  late DateTime _focusedMonth;
+  late DateTime _selected;
+
+  static const List<String> _weekDayLabels = ['월','화','수','목','금','토','일'];
+  static const List<String> _monthNames = [
+    '1월','2월','3월','4월','5월','6월',
+    '7월','8월','9월','10월','11월','12월',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _selected     = widget.initialDate;
+    _focusedMonth = DateTime(widget.initialDate.year, widget.initialDate.month);
+  }
+
+  void _prevMonth() {
+    setState(() {
+      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
+    });
+  }
+
+  void _nextMonth() {
+    final next = DateTime(_focusedMonth.year, _focusedMonth.month + 1);
+    final limit = DateTime(widget.lastDate.year, widget.lastDate.month);
+    if (next.isAfter(limit)) return;
+    setState(() => _focusedMonth = next);
+  }
+
+  List<DateTime?> _buildCalendarDays() {
+    final firstOfMonth = DateTime(_focusedMonth.year, _focusedMonth.month, 1);
+    // 월요일=0 기준 offset
+    final startOffset = (firstOfMonth.weekday - 1) % 7;
+    final daysInMonth = DateUtils.getDaysInMonth(
+        _focusedMonth.year, _focusedMonth.month);
+    final cells = <DateTime?>[];
+    for (int i = 0; i < startOffset; i++) cells.add(null);
+    for (int d = 1; d <= daysInMonth; d++) {
+      cells.add(DateTime(_focusedMonth.year, _focusedMonth.month, d));
+    }
+    while (cells.length % 7 != 0) cells.add(null);
+    return cells;
+  }
+
+  bool _isSelectable(DateTime day) {
+    return !day.isBefore(widget.firstDate) && !day.isAfter(widget.lastDate);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final days = _buildCalendarDays();
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0C1A2E),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFF1A3A6A)),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF2979FF).withValues(alpha: 0.2),
+              blurRadius: 24, spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── 헤더 ──────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF1A3A6A), Color(0xFF0C1A2E)],
+                  begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Row(
+                children: [
+                  const Text('📅', style: TextStyle(fontSize: 18)),
+                  const SizedBox(width: 8),
+                  const Text('날짜 선택',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15, fontWeight: FontWeight.w900)),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: const Icon(Icons.close_rounded,
+                        color: Color(0xFF64B5F6), size: 20),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── 월 네비게이터 ─────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  GestureDetector(
+                    onTap: _prevMonth,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A3A5A),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.chevron_left_rounded,
+                          color: Color(0xFF64B5F6), size: 20),
+                    ),
+                  ),
+                  Text(
+                    '${_focusedMonth.year}년 ${_monthNames[_focusedMonth.month - 1]}',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15, fontWeight: FontWeight.w800),
+                  ),
+                  GestureDetector(
+                    onTap: _nextMonth,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A3A5A),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.chevron_right_rounded,
+                          color: Color(0xFF64B5F6), size: 20),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── 요일 헤더 ─────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: _weekDayLabels.map((w) {
+                  final isSat = w == '토';
+                  final isSun = w == '일';
+                  return Expanded(
+                    child: Center(
+                      child: Text(w,
+                          style: TextStyle(
+                            color: isSun
+                                ? const Color(0xFFFF5252)
+                                : isSat
+                                    ? const Color(0xFF64B5F6)
+                                    : const Color(0xFF8A9ABB),
+                            fontSize: 11, fontWeight: FontWeight.w700,
+                          )),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 4),
+
+            // ── 날짜 그리드 ───────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 7,
+                  mainAxisSpacing: 4, crossAxisSpacing: 4,
+                  childAspectRatio: 1.1,
+                ),
+                itemCount: days.length,
+                itemBuilder: (_, i) {
+                  final day = days[i];
+                  if (day == null) return const SizedBox();
+                  final isSelected = day.year == _selected.year &&
+                      day.month == _selected.month &&
+                      day.day == _selected.day;
+                  final isToday = day.year == DateTime.now().year &&
+                      day.month == DateTime.now().month &&
+                      day.day == DateTime.now().day;
+                  final selectable = _isSelectable(day);
+                  final colIdx = i % 7;
+                  final isSat = colIdx == 5;
+                  final isSun = colIdx == 6;
+
+                  return GestureDetector(
+                    onTap: selectable ? () => setState(() => _selected = day) : null,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      decoration: BoxDecoration(
+                        gradient: isSelected
+                            ? const LinearGradient(
+                                colors: [Color(0xFF2979FF), Color(0xFF1565C0)])
+                            : null,
+                        color: isSelected
+                            ? null
+                            : isToday
+                                ? const Color(0xFF1A3A5A)
+                                : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: isToday && !isSelected
+                            ? Border.all(
+                                color: const Color(0xFF2979FF).withValues(alpha: 0.5))
+                            : null,
+                        boxShadow: isSelected
+                            ? [BoxShadow(
+                                color: const Color(0xFF2979FF).withValues(alpha: 0.4),
+                                blurRadius: 6)]
+                            : null,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${day.day}',
+                          style: TextStyle(
+                            color: isSelected
+                                ? Colors.white
+                                : !selectable
+                                    ? const Color(0xFF3A4A5A)
+                                    : isSun
+                                        ? const Color(0xFFFF5252)
+                                        : isSat
+                                            ? const Color(0xFF64B5F6)
+                                            : Colors.white,
+                            fontSize: 12,
+                            fontWeight: isSelected
+                                ? FontWeight.w900
+                                : FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            // ── 선택 확인 버튼 ─────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A2A3A),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: const Color(0xFF3A5A7A)),
+                        ),
+                        child: const Center(
+                          child: Text('취소',
+                              style: TextStyle(
+                                  color: Color(0xFF8A9ABB),
+                                  fontSize: 13, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context, _selected),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF2979FF), Color(0xFF1565C0)],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF2979FF).withValues(alpha: 0.4),
+                              blurRadius: 10,
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${_selected.year}.${_selected.month.toString().padLeft(2,'0')}.${_selected.day.toString().padLeft(2,'0')} 선택',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13, fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 경주번호 숫자패드 모달 위젯
+// ══════════════════════════════════════════════════════════════════════
+class _RaceNoPickerModal extends StatefulWidget {
+  final int current;
+  const _RaceNoPickerModal({required this.current});
+
+  @override
+  State<_RaceNoPickerModal> createState() => _RaceNoPickerModalState();
+}
+
+class _RaceNoPickerModalState extends State<_RaceNoPickerModal> {
+  late int _selected;
+
+  // KRA 경주 최대번호 통상 12경주
+  static const int _maxRace = 12;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.current.clamp(1, _maxRace);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 100),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0C1A2E),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFF1A3A6A)),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF6A3ABA).withValues(alpha: 0.25),
+              blurRadius: 24, spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── 헤더 ──────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF2A1A5E), Color(0xFF0C1A2E)],
+                  begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Row(
+                children: [
+                  const Text('🔢', style: TextStyle(fontSize: 18)),
+                  const SizedBox(width: 8),
+                  const Text('경주번호 선택',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15, fontWeight: FontWeight.w900)),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: const Icon(Icons.close_rounded,
+                        color: Color(0xFFB388FF), size: 20),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── 선택된 번호 표시 ───────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: Container(
+                  key: ValueKey(_selected),
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF2A1A5E), Color(0xFF1A0A3E)],
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                        color: const Color(0xFF6A3ABA).withValues(alpha: 0.7)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6A3ABA).withValues(alpha: 0.3),
+                        blurRadius: 12,
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '제 $_selected 경주',
+                    style: const TextStyle(
+                        color: Color(0xFFB388FF),
+                        fontSize: 22, fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ),
+
+            // ── 숫자 그리드 (1~12) ────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 4,
+                  mainAxisSpacing: 8, crossAxisSpacing: 8,
+                  childAspectRatio: 1.4,
+                ),
+                itemCount: _maxRace,
+                itemBuilder: (_, i) {
+                  final num = i + 1;
+                  final isSel = num == _selected;
+                  return GestureDetector(
+                    onTap: () => setState(() => _selected = num),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      decoration: BoxDecoration(
+                        gradient: isSel
+                            ? const LinearGradient(
+                                colors: [Color(0xFF6A3ABA), Color(0xFF3A1A7E)])
+                            : null,
+                        color: isSel ? null : const Color(0xFF1A2A3A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSel
+                              ? const Color(0xFF6A3ABA)
+                              : const Color(0xFF2A3A4A),
+                        ),
+                        boxShadow: isSel
+                            ? [BoxShadow(
+                                color: const Color(0xFF6A3ABA).withValues(alpha: 0.4),
+                                blurRadius: 8)]
+                            : null,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '$num',
+                          style: TextStyle(
+                            color: isSel
+                                ? Colors.white
+                                : const Color(0xFF8A9ABB),
+                            fontSize: 16,
+                            fontWeight: isSel ? FontWeight.w900 : FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            // ── 확인 버튼 ─────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A2A3A),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF3A5A7A)),
+                        ),
+                        child: const Center(
+                          child: Text('취소',
+                              style: TextStyle(
+                                  color: Color(0xFF8A9ABB),
+                                  fontSize: 13, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context, _selected),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF6A3ABA), Color(0xFF3A1A7E)],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF6A3ABA).withValues(alpha: 0.4),
+                              blurRadius: 10,
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Text('선택 완료',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13, fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
