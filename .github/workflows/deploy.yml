@@ -65,12 +65,23 @@ jobs:
             --dart-define=flutter.inspector.structuredErrors=false \
             --dart-define=debugShowCheckedModeBanner=false
 
+      # ── 6-b. CF Pages 라우팅/헤더 파일 복사 ───────────────────────────
+      # web/_headers : 보안·캐시·CORS 헤더
+      # web/_redirects: SPA 404→index.html fallback
+      - name: ⑥-b Copy CF Pages config files
+        run: |
+          cp web/_headers  build/web/_headers  2>/dev/null && echo "✅ _headers 복사 완료" || echo "⚠️ _headers 없음"
+          cp web/_redirects build/web/_redirects 2>/dev/null && echo "✅ _redirects 복사 완료" || echo "⚠️ _redirects 없음"
+
       # ── 7. 빌드 결과 확인 ─────────────────────────────────────────────
       - name: ⑦ Verify build output
         run: |
           echo "📦 build/web 디렉토리 내용:"
           ls -la build/web/
           echo "📊 총 크기: $(du -sh build/web/ | cut -f1)"
+          echo "🔒 CF Pages 설정:"
+          [ -f build/web/_headers ]   && echo "  ✅ _headers 존재"   || echo "  ❌ _headers 없음"
+          [ -f build/web/_redirects ] && echo "  ✅ _redirects 존재" || echo "  ❌ _redirects 없음"
 
       # ── 8. Node.js 설치 (wrangler 실행용) ────────────────────────────
       # Node.js 20 deprecated(2026-09-16) → 24로 업그레이드

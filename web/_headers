@@ -1,0 +1,36 @@
+/*
+  # ── 보안 헤더 ────────────────────────────────────────────────────────
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+  # ── CORS (KRA 공공데이터 API 호출 허용) ──────────────────────────────
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, POST, OPTIONS
+  Access-Control-Allow-Headers: Content-Type, Authorization
+
+  # ── 캐시 제어 (Flutter 앱 최신 버전 강제) ─────────────────────────────
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/main.dart.js
+  # Flutter 메인 번들은 해시 기반 → 장기 캐시 가능
+  Cache-Control: public, max-age=31536000, immutable
+
+/flutter.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/flutter_bootstrap.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/*
+  Cache-Control: public, max-age=604800
+
+/icons/*
+  Cache-Control: public, max-age=604800
+
+/canvaskit/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/flutter_service_worker.js
+  Cache-Control: no-cache, no-store, must-revalidate

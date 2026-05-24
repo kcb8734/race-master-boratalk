@@ -6,6 +6,7 @@ import 'kra_mock_service.dart';
 import 'kra_server_status.dart';
 import 'kra_scraper_service.dart';
 import 'race_schedule_cache.dart';
+import 'kra_bulk_data_binder.dart';
 
 // ══════════════════════════════════════════════════════════════════════
 // KRA 공식 에러 코드 (API 명세서 9종)
@@ -514,21 +515,41 @@ class KraApiService {
       if (kDebugMode) debugPrint('[API26_2 XML] items 없음/파싱 0건 → Mock');
 
     } on _KraServerDownException catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 XML] 서버장애: $e → Mock 전환');
+      if (kDebugMode) debugPrint('[API26_2 XML] 서버장애: $e → BulkBinder 시도');
     } on _KraApiCodeException catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 XML] API오류: $e → Mock 전환');
+      if (kDebugMode) debugPrint('[API26_2 XML] API오류: $e → BulkBinder 시도');
     } catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 XML] 예외: $e → Mock 전환');
+      if (kDebugMode) debugPrint('[API26_2 XML] 예외: $e → BulkBinder 시도');
     }
 
-    // 3개년 평균 보정 Mock 데이터 (Defensive Fallback)
+    // ── BULK-BINDER Fallback: 새벽 벌크싱크 캐시 보강 시도 ──────────────
+    // API26_2 실패 → Mock 기반으로 생성하되, API8_2 / API12_1 캐시로 스탯 보강
     final mockRace = _buildFallbackRaceInfo(
       raceNo: raceNo,
       venueCode: venueCode,
       meetCode: meetCode,
       dateStr: dateStr,
     );
-    return KraMockService.getHorseEntries(mockRace);
+    final mockEntries = KraMockService.getHorseEntries(mockRace);
+    try {
+      final binder  = KraBulkDataBinder();
+      final diag    = await binder.getDiagnostic();
+      if (diag.bindingReady) {
+        final enriched = await binder.buildHorseEntries(
+          baseHorses: mockEntries,
+          venueCode:  venueCode,
+          date:       date,
+        );
+        if (kDebugMode) {
+          debugPrint('[API26_2] BulkBinder 보강: ${enriched.length}두 '
+              '(가용 ${diag.availableCount}/${diag.checkedApis}개 API)');
+        }
+        return enriched;
+      }
+    } catch (bindErr) {
+      if (kDebugMode) debugPrint('[API26_2] BulkBinder 오류: $bindErr → 순수 Mock 반환');
+    }
+    return mockEntries;
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -1146,9 +1167,9 @@ class KraApiService {
       }
 
     } on _KraServerDownException catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 Meta] 서버장애: $e → Mock 전환');
+      if (kDebugMode) debugPrint('[API26_2 Meta] 서버장애: $e → BulkBinder 시도');
     } on _KraApiCodeException catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 Meta] API오류코드: $e → Mock 전환');
+      if (kDebugMode) debugPrint('[API26_2 Meta] API오류코드: $e → BulkBinder 시도');
       // 에러코드 31(기한만료) / 32(IP미등록) → 추가 경고
       if (e.resultCode == '31' || e.resultCode == '32') {
         KraServerStatus().reportServerError(
@@ -1156,10 +1177,11 @@ class KraApiService {
         );
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 Meta] 예외: $e → Mock 전환');
+      if (kDebugMode) debugPrint('[API26_2 Meta] 예외: $e → BulkBinder 시도');
     }
 
-    // 3개년 평균 보정 Mock 데이터 — Defensive Fallback (파서 다운 시에도 렌더링 지속)
+    // ── BULK-BINDER Fallback (Meta 버전) ────────────────────────────────
+    // API26_2 Meta 실패 → Mock 생성 후 API8_2/API12_1 캐시로 스탯 보강
     final mockRace = _buildFallbackRaceInfo(
       raceNo: raceNo,
       venueCode: venueCode,
@@ -1167,6 +1189,29 @@ class KraApiService {
       dateStr: dateStr,
     );
     final mockEntries = KraMockService.getHorseEntries(mockRace);
+    try {
+      final binder = KraBulkDataBinder();
+      final diag   = await binder.getDiagnostic();
+      if (diag.bindingReady) {
+        final enriched = await binder.buildHorseEntries(
+          baseHorses: mockEntries,
+          venueCode:  venueCode,
+          date:       date,
+        );
+        if (kDebugMode) {
+          debugPrint('[API26_2 Meta] BulkBinder 보강: ${enriched.length}두 '
+              '(가용 ${diag.availableCount}/${diag.checkedApis}개 API)');
+        }
+        return EntrySheetResult(
+          entries:   enriched,
+          startTime: null,  // stTime은 벌크 캐시에 없음 → null (RaceInfo 유지)
+          dusu:      enriched.length,
+          fromBulkCache: true,
+        );
+      }
+    } catch (bindErr) {
+      if (kDebugMode) debugPrint('[API26_2 Meta] BulkBinder 오류: $bindErr → 순수 Mock');
+    }
     return EntrySheetResult(
       entries:   mockEntries,
       startTime: null,
@@ -1420,10 +1465,16 @@ class EntrySheetResult {
   /// rawEntries.length와 다를 경우 rawEntries.length를 우선 사용
   final int dusu;
 
+  /// TIER-4b 벌크 캐시(KraBulkDataBinder) 경로로 반환된 경우 true
+  /// API26_2 실패 시 API8_2/API12_1 캐시 보강 결과임을 나타냄
+  /// false = API 직접 호출 성공 또는 순수 Mock 반환
+  final bool fromBulkCache;
+
   const EntrySheetResult({
     required this.entries,
     required this.startTime,
     required this.dusu,
+    this.fromBulkCache = false,
   });
 }
 

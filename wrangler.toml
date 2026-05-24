@@ -1,0 +1,23 @@
+# ══════════════════════════════════════════════════════════════════════
+#  경마통 RE-RACE AI SIMULATOR — Cloudflare Pages 배포 설정
+#  wrangler.toml (Pages 전용 — Workers 설정과 혼용 불가)
+#
+#  배포 도메인 : https://www.boratalk.live
+#  CF Pages 프로젝트: race-master-boratalk
+#  빌드 출력   : build/web  (Flutter Web --release)
+#  wrangler 버전: 3.x (npx wrangler@3)
+# ══════════════════════════════════════════════════════════════════════
+
+name = "race-master-boratalk"
+
+# ── Pages 빌드 설정 (GitHub 연동 자동 빌드용) ─────────────────────────
+# GitHub Actions에서 직접 `npx wrangler@3 pages deploy build/web` 실행 시
+# 아래 [pages_build_output_dir]은 무시되며 CLI 인자가 우선합니다.
+pages_build_output_dir = "build/web"
+
+# ── 호환성 플래그 (최신 CF Workers Runtime 기능 활성화) ───────────────
+compatibility_date = "2024-01-01"
+
+# ── 환경별 설정 ────────────────────────────────────────────────────────
+# [env.production]
+# routes = [{ pattern = "boratalk.live/*", custom_domain = true }]

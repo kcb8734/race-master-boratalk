@@ -5,6 +5,7 @@ import 'dart:convert';
 import '../models/race_models.dart';
 import '../models/race_horse_data.dart';
 import 'kra_api_service.dart';
+import 'kra_bulk_data_binder.dart';
 
 /// ══════════════════════════════════════════════════════════════════════
 ///  경마통 AI 스탯 연산 엔진 (Race Stat Engine)
@@ -34,6 +35,38 @@ class RaceStatEngine {
     required List<HorseEntry> entries,
     required RaceInfo race,
   }) async {
+    // ── [TIER-4b] BulkBinder Pre-Enrich: API8_2/API12_1 새벽 캐시 선제 보강 ──
+    // API 직접 호출 성공/실패와 무관하게 벌크 캐시 데이터를 먼저 적용함으로써
+    // 이후 _calcSpeedStat / _calcStaminaStat 의 결과를 풍부하게 만듦.
+    // 오류 발생 시 원본 entries를 그대로 사용 (비파괴적 fallback).
+    var workingEntries = List<HorseEntry>.from(entries);
+    try {
+      final binder = KraBulkDataBinder();
+      final diag   = await binder.getDiagnostic();
+      if (diag.bindingReady) {
+        final bulkEnriched = await binder.buildHorseEntries(
+          baseHorses: workingEntries,
+          venueCode:  race.venueCode,
+          date:       _parseDateStr(race.raceDate),
+        );
+        if (bulkEnriched.isNotEmpty) {
+          workingEntries = bulkEnriched;
+          if (kDebugMode) {
+            debugPrint('[RaceStatEngine] BulkBinder Pre-Enrich 완료: '
+                '${workingEntries.length}두 / 가용 API ${diag.availableCount}/${diag.checkedApis}개');
+          }
+        }
+      } else {
+        if (kDebugMode) {
+          debugPrint('[RaceStatEngine] BulkBinder 캐시 미준비 '
+              '(${diag.missingApis.join(", ")}) → 원본 entries 사용');
+        }
+      }
+    } catch (bulkErr) {
+      // 비파괴적: Pre-Enrich 실패 시 원본 entries로 계속 진행
+      if (kDebugMode) debugPrint('[RaceStatEngine] BulkBinder Pre-Enrich 오류: $bulkErr → 원본 사용');
+    }
+
     // 1. API189_1: 주로 상태 가져오기 (함수율/상태코드)
     final trackFactor = await _fetchTrackFactor(race);
 
@@ -44,9 +77,9 @@ class RaceStatEngine {
     //    경주일(raceDate) + 경주장 코드(venueCode) 기준 전체 조교사 데이터 수집
     final trainerCountCache = <String, int>{}; // trNo → count 캐시
 
-    // 3. 각 말별 스탯 정교화
+    // 3. 각 말별 스탯 정교화 (BulkBinder Pre-Enrich 완료된 workingEntries 사용)
     final enriched = <HorseEntry>[];
-    for (final entry in entries) {
+    for (final entry in workingEntries) {
       // API4_3 + API6_1: 속도 스탯 (거리별 기록 기반)
       final speedResult = await _calcSpeedStat(entry, race);
 
@@ -522,6 +555,21 @@ class RaceStatEngine {
       case '3': return '2';
       default:  return '1';
     }
+  }
+
+  // ── BulkBinder Pre-Enrich 헬퍼 ─────────────────────────────────────
+  /// YYYYMMDD 형식 문자열 → DateTime 변환 (파싱 실패 시 현재 일자 반환)
+  static DateTime _parseDateStr(String dateStr) {
+    try {
+      if (dateStr.length == 8) {
+        return DateTime(
+          int.parse(dateStr.substring(0, 4)),
+          int.parse(dateStr.substring(4, 6)),
+          int.parse(dateStr.substring(6, 8)),
+        );
+      }
+    } catch (_) {}
+    return DateTime.now();
   }
 }
 
