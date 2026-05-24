@@ -757,11 +757,26 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionTitle('🐎 출전마 특이사항'),
-        const SizedBox(height: 10),
+        _sectionTitle('🎯 AI 순위 분석'),
+        const SizedBox(height: 4),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            'AI 점수 기준 전체 순위 • 출전마 ${allSorted.length}두',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.35),
+              fontSize: 10.5,
+            ),
+          ),
+        ),
         ...allSorted.map((h) {
           final cd     = HorseCapColors.getCapData(h.gateNo);
-          final alerts = _getHorseAlerts(h, darkHorseGates);
+          final aiRank = allSorted.indexWhere(
+              (e) => e.gateNo == h.gateNo) + 1;
+          final alerts = _getHorseAlerts(
+            h, darkHorseGates,
+            allSortedByScore: allSorted,
+          );
           if (alerts.isEmpty) return const SizedBox.shrink();
 
           final isDarkHorse = darkHorseGates.contains(h.gateNo);
@@ -860,12 +875,60 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
                     ],
                   ),
                 ),
-                Text('${h.finalScore.toStringAsFixed(1)}pt',
-                    style: TextStyle(
-                        color: isDarkHorse
-                            ? const Color(0xFFFF7043)
-                            : const Color(0xFFFFD700),
-                        fontSize: 13, fontWeight: FontWeight.w800)),
+                // 우측: AI 순위 + 점수
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // AI 순위 배지
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: aiRank == 1
+                            ? const Color(0xFFFFD700).withValues(alpha: 0.18)
+                            : aiRank == 2
+                                ? const Color(0xFFB0BEC5).withValues(alpha: 0.18)
+                                : aiRank == 3
+                                    ? const Color(0xFFCD7F32).withValues(alpha: 0.18)
+                                    : Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                          color: aiRank == 1
+                              ? const Color(0xFFFFD700).withValues(alpha: 0.5)
+                              : aiRank == 2
+                                  ? const Color(0xFFB0BEC5).withValues(alpha: 0.5)
+                                  : aiRank == 3
+                                      ? const Color(0xFFCD7F32).withValues(alpha: 0.5)
+                                      : Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      child: Text(
+                        '$aiRank위',
+                        style: TextStyle(
+                          color: aiRank == 1
+                              ? const Color(0xFFFFD700)
+                              : aiRank == 2
+                                  ? const Color(0xFFB0BEC5)
+                                  : aiRank == 3
+                                      ? const Color(0xFFCD7F32)
+                                      : Colors.white.withValues(alpha: 0.45),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    // AI 점수
+                    Text('${h.finalScore.toStringAsFixed(1)}pt',
+                        style: TextStyle(
+                            color: isDarkHorse
+                                ? const Color(0xFFFF7043)
+                                : const Color(0xFFFFD700),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800)),
+                  ],
+                ),
               ],
             ),
           );
@@ -874,33 +937,90 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     );
   }
 
-  /// 말별 특이사항 태그 생성
-  /// - 선정된 복병마에만 '💣 복병 선정' 태그 (최대 2개)
-  /// - 기존 조건 태그도 유지
+  /// 말별 특이사항 태그 생성 — 순위 기반 상대 평가
+  ///
+  /// 절대값 조건(> 80 등) 대신 전체 출전마 중 상대 순위로 판단:
+  ///   rank    = finalScore 내림차순 기준 1~N 순위
+  ///   aiRank  = 1위 → '🥇 AI 1순위', 2위 → '🥈 AI 2순위', 3위 → '🥉 AI 3순위'
+  ///   상위 40% → '⭐ 유력 후보'
+  ///   복병 선정 → '💣 복병 선정' (별도 전달)
+  ///   하위 30% → '📉 하위권'
+  ///
+  /// 추가 특이사항 태그 (상대 기준):
+  ///   speedStat 전체 1위 → '⚡ 속도 최고'
+  ///   staminaStat 전체 1위 → '💪 스태미나 최고'
+  ///   formStat 전체 1위 → '📈 폼 최고'
+  ///   odds 최저 (1위) → '🏆 단독 1인기'
+  ///   odds 2~3위 → '🏇 상위권 인기'
+  ///
+  /// [allSortedByScore]: finalScore 내림차순 정렬된 전체 출전마 리스트
   List<(String, Color)> _getHorseAlerts(
-      HorseEntry h, Set<int> darkHorseGates) {
+      HorseEntry h,
+      Set<int> darkHorseGates, {
+      required List<HorseEntry> allSortedByScore,
+  }) {
     final alerts = <(String, Color)>[];
+    final total  = allSortedByScore.length;
+    if (total == 0) return alerts;
 
-    // 복병 선정 태그 (우선 표시)
+    // ── AI 순위 배지 (finalScore 기준) ──────────────────────────────
+    final aiRank = allSortedByScore.indexWhere(
+            (e) => e.gateNo == h.gateNo) + 1;  // 1-based
+
+    if (aiRank == 1) {
+      alerts.add(('🥇 AI 1순위', const Color(0xFFFFD700)));
+    } else if (aiRank == 2) {
+      alerts.add(('🥈 AI 2순위', const Color(0xFFB0BEC5)));
+    } else if (aiRank == 3) {
+      alerts.add(('🥉 AI 3순위', const Color(0xFFCD7F32)));
+    } else if (aiRank <= (total * 0.4).ceil()) {
+      // 상위 40%
+      alerts.add(('⭐ 유력 후보', const Color(0xFF64B5F6)));
+    } else if (aiRank > (total * 0.7).floor()) {
+      // 하위 30%
+      alerts.add(('📉 하위권', const Color(0xFF78909C)));
+    }
+
+    // ── 복병 선정 태그 ───────────────────────────────────────────────
     if (darkHorseGates.contains(h.gateNo)) {
-      alerts.add(('💣 복병 선정', const Color(0xFFFF7043)));
+      alerts.add(('💣 복병', const Color(0xFFFF7043)));
     }
 
-    // 일반 특이사항
-    if (h.speedStat > 80) {
-      alerts.add(('⚡ 고속 선행', const Color(0xFFFFD700)));
+    // ── 특이사항: 전체 1위 지표 ─────────────────────────────────────
+    final topSpeed   = allSortedByScore.reduce(
+        (a, b) => a.speedStat   >= b.speedStat   ? a : b);
+    final topStamina = allSortedByScore.reduce(
+        (a, b) => a.staminaStat >= b.staminaStat ? a : b);
+    final topForm    = allSortedByScore.reduce(
+        (a, b) => a.formStat    >= b.formStat    ? a : b);
+
+    // 배당 순위 (odds 낮을수록 인기 — 단, 0.0은 미설정이므로 제외)
+    final validOdds = allSortedByScore
+        .where((e) => e.odds > 0.1)
+        .toList()
+      ..sort((a, b) => a.odds.compareTo(b.odds));
+    final oddsRank = validOdds.isEmpty ? 99
+        : validOdds.indexWhere((e) => e.gateNo == h.gateNo) + 1;
+
+    if (topSpeed.gateNo == h.gateNo && h.speedStat > 0) {
+      alerts.add(('⚡ 속도 최고', const Color(0xFFFFCC02)));
     }
-    if (h.staminaStat > 80) {
-      alerts.add(('💪 후반 강세', const Color(0xFF81C784)));
+    if (topStamina.gateNo == h.gateNo &&
+        topStamina.gateNo != topSpeed.gateNo &&
+        h.staminaStat > 0) {
+      alerts.add(('💪 스태미나 최고', const Color(0xFF81C784)));
     }
-    if (h.formStat > 80) {
-      alerts.add(('📈 최상 컨디션', const Color(0xFF64B5F6)));
+    if (topForm.gateNo == h.gateNo &&
+        topForm.gateNo != topSpeed.gateNo &&
+        topForm.gateNo != topStamina.gateNo &&
+        h.formStat > 0) {
+      alerts.add(('📈 폼 최고', const Color(0xFF64B5F6)));
     }
-    if (h.odds < 5.0) {
-      alerts.add(('🏆 인기마', const Color(0xFFFF7043)));
-    }
-    if (h.finalScore > 70) {
-      alerts.add(('🤖 AI 추천', const Color(0xFFB388FF)));
+    if (oddsRank == 1 && h.odds > 0.1) {
+      // 이미 AI 1순위라면 중복 생략
+      if (aiRank != 1) alerts.add(('🏆 단독 1인기', const Color(0xFFFF7043)));
+    } else if (oddsRank <= 3 && oddsRank > 0 && h.odds > 0.1) {
+      if (aiRank > 3) alerts.add(('🏇 상위 인기', const Color(0xFFFFAB40)));
     }
 
     return alerts;
