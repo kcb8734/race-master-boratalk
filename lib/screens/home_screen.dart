@@ -756,11 +756,20 @@ class _HomeContent extends StatelessWidget {
           onDetail: () async { await navigateToDetail(); },
           onViewResult: () async {
             if (!ctx.mounted) return;
+            // Provider에 해당 경주 AI 분석 데이터가 있으면 함께 전달
+            final horses = ctx.read<RaceProvider>().horses;
+            final selectedRace = ctx.read<RaceProvider>().selectedRace;
+            final isSameRace = selectedRace != null &&
+                selectedRace.venueCode == race.venueCode &&
+                selectedRace.raceDate == race.raceDate &&
+                selectedRace.raceNo == race.raceNo;
+            final aiHorses = (horses.isNotEmpty && isSameRace) ? horses : null;
+            if (!ctx.mounted) return;
             Navigator.push(
               ctx,
               PageRouteBuilder(
                 pageBuilder: (cc, a1, a2) =>
-                    RaceResultScreen(race: race),
+                    RaceResultScreen(race: race, aiHorses: aiHorses),
                 transitionsBuilder: (cc, a1, a2, child) =>
                     FadeTransition(opacity: a1, child: child),
                 transitionDuration:

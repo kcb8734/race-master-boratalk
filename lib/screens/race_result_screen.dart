@@ -12,7 +12,14 @@ import '../utils/horse_cap_colors.dart';
 // ──────────────────────────────────────────────────────────────
 class RaceResultScreen extends StatefulWidget {
   final RaceInfo race;
-  const RaceResultScreen({super.key, required this.race});
+  /// AI 분석 데이터 (선택) — 대시보드 분석 데이터가 있을 때
+  /// 예측 vs 실결과 비교 섹션 표시
+  final List<HorseEntry>? aiHorses;
+  const RaceResultScreen({
+    super.key,
+    required this.race,
+    this.aiHorses,
+  });
 
   @override
   State<RaceResultScreen> createState() => _RaceResultScreenState();
@@ -328,6 +335,12 @@ class _RaceResultScreenState extends State<RaceResultScreen>
           _buildOddsSummaryBanner(result),
           const SizedBox(height: 20),
 
+          // AI 예측 vs 실결과 비교 (선택: aiHorses 있을 때)
+          if (widget.aiHorses != null && widget.aiHorses!.isNotEmpty) ...[
+            _buildAiComparisonSection(result, widget.aiHorses!),
+            const SizedBox(height: 20),
+          ],
+
           // 전체 착순 테이블
           _buildSectionTitle('📋 전체 착순 기록'),
           const SizedBox(height: 10),
@@ -335,6 +348,351 @@ class _RaceResultScreenState extends State<RaceResultScreen>
         ],
       ),
     );
+  }
+
+  // ── AI 예측 vs 실결과 비교 섹션 ──
+  Widget _buildAiComparisonSection(
+      KraRaceResult result, List<HorseEntry> aiHorses) {
+    // AI 점수순으로 정렬 (이미 대시보드에서 정렬되어 오지만 안전 원복)
+    final sorted = [...aiHorses]
+        .where((h) => !h.isCancelled)
+        .toList()
+      ..sort((a, b) => b.finalScore.compareTo(a.finalScore));
+
+    // 실결과 맵: gateNo → 실착순
+    final resultMap = <int, HorseResult>{};
+    for (final h in result.horses) {
+      resultMap[h.gateNo] = h;
+    }
+
+    // 적중률 계산
+    int hit3 = 0; // AI 3순위 안에 실제 3착 내 비율
+    for (var i = 0; i < sorted.length && i < 3; i++) {
+      final actual = resultMap[sorted[i].gateNo];
+      if (actual != null && actual.rank >= 1 && actual.rank <= 3) hit3++;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0D1F35), Color(0xFF091428)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+            color: const Color(0xFFFFD700).withValues(alpha: 0.25)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFFD700).withValues(alpha: 0.06),
+            blurRadius: 16,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 상단 타이틀
+          Row(
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFFFD700), Color(0xFFFFAA00)],
+                  ),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  '🤖  AI 예측 적중률',
+                  style: TextStyle(
+                    color: Color(0xFF1A1A1A),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'AI 순위 vs 실제 착순 비교',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.45),
+                  fontSize: 10,
+                ),
+              ),
+              const Spacer(),
+              // 적중률 배지
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _hitRateColor(hit3, 3).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color:
+                        _hitRateColor(hit3, 3).withValues(alpha: 0.4),
+                  ),
+                ),
+                child: Text(
+                  'TOP3 적중 $hit3/3',
+                  style: TextStyle(
+                    color: _hitRateColor(hit3, 3),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // 비교 행: AI 순위 / 마번 / 마명 / AI점수 / 실제착순
+          _buildComparisonHeader(),
+          const SizedBox(height: 6),
+          ...sorted.asMap().entries.map((entry) {
+            final aiRank = entry.key + 1;
+            final horse = entry.value;
+            final actual = resultMap[horse.gateNo];
+            return _buildComparisonRow(
+              aiRank: aiRank,
+              horse: horse,
+              actualRank: actual?.rank ?? 0,
+              actualTime: actual?.raceTime ?? '',
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComparisonHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A2A3A),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 36,
+            child: Text('AI순위',
+                style: TextStyle(
+                    color: Color(0xFF64B5F6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(width: 6),
+          const SizedBox(
+            width: 26,
+            child: Text('마번',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: Color(0xFF64B5F6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(width: 6),
+          const Expanded(
+            child: Text('마명',
+                style: TextStyle(
+                    color: Color(0xFF64B5F6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(
+            width: 36,
+            child: Text('AI점수',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                    color: Color(0xFF64B5F6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 46,
+            child: Text('실제착순',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: Color(0xFF64B5F6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComparisonRow({
+    required int aiRank,
+    required HorseEntry horse,
+    required int actualRank,
+    required String actualTime,
+  }) {
+    // 적중 판정: AI 순위 구간에 실제 착순이 들어오면 적중
+    final isHit = actualRank >= 1 && actualRank <= 3 && aiRank <= 3;
+    // 완전 일치: AI순위 == 실제착순
+    final isPerfect = aiRank == actualRank && actualRank > 0;
+
+    final aiRankColor = switch (aiRank) {
+      1 => const Color(0xFFFFD700),
+      2 => const Color(0xFFB0BEC5),
+      3 => const Color(0xFFBE8C5A),
+      _ => const Color(0xFF4A6A8A),
+    };
+
+    final actualRankColor = switch (actualRank) {
+      1 => const Color(0xFFFFD700),
+      2 => const Color(0xFFB0BEC5),
+      3 => const Color(0xFFBE8C5A),
+      _ => const Color(0xFF4A6A8A),
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      decoration: BoxDecoration(
+        color: isPerfect
+            ? const Color(0xFFFFD700).withValues(alpha: 0.07)
+            : isHit
+                ? const Color(0xFF4CAF50).withValues(alpha: 0.05)
+                : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        border: isPerfect
+            ? Border.all(
+                color: const Color(0xFFFFD700).withValues(alpha: 0.3))
+            : null,
+      ),
+      child: Row(
+        children: [
+          // AI 순위
+          SizedBox(
+            width: 36,
+            child: Row(
+              children: [
+                Text(
+                  switch (aiRank) {
+                    1 => '🥇',
+                    2 => '🥈',
+                    3 => '🥉',
+                    _ => '#$aiRank',
+                  },
+                  style: TextStyle(
+                    fontSize: aiRank <= 3 ? 14 : 10,
+                    color: aiRankColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          // 마번
+          SizedBox(
+            width: 26,
+            child: Center(
+              child: HorseCapBadge(
+                  gateNo: horse.gateNo, size: 22, showNumber: true),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // 마명
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  horse.horseName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (isPerfect)
+                  const Text(
+                    '✨ 실제 순위와 일치!',
+                    style: TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // AI 점수
+          SizedBox(
+            width: 36,
+            child: Text(
+              horse.finalScore.toStringAsFixed(1),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: _scoreColor(horse.finalScore),
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 실제 착순
+          SizedBox(
+            width: 46,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+              decoration: BoxDecoration(
+                color: actualRank > 0
+                    ? actualRankColor.withValues(
+                        alpha: actualRank <= 3 ? 0.18 : 0.07)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+                border: actualRank > 0 && actualRank <= 3
+                    ? Border.all(
+                        color: actualRankColor.withValues(alpha: 0.4))
+                    : null,
+              ),
+              child: Text(
+                actualRank > 0 ? '$actualRank착' : '-',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: actualRank > 0
+                      ? (actualRank <= 3
+                          ? actualRankColor
+                          : const Color(0xFF4A6A8A))
+                      : const Color(0xFF3A5A7A),
+                  fontSize: 11,
+                  fontWeight: actualRank <= 3
+                      ? FontWeight.w800
+                      : FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _hitRateColor(int hit, int total) {
+    final rate = total > 0 ? hit / total : 0.0;
+    if (rate >= 0.8) return const Color(0xFF4CAF50);
+    if (rate >= 0.5) return const Color(0xFFFFD700);
+    if (rate >= 0.3) return const Color(0xFFFF9800);
+    return const Color(0xFF78909C);
+  }
+
+  Color _scoreColor(double score) {
+    if (score >= 75) return const Color(0xFF4CAF50);
+    if (score >= 55) return const Color(0xFFFFD700);
+    if (score >= 40) return const Color(0xFFFF9800);
+    return const Color(0xFFFF5722);
   }
 
   // ── 섹션 타이틀 ──

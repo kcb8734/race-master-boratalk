@@ -93,13 +93,16 @@ class _RaceListCardState extends State<RaceListCard>
 
     final hasActivateTime = race.activateTime != null;
 
-    return Opacity(
-      opacity: isFinished ? 0.60 : 1.0,
-      child: Container(
+    return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
         decoration: BoxDecoration(
+          // isFinished: 짙은 그린 배경 + 그린 테두리로 '결과 확인 가능' 표시
           gradient: isFinished
-              ? null
+              ? const LinearGradient(
+                  colors: [Color(0xFF0D1B12), Color(0xFF081410)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
               : LinearGradient(
                   colors: [
                     AppTheme.navyCard,
@@ -108,15 +111,14 @@ class _RaceListCardState extends State<RaceListCard>
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-          color: isFinished ? AppTheme.navyCard : null,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isUpcoming
                 ? AppTheme.goldPrimary.withValues(alpha: 0.8)
                 : isFinished
-                    ? AppTheme.navyBorder.withValues(alpha: 0.3)
+                    ? const Color(0xFF2E7D52).withValues(alpha: 0.6)
                     : AppTheme.navyBorder,
-            width: isUpcoming ? 1.5 : 1,
+            width: isUpcoming ? 1.5 : (isFinished ? 1.2 : 1),
           ),
           boxShadow: isUpcoming
               ? [
@@ -126,7 +128,15 @@ class _RaceListCardState extends State<RaceListCard>
                     spreadRadius: 2,
                   )
                 ]
-              : null,
+              : isFinished
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF2E7D52).withValues(alpha: 0.1),
+                        blurRadius: 10,
+                        spreadRadius: 0,
+                      )
+                    ]
+                  : null,
         ),
         child: Material(
           color: Colors.transparent,
@@ -143,6 +153,9 @@ class _RaceListCardState extends State<RaceListCard>
 
                   // 경주 종료 후 다음 활성화 예정 안내
                   if (isPast && !isFinished) _buildNextActiveBanner(),
+
+                  // 종료 경주: 분석 데이터 확인 가능 안내 배너
+                  if (isFinished) _buildFinishedDataBanner(),
 
                   // 종료 경주 활성화 예정 안내
                   if (isFinished && hasActivateTime)
@@ -164,8 +177,9 @@ class _RaceListCardState extends State<RaceListCard>
                                 Text(
                                   '제${race.raceNo}경주',
                                   style: TextStyle(
+                                    // isFinished여도 읽기 가능한 밝기 유지
                                     color: isFinished
-                                        ? AppTheme.textDisable
+                                        ? const Color(0xFF8ABFA8)
                                         : AppTheme.textWhite,
                                     fontSize: 15,
                                     fontWeight: FontWeight.w800,
@@ -206,7 +220,7 @@ class _RaceListCardState extends State<RaceListCard>
                                   race.startTime,
                                   style: TextStyle(
                                     color: isFinished
-                                        ? AppTheme.textDisable
+                                        ? const Color(0xFF6A9A88)
                                         : AppTheme.goldAccent,
                                     fontSize: 13,
                                     fontWeight: FontWeight.w700,
@@ -220,7 +234,7 @@ class _RaceListCardState extends State<RaceListCard>
                                   '${race.distance}m',
                                   style: TextStyle(
                                     color: isFinished
-                                        ? AppTheme.textDisable
+                                        ? const Color(0xFF5A8A78)
                                         : AppTheme.textLight,
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -234,7 +248,7 @@ class _RaceListCardState extends State<RaceListCard>
                                   '${race.totalHorses}두',
                                   style: TextStyle(
                                     color: isFinished
-                                        ? AppTheme.textDisable
+                                        ? const Color(0xFF5A8A78)
                                         : AppTheme.textLight,
                                     fontSize: 12,
                                   ),
@@ -262,6 +276,50 @@ class _RaceListCardState extends State<RaceListCard>
             ),
           ),
         ),
+    );
+  }
+
+  // ── 종료 경주: 분석 데이터 확인 가능 안내 배너 ──────────────────
+  Widget _buildFinishedDataBanner() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D2018),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            color: const Color(0xFF2E7D52).withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2E7D52).withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Text(
+              '경주 종료',
+              style: TextStyle(
+                color: Color(0xFF4CAF7D),
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          const Flexible(
+            child: Text(
+              'AI 분석 데이터 확인 가능 · 탭하여 상세보기',
+              style: TextStyle(
+                color: Color(0xFF6DBF99),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -370,35 +428,39 @@ class _RaceListCardState extends State<RaceListCard>
     );
   }
 
-  // ★ 황금색 원형 배지 (D4AF37 계열 — 더 진한 골드)
+  // ★ 원형 배지 — 종료 경주는 그린 계열, 진행 경주는 골드 계열
   Widget _buildRaceNumberBadge(String raceNo, bool isFinished) {
     return Container(
       width: 44,
       height: 44,
       decoration: BoxDecoration(
         gradient: isFinished
-            ? null
+            ? const LinearGradient(
+                colors: [Color(0xFF2E7D52), Color(0xFF1B4D35)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
             : const LinearGradient(
                 colors: [Color(0xFFD4AF37), Color(0xFF8B6914)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-        color: isFinished ? AppTheme.navyBorder : null,
         shape: BoxShape.circle,
-        boxShadow: isFinished
-            ? null
-            : [
-                BoxShadow(
-                  color: const Color(0xFFD4AF37).withValues(alpha: 0.35),
-                  blurRadius: 8,
-                )
-              ],
+        boxShadow: [
+          BoxShadow(
+            color: (isFinished
+                    ? const Color(0xFF2E7D52)
+                    : const Color(0xFFD4AF37))
+                .withValues(alpha: 0.35),
+            blurRadius: 8,
+          )
+        ],
       ),
       child: Center(
         child: Text(
           raceNo,
-          style: TextStyle(
-            color: isFinished ? AppTheme.textDisable : const Color(0xFF1A1200),
+          style: const TextStyle(
+            color: Colors.white,
             fontSize: 16,
             fontWeight: FontWeight.w900,
           ),

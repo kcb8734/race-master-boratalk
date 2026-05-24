@@ -6,6 +6,7 @@ import '../providers/race_provider.dart';
 import '../services/race_stat_engine.dart';
 import '../utils/horse_cap_colors.dart';
 import 'race_splash_screen.dart';
+import 'race_result_screen.dart';
 
 class RaceDashboardScreen extends StatefulWidget {
   final RaceInfo race;
@@ -491,11 +492,11 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
     return '다음 주 출전마 공시 후 활성화 예정';
   }
 
-  /// isFinished 경주 전용 잠금 배너 (상세 안내 포함)
+  /// isFinished 경주 전용 잠금 배너 + 결과보기 버튼
   Widget _buildFinishedBanner() {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
       decoration: BoxDecoration(
         color: const Color(0xFF0F1F0F),
         borderRadius: BorderRadius.circular(12),
@@ -504,6 +505,7 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 종료 표시
           Row(
             children: [
               const Text('🏁', style: TextStyle(fontSize: 14)),
@@ -518,7 +520,8 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
+          // 다음 활성화 안내
           Row(
             children: [
               const SizedBox(width: 20),
@@ -535,6 +538,46 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          // 결과보기 버튼
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                // Provider에서 현재 경주의 AI 분석 데이터 전달
+                final horses =
+                    context.read<RaceProvider>().horses;
+                Navigator.push(
+                  context,
+                  PageRouteBuilder(
+                    pageBuilder: (c, a1, a2) => RaceResultScreen(
+                      race: widget.race,
+                      aiHorses: horses.isNotEmpty ? horses : null,
+                    ),
+                    transitionsBuilder: (c, a1, a2, child) =>
+                        FadeTransition(opacity: a1, child: child),
+                    transitionDuration:
+                        const Duration(milliseconds: 250),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.emoji_events_rounded, size: 16),
+              label: const Text('경주 결과 확인',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A3A2A),
+                foregroundColor: const Color(0xFF4CAF7D),
+                side: const BorderSide(
+                    color: Color(0xFF2E7D52), width: 1.2),
+                padding:
+                    const EdgeInsets.symmetric(vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                elevation: 0,
+              ),
+            ),
           ),
         ],
       ),
