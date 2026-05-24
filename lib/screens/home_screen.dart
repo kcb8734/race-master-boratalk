@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/race_models.dart';
 import '../providers/race_provider.dart';
 import '../services/kra_server_status.dart';
 import '../utils/app_theme.dart';
@@ -514,7 +515,9 @@ class _HomeContent extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text(
                     day != null
-                        ? '${day.label}요일 ${venue.label} 경주 목록'
+                        ? (provider.isAllVenuesMode
+                            ? '${day.label}요일 전체 경주 목록'
+                            : '${day.label}요일 ${venue.label} 경주 목록')
                         : '경주 목록',
                     style: const TextStyle(
                       color: AppTheme.textWhite,
@@ -522,6 +525,29 @@ class _HomeContent extends StatelessWidget {
                       fontWeight: FontWeight.w800,
                     ),
                   ),
+                  if (provider.isAllVenuesMode) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFD700).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: const Color(0xFFFFD700).withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: const Text(
+                        '시간순',
+                        style: TextStyle(
+                          color: Color(0xFFFFD700),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   if (!provider.isPremium)
                     Container(
@@ -562,7 +588,8 @@ class _HomeContent extends StatelessWidget {
   Widget _buildRaceList(BuildContext context) {
     return Consumer<RaceProvider>(
       builder: (ctx, provider, __) {
-        if (provider.isLoadingRaces) {
+        // ── 전체보기 로딩 중 ─────────────────────────────────────
+        if (provider.isLoadingAllVenues || provider.isLoadingRaces) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -570,7 +597,9 @@ class _HomeContent extends StatelessWidget {
                 CircularProgressIndicator(color: AppTheme.goldPrimary),
                 const SizedBox(height: 12),
                 Text(
-                  'KRA 경주 데이터 로딩 중...',
+                  provider.isLoadingAllVenues
+                      ? '전체 경주장 데이터 로딩 중...'
+                      : 'KRA 경주 데이터 로딩 중...',
                   style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
                 ),
               ],
@@ -602,127 +631,202 @@ class _HomeContent extends StatelessWidget {
             provider.refreshRaces();
             await Future.delayed(const Duration(milliseconds: 600));
           },
-          child: ListView.builder(
-            padding: EdgeInsets.only(
-              top: 6,
-              bottom: MediaQuery.of(ctx).padding.bottom + 80,
-            ),
-            itemCount: provider.races.length,
-            itemBuilder: (c, i) {
-              final race = provider.races[i];
-              // ── 경주 시간 경과 여부 판정 (AI 모의 경주 입장 버튼 비활성화용) ──
-              final bool isRacePast = () {
-                if (race.isFinished) return true;
-                final parts = race.startTime.split(':');
-                if (parts.length != 2) return false;
-                final h = int.tryParse(parts[0]);
-                final m = int.tryParse(parts[1]);
-                if (h == null || m == null) return false;
-                final now = DateTime.now();
-                final raceTime = DateTime(now.year, now.month, now.day, h, m);
-                return now.isAfter(raceTime.add(const Duration(minutes: 30)));
-              }();
-
-              // ── 상세페이지 이동 콜백 (카드 탭 — 항상 허용) ──────
-              Future<void> navigateToDetail() async {
-                if (!ctx.mounted) return;
-                unawaited(provider.selectRace(race));
-                Navigator.push(
-                  ctx,
-                  PageRouteBuilder(
-                    pageBuilder: (cc, a1, a2) =>
-                        RaceDashboardScreen(race: race),
-                    transitionsBuilder: (cc, a1, a2, child) =>
-                        FadeTransition(opacity: a1, child: child),
-                    transitionDuration:
-                        const Duration(milliseconds: 180),
-                  ),
-                );
-              }
-
-              return RaceListCard(
-                race: race,
-                // AI 모의 경주 입장 버튼: 시간 경과 시 null → 버튼 비활성
-                onEnter: isRacePast ? null : () async {
-                  // ★ [최우선] KRA 서버 장애 잠금 체크 ─────────────
-                  final kraStatus = ctx.read<KraServerStatus>();
-                  if (kraStatus.isDown) {
-                    if (!ctx.mounted) return;
-                    _showLockDialogStatic(
-                      ctx,
-                      icon: '🔴',
-                      title: '서버 장애로 일시 중단',
-                      message: '현재 한국마사회 공공데이터 서버의\n'
-                          '일시적인 장애로 인해 실시간 데이터\n'
-                          '연동이 지연되고 있습니다.\n\n'
-                          '서비스 이용에 불편을 드려 죄송합니다.\n'
-                          '서버 복구 즉시 자동으로 활성화됩니다.',
-                    );
-                    return;
-                  }
-
-                  // ── 라이프사이클 잠금 체크 ──────────────────────
-                  final lockState = provider.raceLockFor(race);
-
-                  if (lockState == RaceLockState.seasonOff) {
-                    if (!ctx.mounted) return;
-                    // 시즌오프: 차단 대신 데모 모드로 진입 안내
-                    await _showSeasonOffDemoDialog(ctx, provider);
-                    return;
-                  }
-
-                  if (lockState == RaceLockState.dataPending) {
-                    if (!ctx.mounted) return;
-                    _showLockDialogStatic(
-                      ctx,
-                      icon: '⏳',
-                      title: '데이터 미확정',
-                      message: '이번 주 실시간 경주 데이터가 아직\n업데이트되지 않았습니다.\n\n'
-                          '매주 목요일 오후 5시 이후 순차 업데이트 예정',
-                    );
-                    return;
-                  }
-
-                  if (lockState == RaceLockState.raceLocked) {
-                    if (!ctx.mounted) return;
-                    _showLockDialogStatic(
-                      ctx,
-                      icon: '🏁',
-                      title: '경주 종료',
-                      message: '당일 실시간 경주가 종료되어\n모의 레이서 가동이 종료되었습니다.',
-                    );
-                    return;
-                  }
-
-                  // ── 정상 진입 — 화면 전환 즉시, 데이터 로드 백그라운드 ──
-                  await navigateToDetail();
-                },
-                // 카드 탭 → 상세페이지 이동 (경주 종료 후에도 항상 허용)
-                onDetail: () async {
-                  await navigateToDetail();
-                },
-                onViewResult: () async {
-                  // ── 종료 경주: 경주결과 화면(RaceResultScreen) 직접 진입 ──
-                  // API4_3 / racedetailresult 실결과 데이터 표시
-                  if (!ctx.mounted) return;
-                  Navigator.push(
-                    ctx,
-                    PageRouteBuilder(
-                      pageBuilder: (cc, a1, a2) =>
-                          RaceResultScreen(race: race),
-                      transitionsBuilder: (cc, a1, a2, child) =>
-                          FadeTransition(opacity: a1, child: child),
-                      transitionDuration:
-                          const Duration(milliseconds: 200),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
+          child: _buildRaceListView(ctx, provider),
         );
       },
     );
+  }
+
+  // ── 경주 목록 ListView 빌더 ─────────────────────────────────────
+  // 전체보기 모드: 시간순 병합 + 경주장 구분 인라인 배지
+  // 단일 모드: 기존 동일
+  Widget _buildRaceListView(BuildContext ctx, RaceProvider provider) {
+    final races = provider.races;
+    final isAll = provider.isAllVenuesMode;
+
+    // ── 가상 아이템 목록 생성 ──────────────────────────────────────
+    // 전체보기 시: 경주장이 바뀔 때마다 헤더 배지 삽입
+    // 단일보기 시: 경주 카드만
+    final List<Object> items = [];
+    if (isAll) {
+      String? prevVenue;
+      for (final race in races) {
+        if (prevVenue != race.venueCode) {
+          items.add(_VenueGroupHeader(venueCode: race.venueCode,
+              venueName: race.venueName));
+          prevVenue = race.venueCode;
+        }
+        items.add(race);
+      }
+    } else {
+      items.addAll(races);
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.only(
+        top: 6,
+        bottom: MediaQuery.of(ctx).padding.bottom + 80,
+      ),
+      itemCount: items.length,
+      itemBuilder: (c, i) {
+        final item = items[i];
+
+        // ── 경주장 그룹 헤더 (전체보기 모드) ───────────────────────
+        if (item is _VenueGroupHeader) {
+          return _buildVenueGroupHeader(item);
+        }
+
+        // ── 경주 카드 ────────────────────────────────────────────
+        final race = item as RaceInfo;
+        final bool isRacePast = () {
+          if (race.isFinished) return true;
+          final parts = race.startTime.split(':');
+          if (parts.length != 2) return false;
+          final h = int.tryParse(parts[0]);
+          final m = int.tryParse(parts[1]);
+          if (h == null || m == null) return false;
+          final now = DateTime.now();
+          final raceTime = DateTime(now.year, now.month, now.day, h, m);
+          return now.isAfter(raceTime.add(const Duration(minutes: 30)));
+        }();
+
+        Future<void> navigateToDetail() async {
+          if (!ctx.mounted) return;
+          unawaited(provider.selectRace(race));
+          Navigator.push(
+            ctx,
+            PageRouteBuilder(
+              pageBuilder: (cc, a1, a2) =>
+                  RaceDashboardScreen(race: race),
+              transitionsBuilder: (cc, a1, a2, child) =>
+                  FadeTransition(opacity: a1, child: child),
+              transitionDuration:
+                  const Duration(milliseconds: 180),
+            ),
+          );
+        }
+
+        return RaceListCard(
+          race: race,
+          onEnter: isRacePast ? null : () async {
+            final kraStatus = ctx.read<KraServerStatus>();
+            if (kraStatus.isDown) {
+              if (!ctx.mounted) return;
+              _showLockDialogStatic(
+                ctx,
+                icon: '🔴',
+                title: '서버 장애로 일시 중단',
+                message: '현재 한국마사회 공공데이터 서버의\n'
+                    '일시적인 장애로 인해 실시간 데이터\n'
+                    '연동이 지연되고 있습니다.\n\n'
+                    '서비스 이용에 불편을 드려 죄송합니다.\n'
+                    '서버 복구 즉시 자동으로 활성화됩니다.',
+              );
+              return;
+            }
+            final lockState = provider.raceLockFor(race);
+            if (lockState == RaceLockState.seasonOff) {
+              if (!ctx.mounted) return;
+              await _showSeasonOffDemoDialog(ctx, provider);
+              return;
+            }
+            if (lockState == RaceLockState.dataPending) {
+              if (!ctx.mounted) return;
+              _showLockDialogStatic(
+                ctx,
+                icon: '⏳',
+                title: '데이터 미확정',
+                message: '이번 주 실시간 경주 데이터가 아직\n업데이트되지 않았습니다.\n\n'
+                    '매주 목요일 오후 5시 이후 순차 업데이트 예정',
+              );
+              return;
+            }
+            if (lockState == RaceLockState.raceLocked) {
+              if (!ctx.mounted) return;
+              _showLockDialogStatic(
+                ctx,
+                icon: '🏁',
+                title: '경주 종료',
+                message: '당일 실시간 경주가 종료되어\n모의 레이서 가동이 종료되었습니다.',
+              );
+              return;
+            }
+            await navigateToDetail();
+          },
+          onDetail: () async { await navigateToDetail(); },
+          onViewResult: () async {
+            if (!ctx.mounted) return;
+            Navigator.push(
+              ctx,
+              PageRouteBuilder(
+                pageBuilder: (cc, a1, a2) =>
+                    RaceResultScreen(race: race),
+                transitionsBuilder: (cc, a1, a2, child) =>
+                    FadeTransition(opacity: a1, child: child),
+                transitionDuration:
+                    const Duration(milliseconds: 200),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ── 전체보기 경주장 그룹 헤더 ────────────────────────────────────
+  Widget _buildVenueGroupHeader(_VenueGroupHeader header) {
+    final color = _venueAccentColor(header.venueCode);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withValues(alpha: 0.5)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.location_on, color: color, size: 12),
+                const SizedBox(width: 4),
+                Text(
+                  header.venueName,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              height: 1,
+              color: color.withValues(alpha: 0.2),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _venueAccentColor(String venueCode) {
+    switch (venueCode) {
+      case '1':
+        return const Color(0xFF2979FF); // 서울
+      case '2':
+        return const Color(0xFFFF6D00); // 부산경남
+      case '3':
+        return const Color(0xFF00BFA5); // 제주
+      default:
+        return const Color(0xFF64B5F6);
+    }
   }
 
   // ── 라이프사이클 잠금 팝업 (StatelessWidget용 정적 헬퍼) ─────────
@@ -1577,4 +1681,11 @@ class _SeasonOffDemoDialog extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── 전체보기 그룹 헤더 데이터 클래스 ─────────────────────────────────
+class _VenueGroupHeader {
+  final String venueCode;
+  final String venueName;
+  const _VenueGroupHeader({required this.venueCode, required this.venueName});
 }

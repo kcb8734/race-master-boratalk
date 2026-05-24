@@ -69,6 +69,13 @@ class RaceProvider extends ChangeNotifier {
   int _selectedDayIndex = 0;
   VenueCode _selectedVenue = VenueCode.seoul;
   List<RaceInfo> _races = [];
+
+  // ── 전체보기 모드 ─────────────────────────────────────────────
+  // true = 활성 경주장 전체 병합, false = 단일 경주장 선택
+  bool _isAllVenuesMode = false;
+  // 전체보기 시 각 경주장별 병합 캐시
+  final Map<String, List<RaceInfo>> _allVenuesRacesCache = {};
+  bool _isLoadingAllVenues = false;
   bool _isLoadingRaces = false;
   bool _isLoadingDays = true;
   RaceInfo? _selectedRace;
@@ -143,7 +150,35 @@ class RaceProvider extends ChangeNotifier {
   DayTab? get selectedDay =>
       _weekDays.isNotEmpty ? _weekDays[_selectedDayIndex] : null;
   VenueCode get selectedVenue => _selectedVenue;
-  List<RaceInfo> get races => _races;
+
+  // ── 전체보기 게터 ─────────────────────────────────────────────
+  bool get isAllVenuesMode => _isAllVenuesMode;
+  bool get isLoadingAllVenues => _isLoadingAllVenues;
+
+  /// 전체보기 모드일 때 시간순 병합 경주 목록
+  /// 단일 경주장 모드일 때는 _races 그대로
+  List<RaceInfo> get races {
+    if (!_isAllVenuesMode) return _races;
+    // 캐시된 모든 경주 병합 후 startTime 오름차순 정렬
+    final merged = _allVenuesRacesCache.values
+        .expand((list) => list)
+        .toList()
+      ..sort((a, b) => _compareStartTime(a.startTime, b.startTime));
+    return merged;
+  }
+
+  /// 단일 경주장 모드에서의 원본 _races (항상 현재 경주장 목록)
+  List<RaceInfo> get currentVenueRaces => _races;
+
+  // startTime 'HH:MM' 문자열 비교
+  int _compareStartTime(String a, String b) {
+    final pa = a.split(':');
+    final pb = b.split(':');
+    if (pa.length != 2 || pb.length != 2) return a.compareTo(b);
+    final ah = int.tryParse(pa[0]) ?? 0, am = int.tryParse(pa[1]) ?? 0;
+    final bh = int.tryParse(pb[0]) ?? 0, bm = int.tryParse(pb[1]) ?? 0;
+    return (ah * 60 + am).compareTo(bh * 60 + bm);
+  }
   bool get isLoadingRaces => _isLoadingRaces;
   bool get isLoadingDays => _isLoadingDays;
   RaceInfo? get selectedRace => _selectedRace;
@@ -471,6 +506,7 @@ class RaceProvider extends ChangeNotifier {
     _insights = [];
     _recentOddsChanges = [];
     _previousOddsSnapshot = {};
+    _allVenuesRacesCache.clear(); // 날짜 변경 시 전체보기 캐시 클리어
 
     // 새 날짜에서 현재 선택된 경주장이 비활성이면 활성 경주장 중 첫 번째로 자동 전환
     final newDay = _weekDays[index];
@@ -483,12 +519,18 @@ class RaceProvider extends ChangeNotifier {
       _selectedVenue = fallback;
     }
 
-    _loadRaces();
+    // 전체보기 모드였으면 재로드, 아니면 단일 경주장 로드
+    if (_isAllVenuesMode) {
+      _loadAllVenuesRaces();
+    } else {
+      _loadRaces();
+    }
     notifyListeners();
   }
 
   void selectVenue(VenueCode venue) {
     stopAutoRefresh();
+    _isAllVenuesMode = false; // 특정 경주장 선택 시 전체보기 해제
     _selectedVenue = venue;
     _selectedRace = null;
     _horses = [];
@@ -496,6 +538,57 @@ class RaceProvider extends ChangeNotifier {
     _recentOddsChanges = [];
     _previousOddsSnapshot = {};
     _loadRaces();
+    notifyListeners();
+  }
+
+  /// 전체보기 모드 토글 — 활성 경주장 전체를 병렬 로딩 후 시간순 병합
+  Future<void> selectAllVenues() async {
+    stopAutoRefresh();
+    _isAllVenuesMode = true;
+    _selectedRace = null;
+    _horses = [];
+    _insights = [];
+    _recentOddsChanges = [];
+    _previousOddsSnapshot = {};
+    await _loadAllVenuesRaces();
+    notifyListeners();
+  }
+
+  /// 전체보기 모드 해제 → 이전 단일 경주장으로 복귀
+  void exitAllVenuesMode() {
+    if (!_isAllVenuesMode) return;
+    _isAllVenuesMode = false;
+    _allVenuesRacesCache.clear();
+    notifyListeners();
+  }
+
+  /// 모든 활성 경주장 경주를 병렬로 로딩해 캐시에 저장
+  Future<void> _loadAllVenuesRaces() async {
+    if (_weekDays.isEmpty) return;
+    _isLoadingAllVenues = true;
+    notifyListeners();
+
+    final day = _weekDays[_selectedDayIndex];
+    final activeVenues = activeVenuesForSelectedDay;
+    _allVenuesRacesCache.clear();
+
+    // 병렬 로딩
+    await Future.wait(
+      activeVenues.map((venue) async {
+        try {
+          final result = await KraApiService.fetchRaces(venue.code, day.date);
+          if (result.isNotEmpty) {
+            _allVenuesRacesCache[venue.code] = result;
+            return;
+          }
+        } catch (_) {}
+        // API 실패 시 Mock 대체
+        _allVenuesRacesCache[venue.code] =
+            KraMockService.getRaces(venue.code, day.date);
+      }),
+    );
+
+    _isLoadingAllVenues = false;
     notifyListeners();
   }
 
