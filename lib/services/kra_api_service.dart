@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import '../models/race_models.dart';
 import 'kra_mock_service.dart';
 import 'kra_server_status.dart';
+import 'kra_scraper_service.dart';
+import 'race_schedule_cache.dart';
 
 // ══════════════════════════════════════════════════════════════════════
 // KRA 공식 에러 코드 (API 명세서 9종)
@@ -341,60 +343,125 @@ class KraApiService {
       String venueCode, DateTime date) async {
     final dateStr  = _XmlParser.formatDate(date);   // YYYYMMDD 엄격 바인딩
     final meetCode = _venueToMeet(venueCode);
+    final cache    = RaceScheduleCache();
+
+    // ── ServiceKey 사전 검증 (최초 1회, 에러 로그 투명화) ─────────────
+    final keyVal = RaceScheduleCache.validateServiceKey(_serviceKey);
+    if (kDebugMode) {
+      debugPrint('[API187] ServiceKey 검증: ${keyVal.summary}');
+    }
+
+    String lastErrorMsg = 'unknown';
 
     try {
-      final uri = Uri.parse(
-        '$_baseUrl/API187?serviceKey=$_serviceKey'
-        '&numOfRows=20&pageNo=1&meet=$meetCode'
-        '&rc_date=$dateStr&_type=json',
-      );
+      final reqUrl = '$_baseUrl/API187?serviceKey=$_serviceKey'
+          '&numOfRows=20&pageNo=1&meet=$meetCode'
+          '&rc_date=$dateStr&_type=json';
+      final uri = Uri.parse(reqUrl);
       if (kDebugMode) {
-        debugPrint('[API187] 요청 meet=$meetCode rc_date=$dateStr');
+        debugPrint('[API187] TIER-1 요청 meet=$meetCode rc_date=$dateStr');
       }
 
       final resp =
           await http.get(uri).timeout(const Duration(seconds: 8));
 
-      // ① HTTP 500/4xx → throw → catch → Mock
+      // ── 에러 시 로그 적재 (투명화) ──────────────────────────────────
+      if (resp.statusCode != 200 || resp.body.contains('Unexpected errors')) {
+        await cache.logApiError(
+          apiName: 'API187-T1',
+          statusCode: resp.statusCode,
+          errorBody: resp.body.length > 300
+              ? resp.body.substring(0, 300) : resp.body,
+          requestUrl: reqUrl,
+          serviceKeyMasked: keyVal.maskedKey,
+          encodingNote: 'Raw hex key, no encoding needed',
+        );
+        lastErrorMsg = 'HTTP ${resp.statusCode}: ${resp.body.substring(0, resp.body.length.clamp(0, 100))}';
+      }
+
+      // ① HTTP 500/4xx → throw → Failover
       _KraInterceptor.checkAndThrow(resp);
 
-      // ③ JSON 파싱
+      // ② JSON 파싱
       final data  = jsonDecode(resp.body);
       final items = _extractJsonItems(data);
 
-      // ④ 빈 items → Mock
+      // ③ 빈 items → Failover
       if (items == null || items.isEmpty) {
-        if (kDebugMode) debugPrint('[API187] items 비어있음 → Mock');
-        return KraMockService.getRaces(venueCode, date);
-      }
-
-      final races = _parseRaces(items, venueCode, date);
-      if (races.isNotEmpty) {
-        if (kDebugMode) {
-          debugPrint('[API187] 실데이터 ${races.length}경주 로드 완료');
+        if (kDebugMode) debugPrint('[API187] items 비어있음 → Failover');
+        lastErrorMsg = 'items empty';
+      } else {
+        final races = _parseRaces(items, venueCode, date);
+        if (races.isNotEmpty) {
+          if (kDebugMode) {
+            debugPrint('[API187] ✅ TIER-1 실데이터 ${races.length}경주 로드 완료');
+          }
+          // 성공 → 캐시 스냅샷 저장 (다음 API 장애 대비)
+          await cache.saveSnapshot(
+            races: races,
+            venueCode: venueCode,
+            date: date,
+            source: 'api',
+          );
+          return races;
         }
-        return races;
+        lastErrorMsg = 'parse result empty';
+        if (kDebugMode) debugPrint('[API187] 파싱 결과 0건 → Failover');
       }
-      if (kDebugMode) debugPrint('[API187] 파싱 결과 0건 → Mock');
 
     } on _KraServerDownException catch (e) {
-      // ① 서버 장애 — 즉시 Mock (불필요한 retry 없음)
-      if (kDebugMode) debugPrint('[API187] 서버장애: $e → Mock 전환');
+      // HTTP 500 장애 → Failover 트리거
+      lastErrorMsg = e.toString();
+      if (kDebugMode) debugPrint('[API187] 서버장애: $e → Failover 트리거');
+      KraServerStatus().reportServerError(errorMsg: e.message);
+      await cache.logApiError(
+        apiName: 'API187-T1',
+        statusCode: e.statusCode,
+        errorBody: e.message,
+        requestUrl: '$_baseUrl/API187 meet=$meetCode date=$dateStr',
+        serviceKeyMasked: keyVal.maskedKey,
+        encodingNote: 'KraServerDownException',
+      );
     } on _KraApiCodeException catch (e) {
-      // ② API 에러코드 분기 처리
-      if (kDebugMode) debugPrint('[API187] API오류코드: $e → Mock 전환');
-      // 에러코드 31(기한만료), 32(IP미등록) → 서버 상태 추가 보고
+      lastErrorMsg = e.toString();
+      if (kDebugMode) debugPrint('[API187] API오류코드: $e → Failover 트리거');
       if (e.resultCode == '31' || e.resultCode == '32') {
         KraServerStatus().reportServerError(
           errorMsg: 'API키 만료/IP미등록 (code=${e.resultCode})',
         );
       }
+      await cache.logApiError(
+        apiName: 'API187-T1',
+        statusCode: 400,
+        errorBody: 'resultCode=${e.resultCode}',
+        requestUrl: '$_baseUrl/API187 meet=$meetCode date=$dateStr',
+        serviceKeyMasked: keyVal.maskedKey,
+      );
     } catch (e) {
-      // ③⑤ JSON 파싱 오류 / TimeoutException
-      if (kDebugMode) debugPrint('[API187] 예외: $e → Mock 전환');
+      lastErrorMsg = e.toString();
+      if (kDebugMode) debugPrint('[API187] 예외: $e → Failover 트리거');
+      await cache.logApiError(
+        apiName: 'API187-T1',
+        statusCode: 0,
+        errorBody: e.toString(),
+        requestUrl: '$_baseUrl/API187 meet=$meetCode date=$dateStr',
+        encodingNote: 'Timeout/Exception',
+      );
     }
 
-    return KraMockService.getRaces(venueCode, date);
+    // ── TIER-2 ~ TIER-5 Failover 실행 ─────────────────────────────────
+    if (kDebugMode) {
+      debugPrint('[API187] Failover 진입 (원인: $lastErrorMsg)');
+    }
+    final failover = await KraScraperService.failover(
+      venueCode: venueCode,
+      date: date,
+      originalError: lastErrorMsg,
+    );
+    if (kDebugMode) {
+      debugPrint('[API187] ${failover.tierLabel}: ${failover.description}');
+    }
+    return failover.races;
   }
 
   // ────────────────────────────────────────────────────────────────
