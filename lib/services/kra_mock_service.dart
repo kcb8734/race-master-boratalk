@@ -73,8 +73,8 @@ class KraMockService {
             ? '부산경남'
             : '제주';
 
-    // 경주장별 레이스 수
-    final int raceCount = venueCode == '3' ? 8 : 11;
+    // 경주장별 레이스 수 (일요일 기준: 서울10 / 부경7 / 제주8)
+    final int raceCount = venueCode == '3' ? 8 : venueCode == '2' ? 7 : 10;
     final dateStr =
         '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
 
@@ -134,24 +134,50 @@ class KraMockService {
         }
       }
 
+      // 특별경주 주입 로직 (부경 3R = 부산광역시장배)
+      final specialData = _getSpecialRaceData(venueCode, raceNo);
+
       result.add(RaceInfo(
         raceNo: raceNo,
-        raceName: '제${raceNo}경주',
+        raceName: specialData != null ? specialData['name']! : '제${raceNo}경주',
         startTime: timeStr,
         distance: distances[i % distances.length],
-        condition: conditions[i % conditions.length],
-        grade: grades[i % grades.length],
+        condition: specialData != null
+            ? specialData['condition']!
+            : conditions[i % conditions.length],
+        grade: specialData != null
+            ? specialData['grade']!
+            : grades[i % grades.length],
         venueCode: venueCode,
         venueName: venueName,
         raceDate: dateStr,
-        totalHorses: 8 + _random.nextInt(13), // 8~20두 (KRA 실제 범위)
+        totalHorses: specialData != null
+            ? 14  // 특별경주는 대체로 14두
+            : 8 + _random.nextInt(13), // 8~20두 (KRA 실제 범위)
         trackCondition: trackCond,
         isFinished: isFinished,
         isUpcoming: isUpcoming,
         activateTime: activateTime,
+        isSpecialRace: specialData != null,
+        specialRaceName: specialData?['specialName'] ?? '',
       ));
     }
     return result;
+  }
+
+  /// 특별경주 데이터 반환 (venueCode + raceNo 조합)
+  /// 부경 3R: 제21회 부산광역시장배 (GradeII 특별경주)
+  static Map<String, String>? _getSpecialRaceData(
+      String venueCode, String raceNo) {
+    if (venueCode == '2' && raceNo == '3') {
+      return {
+        'name': '부산광역시장배',           // 카드 표시용 증첩 명칭
+        'specialName': '제21회 부산광역시장배 (GradeII)', // 전체 명칭
+        'condition': '예시장화잼우/3세이상 국내마', // KRA rcGrdCourse
+        'grade': 'GradeII',                          // KRA 등급
+      };
+    }
+    return null;
   }
 
   /// 경주 날짜(date)를 기준으로 출전마 공지 활성화 예정 일시를 계산한다.
@@ -189,50 +215,67 @@ class KraMockService {
     return -1;
   }
 
+  /// KRA 공식 시간표 (일요일 기준 — 2026.05.24 스크린샷 확인)
+  /// ⚠️ 요일별 시간표는 KRA 공식 발표 기준으로 주기적 업데이트 필요
   static List<String> _getStartTimes(String venueCode) {
     if (venueCode == '3') {
-      // 제주 (8경주)
-      return ['10:00', '10:30', '11:05', '11:40', '12:15', '12:50', '13:30', '14:10'];
+      // 제주 (8경주) — 금요일 운영 기준
+      return ['11:00', '11:40', '12:20', '13:00', '13:40', '14:20', '15:00', '15:40'];
     } else if (venueCode == '2') {
-      // 부산경남 (11경주)
-      return ['10:00','10:40','11:20','12:00','12:40','13:20','14:00','14:40','15:20','16:00','16:40'];
+      // 부산경남 (7경주, 일요일 기준) — KRA 공식 2026.05.24 확인
+      // 1R=11:25, 2R=12:45, 3R=13:35(특별 부산광역시장배), 4R=14:25, 5R=15:15, 6R=16:05, 7R=16:55
+      return ['11:25', '12:45', '13:35', '14:25', '15:15', '16:05', '16:55'];
     } else {
-      // 서울 (11경주) — KRA 공식 시간표: 1R=10:35, 2R=11:25, 3R=12:10...
-      return ['10:35','11:25','12:10','12:50','13:30','14:10','14:50','15:30','16:10','16:50','17:30'];
+      // 서울 (10경주, 일요일 기준) — KRA 공식 2026.05.24 확인
+      // 1R=10:35, 2R=11:00, 3R=12:05, 4R=13:10, 5R=14:00
+      // 6R=14:50, 7R=15:40, 8R=16:30, 9R=17:25, 10R=17:55
+      return ['10:35', '11:00', '12:05', '13:10', '14:00',
+              '14:50', '15:40', '16:30', '17:25', '17:55'];
     }
   }
 
+  /// KRA 실제 거리 배열 (2026.05.24 스크린샷 확인)
   static List<int> _getDistances(String venueCode) {
-    if (venueCode == '3') return [1000, 1200, 1400, 1700, 1000, 1200, 1400, 1700];
-    return [1200, 1400, 1700, 1800, 2000, 1200, 1400, 1700, 1800, 2000, 1400];
+    if (venueCode == '3') {
+      // 제주: KRA 일반적 거리 구성
+      return [1000, 1200, 1400, 1700, 1000, 1200, 1400, 1700];
+    } else if (venueCode == '2') {
+      // 부산경남 (7경주) — 2026.05.24: 1200/1400/1800/1600/1300/1400/1200
+      return [1200, 1400, 1800, 1600, 1300, 1400, 1200];
+    } else {
+      // 서울 (10경주) — 2026.05.24: 1200/1300/1400/1400/1200/1800/1800/1600/1200/1400
+      return [1200, 1300, 1400, 1400, 1200, 1800, 1800, 1600, 1200, 1400];
+    }
   }
 
+  /// KRA 실제 경주 조건 배열 (2026.05.24 스크린샷 확인)
+  /// 서울: 국6/국6/국6/국5/국5/국5/국4/혼3/혼4/2등급
   static List<String> _getConditions() => [
-        '국6등급 별정A',
-        '국5등급 별정B',
-        '국4등급 핸디캡',
-        '국3등급 별정A',
-        '국2등급 별정A',
-        '국1등급 핸디캡',
-        '암말 한정 별정A',
-        '3세 한정 별정A',
-        '4세 이상 별정B',
-        '국6등급 핸디캡',
-        '특별 별정A',
+        '일반/국6등급',
+        '일반/국6등급',
+        '일반/국6등급',
+        '일반/국5등급',
+        '일반/국5등급',
+        '일반/국5등급',
+        '일반/국4등급',
+        '일반/혼3등급',
+        '일반/혼4등급',
+        '일반/2등급',
+        '일반/국4등급',
       ];
 
   static List<String> _getGrades() => [
         '국6등급',
+        '국6등급',
+        '국6등급',
+        '국5등급',
+        '국5등급',
         '국5등급',
         '국4등급',
-        '국3등급',
-        '국2등급',
-        '국1등급',
-        '암말한정',
-        '3세한정',
-        '4세이상',
-        '국6등급',
-        '특별',
+        '혼3등급',
+        '혼4등급',
+        '2등급',
+        '국4등급',
       ];
 
   // ── 출전마 정보 API26_2 + API8_2 + API25_1 + API77 Mock ──

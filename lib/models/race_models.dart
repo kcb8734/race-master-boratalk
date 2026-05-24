@@ -96,6 +96,8 @@ class RaceInfo {
   final bool isFinished;      // 경주 종료 여부
   final bool isUpcoming;      // 마감 임박 여부
   final DateTime? activateTime; // 출전마 공지 후 활성화 예정 시각
+  final bool isSpecialRace;   // 특별경주 여부 (GⅠ/GⅡ/GⅢ/관할배 등)
+  final String specialRaceName; // 특별경주명 (예: '제21회 부산광역시장배')
 
   const RaceInfo({
     required this.raceNo,
@@ -112,6 +114,8 @@ class RaceInfo {
     this.isFinished = false,
     this.isUpcoming = false,
     this.activateTime,
+    this.isSpecialRace = false,
+    this.specialRaceName = '',
   });
 
   /// API26_2 응답 기반으로 출발시간·출전두수 등 동적 갱신용 copyWith
@@ -122,22 +126,26 @@ class RaceInfo {
     bool? isFinished,
     bool? isUpcoming,
     DateTime? activateTime,
+    bool? isSpecialRace,
+    String? specialRaceName,
   }) {
     return RaceInfo(
-      raceNo:         raceNo,
-      raceName:       raceName,
-      startTime:      startTime      ?? this.startTime,
-      distance:       distance,
-      condition:      condition,
-      grade:          grade,
-      venueCode:      venueCode,
-      venueName:      venueName,
-      raceDate:       raceDate,
-      totalHorses:    totalHorses    ?? this.totalHorses,
-      trackCondition: trackCondition ?? this.trackCondition,
-      isFinished:     isFinished     ?? this.isFinished,
-      isUpcoming:     isUpcoming     ?? this.isUpcoming,
-      activateTime:   activateTime   ?? this.activateTime,
+      raceNo:          raceNo,
+      raceName:        raceName,
+      startTime:       startTime       ?? this.startTime,
+      distance:        distance,
+      condition:       condition,
+      grade:           grade,
+      venueCode:       venueCode,
+      venueName:       venueName,
+      raceDate:        raceDate,
+      totalHorses:     totalHorses     ?? this.totalHorses,
+      trackCondition:  trackCondition  ?? this.trackCondition,
+      isFinished:      isFinished      ?? this.isFinished,
+      isUpcoming:      isUpcoming      ?? this.isUpcoming,
+      activateTime:    activateTime    ?? this.activateTime,
+      isSpecialRace:   isSpecialRace   ?? this.isSpecialRace,
+      specialRaceName: specialRaceName ?? this.specialRaceName,
     );
   }
 }

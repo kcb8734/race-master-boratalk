@@ -86,57 +86,76 @@ class _RaceListCardState extends State<RaceListCard>
 
   @override
   Widget build(BuildContext context) {
-    final race      = widget.race;
+    final race       = widget.race;
     final isFinished = race.isFinished;
     final isUpcoming = race.isUpcoming;
     final isPast     = _isRacePast;   // 경주 시간 경과 여부
+    final isSpecial  = race.isSpecialRace; // 특별경주 여부
 
     final hasActivateTime = race.activateTime != null;
 
     return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
         decoration: BoxDecoration(
-          // isFinished: 짙은 그린 배경 + 그린 테두리로 '결과 확인 가능' 표시
-          gradient: isFinished
+          // 특별경주: 딥 퍼플 그라디언트 / isFinished: 짙은 그린 / 일반: 네이비
+          gradient: isSpecial && !isFinished
               ? const LinearGradient(
-                  colors: [Color(0xFF0D1B12), Color(0xFF081410)],
+                  colors: [Color(0xFF1A0D2E), Color(0xFF0F0820)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 )
-              : LinearGradient(
-                  colors: [
-                    AppTheme.navyCard,
-                    AppTheme.navyMid,
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+              : isFinished
+                  ? const LinearGradient(
+                      colors: [Color(0xFF0D1B12), Color(0xFF081410)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : LinearGradient(
+                      colors: [
+                        AppTheme.navyCard,
+                        AppTheme.navyMid,
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isUpcoming
-                ? AppTheme.goldPrimary.withValues(alpha: 0.8)
-                : isFinished
-                    ? const Color(0xFF2E7D52).withValues(alpha: 0.6)
-                    : AppTheme.navyBorder,
-            width: isUpcoming ? 1.5 : (isFinished ? 1.2 : 1),
+            color: isSpecial && !isFinished
+                ? const Color(0xFF9C27B0).withValues(alpha: 0.75)
+                : isUpcoming
+                    ? AppTheme.goldPrimary.withValues(alpha: 0.8)
+                    : isFinished
+                        ? const Color(0xFF2E7D52).withValues(alpha: 0.6)
+                        : AppTheme.navyBorder,
+            width: (isSpecial && !isFinished) ? 1.5
+                : isUpcoming ? 1.5
+                : (isFinished ? 1.2 : 1),
           ),
-          boxShadow: isUpcoming
+          boxShadow: isSpecial && !isFinished
               ? [
                   BoxShadow(
-                    color: AppTheme.goldPrimary.withValues(alpha: 0.15),
-                    blurRadius: 16,
+                    color: const Color(0xFF9C27B0).withValues(alpha: 0.20),
+                    blurRadius: 18,
                     spreadRadius: 2,
                   )
                 ]
-              : isFinished
+              : isUpcoming
                   ? [
                       BoxShadow(
-                        color: const Color(0xFF2E7D52).withValues(alpha: 0.1),
-                        blurRadius: 10,
-                        spreadRadius: 0,
+                        color: AppTheme.goldPrimary.withValues(alpha: 0.15),
+                        blurRadius: 16,
+                        spreadRadius: 2,
                       )
                     ]
-                  : null,
+                  : isFinished
+                      ? [
+                          BoxShadow(
+                            color: const Color(0xFF2E7D52).withValues(alpha: 0.1),
+                            blurRadius: 10,
+                            spreadRadius: 0,
+                          )
+                        ]
+                      : null,
         ),
         child: Material(
           color: Colors.transparent,
@@ -148,6 +167,9 @@ class _RaceListCardState extends State<RaceListCard>
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
+                  // 특별경주 배지 (최상단)
+                  if (isSpecial) _buildSpecialRaceBanner(race.specialRaceName),
+
                   // 마감 임박 배지
                   if (isUpcoming) _buildUpcomingBadge(),
 
@@ -177,10 +199,12 @@ class _RaceListCardState extends State<RaceListCard>
                                 Text(
                                   '제${race.raceNo}경주',
                                   style: TextStyle(
-                                    // isFinished여도 읽기 가능한 밝기 유지
-                                    color: isFinished
-                                        ? const Color(0xFF8ABFA8)
-                                        : AppTheme.textWhite,
+                                    // 특별경주/isFinished 여도 읽기 가능한 밝기 유지
+                                    color: isSpecial && !isFinished
+                                        ? const Color(0xFFCE93D8)
+                                        : isFinished
+                                            ? const Color(0xFF8ABFA8)
+                                            : AppTheme.textWhite,
                                     fontSize: 15,
                                     fontWeight: FontWeight.w800,
                                   ),
@@ -276,6 +300,78 @@ class _RaceListCardState extends State<RaceListCard>
             ),
           ),
         ),
+    );
+  }
+
+  // ── 특별경주 배너 (상단 전체 너비 강조 배너) ─────────────────────
+  Widget _buildSpecialRaceBanner(String specialRaceName) {
+    final displayName = specialRaceName.isNotEmpty
+        ? specialRaceName
+        : '특별경주';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF4A148C), Color(0xFF6A1B9A)],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        ),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: const Color(0xFFCE93D8).withValues(alpha: 0.5),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF9C27B0).withValues(alpha: 0.3),
+            blurRadius: 8,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // 특별경주 왕관 아이콘
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFD700).withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                color: const Color(0xFFFFD700).withValues(alpha: 0.5),
+              ),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('👑', style: TextStyle(fontSize: 9)),
+                SizedBox(width: 3),
+                Text(
+                  '특별경주',
+                  style: TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              displayName,
+              style: const TextStyle(
+                color: Color(0xFFEF9FFF),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -428,29 +524,38 @@ class _RaceListCardState extends State<RaceListCard>
     );
   }
 
-  // ★ 원형 배지 — 종료 경주는 그린 계열, 진행 경주는 골드 계열
+  // ★ 원형 배지 — 특별경주: 퍼플, 종료: 그린, 진행: 골드
   Widget _buildRaceNumberBadge(String raceNo, bool isFinished) {
+    final isSpecialBadge = widget.race.isSpecialRace;
     return Container(
       width: 44,
       height: 44,
       decoration: BoxDecoration(
-        gradient: isFinished
+        gradient: isSpecialBadge && !isFinished
             ? const LinearGradient(
-                colors: [Color(0xFF2E7D52), Color(0xFF1B4D35)],
+                colors: [Color(0xFF9C27B0), Color(0xFF6A1B9A)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               )
-            : const LinearGradient(
-                colors: [Color(0xFFD4AF37), Color(0xFF8B6914)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+            : isFinished
+                ? const LinearGradient(
+                    colors: [Color(0xFF2E7D52), Color(0xFF1B4D35)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : const LinearGradient(
+                    colors: [Color(0xFFD4AF37), Color(0xFF8B6914)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            color: (isFinished
-                    ? const Color(0xFF2E7D52)
-                    : const Color(0xFFD4AF37))
+            color: (isSpecialBadge && !isFinished
+                    ? const Color(0xFF9C27B0)
+                    : isFinished
+                        ? const Color(0xFF2E7D52)
+                        : const Color(0xFFD4AF37))
                 .withValues(alpha: 0.35),
             blurRadius: 8,
           )

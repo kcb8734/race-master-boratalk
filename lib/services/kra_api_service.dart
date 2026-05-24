@@ -268,25 +268,27 @@ String _formatTime(String timeStr) {
 }
 
 /// postTime 미제공 시 경주장 + 경주번호 기준 기본 시간 반환
-/// KRA 공식 시작 시간표 기준
+/// KRA 공식 시작 시간표 기준 (2026.05.24 일요일 스크린샷 확인 완료)
 String _getRaceStartTimeByNo(String raceNoStr, String meetCode) {
   final raceNo = int.tryParse(raceNoStr) ?? 1;
-  // 서울(meet=1): KRA 공식 1R=10:35 시작
-  // 부산경남(meet=3): 제1경주 10:00, 이후 40분 간격
-  // 제주(meet=2): 제1경주 10:00, 이후 35~40분 간격
+  // 서울(meet=1): 일요일 10경주 기준 시간표
+  // 부산경남(meet=3): 일요일 7경주 기준 시간표
+  // 제주(meet=2): 금요일 8경주 기준 시간표
   final List<String> times;
   if (meetCode == '3') {
-    // 부산경남
-    times = ['10:00','10:40','11:20','12:00','12:40','13:20',
-             '14:00','14:40','15:20','16:00','16:40'];
+    // 부산경남(일요일) — KRA 2026.05.24 공식 확인
+    // 1R=11:25, 2R=12:45, 3R=13:35, 4R=14:25, 5R=15:15, 6R=16:05, 7R=16:55
+    times = ['11:25','12:45','13:35','14:25','15:15','16:05','16:55'];
   } else if (meetCode == '2') {
-    // 제주 — KRA 공식: 1R=11:00 시작 (이미지2 확인)
+    // 제주(금요일) — KRA 공식 8경주 시간표
     times = ['11:00','11:40','12:20','13:00','13:40','14:20',
              '15:00','15:40'];
   } else {
-    // 서울 — KRA 공식: 1R=10:35, 2R=11:25, 3R=12:10...
-    times = ['10:35','11:25','12:10','12:50','13:30','14:10',
-             '14:50','15:30','16:10','16:50','17:30'];
+    // 서울(일요일) — KRA 2026.05.24 공식 확인
+    // 1R=10:35, 2R=11:00, 3R=12:05, 4R=13:10, 5R=14:00
+    // 6R=14:50, 7R=15:40, 8R=16:30, 9R=17:25, 10R=17:55
+    times = ['10:35','11:00','12:05','13:10','14:00',
+             '14:50','15:40','16:30','17:25','17:55'];
   }
   final idx = (raceNo - 1).clamp(0, times.length - 1);
   return times[idx];
@@ -910,6 +912,18 @@ class KraApiService {
         final totalHorses   = int.tryParse(item['chulNum']?.toString() ?? '10') ?? 10;
         final meetCode      = _venueToMeet(venueCode);
 
+        // ── 특별경주 판단 (rcName 필드 파싱) ────────────────────
+        // API187 rcName 예: "제21회 부산광역시장배(GradeII)" 또는 "" (일반경주)
+        final rcName = item['rcName']?.toString().trim() ?? '';
+        // 특별경주 판단 기준:
+        //  - rcName 필드가 비어있지 않음
+        //  - "일반" 문자열 미포함 (일반경주 제외)
+        //  - 경주명이 제N경주 패턴이 아님
+        final isSpecialRace = rcName.isNotEmpty &&
+            !rcName.contains('일반') &&
+            !RegExp(r'^제\d+경주$').hasMatch(rcName);
+        final specialRaceName = isSpecialRace ? rcName : '';
+
         bool isFinished = false;
         bool isUpcoming = false;
 
@@ -927,19 +941,21 @@ class KraApiService {
         }
 
         return RaceInfo(
-          raceNo:         raceNo,
-          raceName:       '제${raceNo}경주',
-          startTime:      startTime,
-          distance:       distance,
-          condition:      condition,
-          grade:          grade,
-          venueCode:      venueCode,
-          venueName:      _meetToVenueName(meetCode),
-          raceDate:       _XmlParser.formatDate(date),
-          totalHorses:    totalHorses,
-          trackCondition: trackCond,
-          isFinished:     isFinished,
-          isUpcoming:     isUpcoming,
+          raceNo:          raceNo,
+          raceName:        isSpecialRace ? rcName : '제${raceNo}경주',
+          startTime:       startTime,
+          distance:        distance,
+          condition:       condition,
+          grade:           grade,
+          venueCode:       venueCode,
+          venueName:       _meetToVenueName(meetCode),
+          raceDate:        _XmlParser.formatDate(date),
+          totalHorses:     totalHorses,
+          trackCondition:  trackCond,
+          isFinished:      isFinished,
+          isUpcoming:      isUpcoming,
+          isSpecialRace:   isSpecialRace,
+          specialRaceName: specialRaceName,
         );
       } catch (_) {
         return null;
