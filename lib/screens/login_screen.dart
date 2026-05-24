@@ -179,12 +179,13 @@ class _LoginScreenState extends State<LoginScreen>
                   const SizedBox(height: 24),
                   FadeTransition(
                     opacity: _formFade,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.06),
-                        end: Offset.zero,
-                      ).animate(CurvedAnimation(
-                          parent: _formAnim, curve: Curves.easeOutCubic)),
+                    child: AnimatedBuilder(
+                      animation: _formSlide,
+                      builder: (context, child) => Transform.translate(
+                        offset: Offset(0, _formSlide.value *
+                            MediaQuery.of(context).size.height * 0.1),
+                        child: child,
+                      ),
                       child: _buildForm(),
                     ),
                   ),

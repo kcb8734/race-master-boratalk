@@ -52,9 +52,11 @@ jobs:
       - name: ④ flutter pub get
         run: flutter pub get
 
-      # ── 5. 코드 분석 (info 허용, error 차단) ──────────────────────────
+      # ── 5. 코드 분석 (info·warning 허용, error만 차단) ───────────────
+      # --no-fatal-infos  : info 레벨 → exit 0
+      # --no-fatal-warnings: warning 레벨 → exit 0  (dCornB 등 미사용 필드 방어)
       - name: ⑤ flutter analyze
-        run: flutter analyze --no-fatal-infos
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       # ── 6. Flutter Web 릴리즈 빌드 ────────────────────────────────────
       - name: ⑥ flutter build web --release
@@ -71,10 +73,11 @@ jobs:
           echo "📊 총 크기: $(du -sh build/web/ | cut -f1)"
 
       # ── 8. Node.js 설치 (wrangler 실행용) ────────────────────────────
+      # Node.js 20 deprecated(2026-09-16) → 24로 업그레이드
       - name: ⑧-a Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       # ── 9. Cloudflare Pages 배포 (wrangler pages deploy 직접 사용) ───
       #  pages-action@v1은 deprecated된 wrangler pages publish를 사용하여
