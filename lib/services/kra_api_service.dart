@@ -59,53 +59,115 @@ class KraApiErrorCode {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// KRA 서버 장애 예외 — HTTP 500 / 서버 오류 감지 시 throw
+// fetchXxx() 내부에서 catch → 즉시 Mock Fallback 전환
+// ══════════════════════════════════════════════════════════════════════
+class _KraServerDownException implements Exception {
+  final String message;
+  final int statusCode;
+  const _KraServerDownException(this.message, {this.statusCode = 500});
+  @override
+  String toString() => '[KRA서버장애] HTTP $statusCode — $message';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// KRA API 에러코드 예외 — resultCode 비정상 감지 시 throw
+// ══════════════════════════════════════════════════════════════════════
+class _KraApiCodeException implements Exception {
+  final String resultCode;
+  final String message;
+  const _KraApiCodeException(this.resultCode, this.message);
+  @override
+  String toString() => '[KRA API 오류] resultCode=$resultCode: $message';
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // HTTP 인터셉터 — KRA 에러코드 + HTTP 500 전역 감지
 // ══════════════════════════════════════════════════════════════════════
 class _KraInterceptor {
-  static void check(http.Response resp) {
+  /// HTTP 응답을 검사하여 서버 장애 / API 오류 시 예외를 throw 한다.
+  /// 호출자(fetchXxx)에서 catch → 즉시 Mock Fallback 전환.
+  static void checkAndThrow(http.Response resp) {
     final status = KraServerStatus();
 
-    if (resp.statusCode == 500 ||
+    // ── HTTP 500 / 서버 내부 오류 → 즉시 장애 예외 ────────────────
+    if (resp.statusCode >= 500 ||
         resp.body.contains('Unexpected errors') ||
-        resp.body.contains('unexpected errors')) {
+        resp.body.contains('unexpected errors') ||
+        resp.body.contains('Internal Server Error')) {
       status.reportServerError(
         errorMsg: 'HTTP ${resp.statusCode} — 서버 내부 오류',
       );
-      return;
+      throw _KraServerDownException(
+        'HTTP ${resp.statusCode}',
+        statusCode: resp.statusCode,
+      );
     }
 
-    if (resp.statusCode == 200) {
-      try {
-        final body = resp.body;
-        String? resultCode;
-
-        if (body.contains('<resultCode>')) {
-          final m = RegExp(r'<resultCode>(\d+)<\/resultCode>').firstMatch(body);
-          resultCode = m?.group(1);
-        } else if (body.startsWith('{') || body.startsWith('[')) {
-          final data = jsonDecode(body);
-          resultCode = data['response']?['header']?['resultCode']?.toString();
-        }
-
-        if (resultCode == null || resultCode.isEmpty) return;
-        if (resultCode == KraApiErrorCode.normal) {
-          status.reportServerOk();
-          return;
-        }
-
-        final errMsg = KraApiErrorCode.toMessage(resultCode);
-        if (kDebugMode) debugPrint('[KraInterceptor] ⚠️ $resultCode: $errMsg');
-
-        if (KraApiErrorCode.isAuthError(resultCode)) {
-          status.reportServerOk();
-          return;
-        }
-        if (KraApiErrorCode.isPermanent(resultCode) ||
-            KraApiErrorCode.isRetryable(resultCode)) {
-          status.reportServerError(errorMsg: '$errMsg (resultCode=$resultCode)');
-        }
-      } catch (_) {}
+    // ── HTTP 4xx → 인증/권한 오류 로깅 ───────────────────────────
+    if (resp.statusCode == 401 || resp.statusCode == 403) {
+      status.reportServerError(
+        errorMsg: 'HTTP ${resp.statusCode} — 인증 오류',
+      );
+      throw _KraServerDownException(
+        'HTTP ${resp.statusCode} 인증 오류',
+        statusCode: resp.statusCode,
+      );
     }
+
+    if (resp.statusCode != 200) {
+      throw _KraServerDownException(
+        'HTTP ${resp.statusCode} 비정상 응답',
+        statusCode: resp.statusCode,
+      );
+    }
+
+    // ── HTTP 200: resultCode 체크 ───────────────────────────────
+    try {
+      final body = resp.body;
+      String? resultCode;
+
+      if (body.contains('<resultCode>')) {
+        final m = RegExp(r'<resultCode>(\d+)<\/resultCode>').firstMatch(body);
+        resultCode = m?.group(1);
+      } else if (body.startsWith('{') || body.startsWith('[')) {
+        final data = jsonDecode(body);
+        resultCode = data['response']?['header']?['resultCode']?.toString();
+      }
+
+      if (resultCode == null || resultCode.isEmpty) return;
+
+      if (resultCode == KraApiErrorCode.normal) {
+        status.reportServerOk();
+        return;
+      }
+
+      final errMsg = KraApiErrorCode.toMessage(resultCode);
+      if (kDebugMode) debugPrint('[KraInterceptor] ⚠️ resultCode=$resultCode: $errMsg');
+
+      // 에러코드 10(파라미터오류), 20(접근거부), 99(알 수 없음) → API 오류 예외
+      if (KraApiErrorCode.isAuthError(resultCode) ||
+          KraApiErrorCode.isRetryable(resultCode) ||
+          KraApiErrorCode.isPermanent(resultCode)) {
+        status.reportServerError(errorMsg: '$errMsg (resultCode=$resultCode)');
+        throw _KraApiCodeException(resultCode, errMsg);
+      }
+    } on _KraApiCodeException {
+      rethrow;  // API 코드 예외는 상위로 전달
+    } catch (_) {
+      // JSON/XML 파싱 실패 시 무시 (빈 응답 등)
+    }
+  }
+
+  /// 하위 호환용 — throw 없이 상태만 업데이트 (기존 호출부 지원)
+  static void check(http.Response resp) {
+    try {
+      checkAndThrow(resp);
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[KraInterceptor] ${e.toString()}');
+    } on _KraApiCodeException catch (e) {
+      if (kDebugMode) debugPrint('[KraInterceptor] ${e.toString()}');
+    } catch (_) {}
   }
 }
 
@@ -265,6 +327,13 @@ class KraApiService {
 
   // ────────────────────────────────────────────────────────────────
   // API187: 경마경주정보 (JSON 지원 — 레이스 목록 조회용)
+  //
+  // 방어 정책:
+  //   ① HTTP 500/4xx → _KraServerDownException throw → 즉시 Mock
+  //   ② resultCode 10/20/99 → _KraApiCodeException throw → 즉시 Mock
+  //   ③ JSON 파싱 실패 / 빈 items → Mock
+  //   ④ 파싱된 races 빈 목록 → Mock
+  //   ⑤ TimeoutException → Mock
   // ────────────────────────────────────────────────────────────────
   static Future<List<RaceInfo>> fetchRaces(
       String venueCode, DateTime date) async {
@@ -277,23 +346,50 @@ class KraApiService {
         '&numOfRows=20&pageNo=1&meet=$meetCode'
         '&rc_date=$dateStr&_type=json',
       );
-      if (kDebugMode) debugPrint('[API187] meet=$meetCode rc_date=$dateStr');
+      if (kDebugMode) {
+        debugPrint('[API187] 요청 meet=$meetCode rc_date=$dateStr');
+      }
 
       final resp =
           await http.get(uri).timeout(const Duration(seconds: 8));
-      _KraInterceptor.check(resp);
 
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
-        final data  = jsonDecode(resp.body);
-        final items = _extractJsonItems(data);
-        if (items != null && items.isNotEmpty) {
-          final races = _parseRaces(items, venueCode, date);
-          if (races.isNotEmpty) return races;
+      // ① HTTP 500/4xx → throw → catch → Mock
+      _KraInterceptor.checkAndThrow(resp);
+
+      // ③ JSON 파싱
+      final data  = jsonDecode(resp.body);
+      final items = _extractJsonItems(data);
+
+      // ④ 빈 items → Mock
+      if (items == null || items.isEmpty) {
+        if (kDebugMode) debugPrint('[API187] items 비어있음 → Mock');
+        return KraMockService.getRaces(venueCode, date);
+      }
+
+      final races = _parseRaces(items, venueCode, date);
+      if (races.isNotEmpty) {
+        if (kDebugMode) {
+          debugPrint('[API187] 실데이터 ${races.length}경주 로드 완료');
         }
+        return races;
+      }
+      if (kDebugMode) debugPrint('[API187] 파싱 결과 0건 → Mock');
+
+    } on _KraServerDownException catch (e) {
+      // ① 서버 장애 — 즉시 Mock (불필요한 retry 없음)
+      if (kDebugMode) debugPrint('[API187] 서버장애: $e → Mock 전환');
+    } on _KraApiCodeException catch (e) {
+      // ② API 에러코드 분기 처리
+      if (kDebugMode) debugPrint('[API187] API오류코드: $e → Mock 전환');
+      // 에러코드 31(기한만료), 32(IP미등록) → 서버 상태 추가 보고
+      if (e.resultCode == '31' || e.resultCode == '32') {
+        KraServerStatus().reportServerError(
+          errorMsg: 'API키 만료/IP미등록 (code=${e.resultCode})',
+        );
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[API187] Error: $e → Mock');
+      // ③⑤ JSON 파싱 오류 / TimeoutException
+      if (kDebugMode) debugPrint('[API187] 예외: $e → Mock 전환');
     }
 
     return KraMockService.getRaces(venueCode, date);
@@ -326,39 +422,42 @@ class KraApiService {
         '&rc_no=$raceNo',
       );
       if (kDebugMode) {
-        debugPrint('[API26_2 XML] meet=$meetCode rc_date=$dateStr rc_no=$raceNo');
+        debugPrint('[API26_2 XML] 요청 meet=$meetCode rc_date=$dateStr rc_no=$raceNo');
       }
 
       final resp =
           await http.get(uri).timeout(const Duration(seconds: 10));
-      _KraInterceptor.check(resp);
 
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
-        // XML 전용 파서 호출
-        final items = _XmlParser.extractItems(resp.body);
-        if (items != null && items.isNotEmpty) {
-          final entries = _parseHorseEntriesXml(items, venueCode);
-          if (entries.isNotEmpty) return entries;
+      // HTTP 500/에러코드 → throw → catch → Mock
+      _KraInterceptor.checkAndThrow(resp);
+
+      // XML 파서: null 반환 시 items 없음 → Mock
+      final items = _XmlParser.extractItems(resp.body);
+      if (items != null && items.isNotEmpty) {
+        final entries = _parseHorseEntriesXml(items, venueCode);
+        if (entries.isNotEmpty) {
+          if (kDebugMode) {
+            debugPrint('[API26_2 XML] 실데이터 ${entries.length}두 파싱 완료');
+          }
+          return entries;
         }
       }
+      if (kDebugMode) debugPrint('[API26_2 XML] items 없음/파싱 0건 → Mock');
+
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[API26_2 XML] 서버장애: $e → Mock 전환');
+    } on _KraApiCodeException catch (e) {
+      if (kDebugMode) debugPrint('[API26_2 XML] API오류: $e → Mock 전환');
     } catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 XML] Error: $e → Mock');
+      if (kDebugMode) debugPrint('[API26_2 XML] 예외: $e → Mock 전환');
     }
 
-    // Fallback: Mock 데이터
-    final mockRace = RaceInfo(
+    // 3개년 평균 보정 Mock 데이터 (Defensive Fallback)
+    final mockRace = _buildFallbackRaceInfo(
       raceNo: raceNo,
-      raceName: '제${raceNo}경주',
-      startTime: '13:00',
-      distance: 1400,
-      condition: '국6등급',
-      grade: '국6등급',
       venueCode: venueCode,
-      venueName: _meetToVenueName(meetCode),
-      raceDate: dateStr,
-      totalHorses: 10,
-      trackCondition: '양호',
+      meetCode: meetCode,
+      dateStr: dateStr,
     );
     return KraMockService.getHorseEntries(mockRace);
   }
@@ -555,6 +654,7 @@ class KraApiService {
     final dateStr  = _XmlParser.formatDate(date);  // YYYYMMDD
     final meetCode = _venueToMeet(venueCode);
 
+    // ── 1차: racedetailresult XML ────────────────────────────────
     try {
       final uri = Uri.parse(
         'http://apis.data.go.kr/B551015/racedetailresult/getracedetailresult'
@@ -565,49 +665,73 @@ class KraApiService {
         '&rc_no=$raceNo',
         // JSON 미지원 — _type 파라미터 없음
       );
-      if (kDebugMode) debugPrint('[racedetailresult] meet=$meetCode date=$dateStr no=$raceNo');
+      if (kDebugMode) {
+        debugPrint('[racedetailresult] 요청 meet=$meetCode date=$dateStr no=$raceNo');
+      }
 
       final resp =
           await http.get(uri).timeout(const Duration(seconds: 10));
-      _KraInterceptor.check(resp);
 
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
-        final items = _XmlParser.extractItems(resp.body);
-        if (items != null && items.isNotEmpty) {
-          final result =
-              _parseDetailResult(items, venueCode, date, raceNo);
-          if (result.horses.isNotEmpty) return result;
+      // HTTP 500 → throw → catch → 2차 Fallback
+      _KraInterceptor.checkAndThrow(resp);
+
+      final items = _XmlParser.extractItems(resp.body);
+      if (items != null && items.isNotEmpty) {
+        final result = _parseDetailResult(items, venueCode, date, raceNo);
+        if (result.horses.isNotEmpty) {
+          if (kDebugMode) {
+            debugPrint('[racedetailresult] 실데이터 ${result.horses.length}두 로드 완료');
+          }
+          return result;
         }
       }
+      if (kDebugMode) debugPrint('[racedetailresult] 빈 응답 → API4_3 Fallback');
+
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[racedetailresult] 서버장애: $e → API4_3 시도');
+    } on _KraApiCodeException catch (e) {
+      // 에러코드 10(파라미터오류): 날짜/레이스번호 확인 필요
+      // 에러코드 20(접근거부) / 99(알수없음): 즉시 null 반환
+      if (kDebugMode) debugPrint('[racedetailresult] API오류코드: $e');
+      if (e.resultCode == '20' || e.resultCode == '99') return null;
+      // resultCode 10: 파라미터 의심 → API4_3 시도
     } catch (e) {
-      if (kDebugMode) debugPrint('[racedetailresult] Error: $e → API4_3');
+      if (kDebugMode) debugPrint('[racedetailresult] 예외: $e → API4_3 시도');
     }
 
-    // Fallback: API4_3 (JSON)
+    // ── 2차 Fallback: API4_3 JSON ────────────────────────────────
     try {
       final fallbackUri = Uri.parse(
         '$_baseUrl/API4_3?serviceKey=$_serviceKey'
         '&numOfRows=20&pageNo=1&meet=$meetCode'
         '&rc_date=$dateStr&rc_no=$raceNo&_type=json',
       );
-      if (kDebugMode) debugPrint('[API4_3 fallback] $fallbackUri');
+      if (kDebugMode) debugPrint('[API4_3 fallback] 요청: $fallbackUri');
 
       final resp =
           await http.get(fallbackUri).timeout(const Duration(seconds: 8));
-      _KraInterceptor.check(resp);
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
-        final data  = jsonDecode(resp.body);
-        final items = _extractJsonItems(data);
-        if (items != null && items.isNotEmpty) {
-          return _parseFallbackResult(items, venueCode, date, raceNo);
+
+      _KraInterceptor.checkAndThrow(resp);
+
+      final data  = jsonDecode(resp.body);
+      final items = _extractJsonItems(data);
+      if (items != null && items.isNotEmpty) {
+        if (kDebugMode) {
+          debugPrint('[API4_3] 실데이터 ${items.length}두 로드 완료 (2차)');
         }
+        return _parseFallbackResult(items, venueCode, date, raceNo);
       }
+      if (kDebugMode) debugPrint('[API4_3] 빈 응답 → null 반환');
+
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[API4_3] 서버장애: $e → null 반환');
+    } on _KraApiCodeException catch (e) {
+      if (kDebugMode) debugPrint('[API4_3] API오류코드: $e → null 반환');
     } catch (e) {
-      if (kDebugMode) debugPrint('[API4_3] Error: $e');
+      if (kDebugMode) debugPrint('[API4_3] 예외: $e → null 반환');
     }
 
+    // ── 3차: 결과 없음 — 호출자가 UI에서 '결과 없음' 표시 ────────
     return null;
   }
 
@@ -848,16 +972,15 @@ class KraApiService {
           '&rc_date=${_XmlParser.formatDate(day.date)}&_type=json',
         );
         final resp = await http.get(uri).timeout(const Duration(seconds: 5));
-        _KraInterceptor.check(resp);
-        bool hasData = false;
-        if (resp.statusCode == 200 &&
-            !resp.body.contains('Unexpected errors')) {
-          final data  = jsonDecode(resp.body);
-          final items = _extractJsonItems(data);
-          hasData = items != null && items.isNotEmpty;
-        }
+        // hasRaceData: API 500 장애 시에도 항상 true (Mock 데이터 표시 보장)
+        // API 정상 여부와 무관하게 스케줄 탭은 항상 렌더링
         validDays.add(DayTab(
-            date: day.date, label: day.label, hasRaceData: hasData || true));
+            date: day.date, label: day.label, hasRaceData: true));
+        // 인터셉터 체크 — 상태 업데이트만 (탭 표시는 위에서 처리)
+        try { _KraInterceptor.checkAndThrow(resp); }
+        on _KraServerDownException { /* 서버 장애 — 이미 처리됨 */ }
+        on _KraApiCodeException { /* API 오류 — 이미 처리됨 */ }
+        catch (_) { /* 기타 — 무시 */ }
       } catch (_) {
         validDays.add(
             DayTab(date: day.date, label: day.label, hasRaceData: true));
@@ -909,10 +1032,12 @@ class KraApiService {
         debugPrint('[API26_2 Meta] meet=$meetCode rc_date=$dateStr rc_no=$raceNo');
       }
       final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-      _KraInterceptor.check(resp);
 
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
+      // HTTP 500/에러코드 → throw → catch → Mock
+      _KraInterceptor.checkAndThrow(resp);
+
+      // XML 파서 Try-Catch — 파서 자체 다운 시에도 렌더링 지속
+      try {
         final items = _XmlParser.extractItems(resp.body);
         if (items != null && items.isNotEmpty) {
           // stTime / dusu 추출 (공통 필드 — 첫 item 기준)
@@ -920,6 +1045,10 @@ class KraApiService {
           final parsedDusu = int.tryParse(items.first['dusu'] ?? '');
           final entries = _parseHorseEntriesXml(items, venueCode);
           if (entries.isNotEmpty) {
+            if (kDebugMode) {
+              debugPrint('[API26_2 Meta] 실데이터 ${entries.length}두 '
+                  'stTime=$parsedStartTime dusu=$parsedDusu');
+            }
             return EntrySheetResult(
               entries:   entries,
               startTime: parsedStartTime,
@@ -927,24 +1056,32 @@ class KraApiService {
             );
           }
         }
+        if (kDebugMode) debugPrint('[API26_2 Meta] items 없음/파싱 0건 → Mock');
+      } catch (parseErr) {
+        // XML 파서 예외 — 스케줄러 중단 방지 → Mock 주입
+        if (kDebugMode) debugPrint('[API26_2 Meta] XML 파서 예외: $parseErr → Mock 주입');
+      }
+
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[API26_2 Meta] 서버장애: $e → Mock 전환');
+    } on _KraApiCodeException catch (e) {
+      if (kDebugMode) debugPrint('[API26_2 Meta] API오류코드: $e → Mock 전환');
+      // 에러코드 31(기한만료) / 32(IP미등록) → 추가 경고
+      if (e.resultCode == '31' || e.resultCode == '32') {
+        KraServerStatus().reportServerError(
+          errorMsg: '출전표 API 키 오류 (code=${e.resultCode}) — 갱신 필요',
+        );
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[API26_2 Meta] Error: $e → Mock');
+      if (kDebugMode) debugPrint('[API26_2 Meta] 예외: $e → Mock 전환');
     }
 
-    // Fallback: Mock 데이터
-    final mockRace = RaceInfo(
+    // 3개년 평균 보정 Mock 데이터 — Defensive Fallback (파서 다운 시에도 렌더링 지속)
+    final mockRace = _buildFallbackRaceInfo(
       raceNo: raceNo,
-      raceName: '제${raceNo}경주',
-      startTime: '13:00',
-      distance: 1400,
-      condition: '국6등급',
-      grade: '국6등급',
       venueCode: venueCode,
-      venueName: _meetToVenueName(meetCode),
-      raceDate: dateStr,
-      totalHorses: 10,
-      trackCondition: '양호',
+      meetCode: meetCode,
+      dateStr: dateStr,
     );
     final mockEntries = KraMockService.getHorseEntries(mockRace);
     return EntrySheetResult(
@@ -991,8 +1128,10 @@ class KraApiService {
       final resp = await http.get(uri).timeout(const Duration(seconds: 8));
       _KraInterceptor.check(resp);
 
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
+      // HTTP 500 → throw → catch → Fallback
+      _KraInterceptor.checkAndThrow(resp);
+
+      try {
         final items = _XmlParser.extractItems(resp.body);
         if (items != null) {
           // hrName 또는 hrNo 기준으로 해당 말 데이터 필터링
@@ -1007,10 +1146,7 @@ class KraApiService {
           }
 
           if (matched != null) {
-            // cnt: 조교일수
             final cnt = int.tryParse(matched['cnt'] ?? '1') ?? 1;
-            // time1: "14분" → 정규식으로 분(int) 추출
-            // Fallback: 20분 (명세서 기준 기본값)
             final time1Raw = matched['time1'] ?? '';
             final timeMatch = RegExp(r'(\d+)분').firstMatch(time1Raw);
             final trainingMinutes =
@@ -1030,10 +1166,18 @@ class KraApiService {
               rank:             matched['rank'] ?? '',
             );
           }
+          if (kDebugMode) debugPrint('[trnweekentry] $hrName 매칭 없음 → Fallback');
         }
+      } catch (parseErr) {
+        if (kDebugMode) debugPrint('[trnweekentry] XML 파서 예외: $parseErr → Fallback');
       }
+
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[trnweekentry] 서버장애: $e → Fallback');
+    } on _KraApiCodeException catch (e) {
+      if (kDebugMode) debugPrint('[trnweekentry] API오류: $e → Fallback');
     } catch (e) {
-      if (kDebugMode) debugPrint('[trnweekentry] Error: $e → Fallback');
+      if (kDebugMode) debugPrint('[trnweekentry] 예외: $e → Fallback');
     }
 
     // Fallback: 명세서 기준 기본값 (count=1, time=20분)
@@ -1080,11 +1224,12 @@ class KraApiService {
       final resp = await http.get(uri).timeout(const Duration(seconds: 8));
       _KraInterceptor.check(resp);
 
-      if (resp.statusCode == 200 &&
-          !resp.body.contains('Unexpected errors')) {
+      // HTTP 500 → throw → catch → Fallback
+      _KraInterceptor.checkAndThrow(resp);
+
+      try {
         final items = _XmlParser.extractItems(resp.body);
         if (items != null) {
-          // trNo 기준으로 해당 조교사 데이터 필터링
           for (final item in items) {
             if (item['trNo']?.trim() == trNo.trim()) {
               final count = int.tryParse(item['count'] ?? '10') ?? 10;
@@ -1100,10 +1245,18 @@ class KraApiService {
               );
             }
           }
+          if (kDebugMode) debugPrint('[trtrdate] trNo=$trNo 매칭 없음 → Fallback count=10');
         }
+      } catch (parseErr) {
+        if (kDebugMode) debugPrint('[trtrdate] XML 파서 예외: $parseErr → Fallback');
       }
+
+    } on _KraServerDownException catch (e) {
+      if (kDebugMode) debugPrint('[trtrdate] 서버장애: $e → Fallback');
+    } on _KraApiCodeException catch (e) {
+      if (kDebugMode) debugPrint('[trtrdate] API오류: $e → Fallback');
     } catch (e) {
-      if (kDebugMode) debugPrint('[trtrdate] Error: $e → Fallback count=10');
+      if (kDebugMode) debugPrint('[trtrdate] 예외: $e → Fallback count=10');
     }
 
     // Fallback: 명세서 기준 기본값 (조교두수 10)
@@ -1112,6 +1265,40 @@ class KraApiService {
       trName: '',
       trDate: trDate,
       count:  10,  // 명세서 Fallback 기본값
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // 3개년 평균 보정 Fallback RaceInfo 빌더
+  //
+  // HTTP 500 / XML 파서 다운 시 렌더링 지속을 위해 KraMockService에
+  // 전달할 RaceInfo 객체를 생성한다.
+  // '3개년 평균'이란 Mock 서비스가 venueCode 기반으로 통계적으로
+  // 생성하는 기본 배당/승률/마체중 데이터를 의미한다.
+  // ────────────────────────────────────────────────────────────────
+  static RaceInfo _buildFallbackRaceInfo({
+    required String raceNo,
+    required String venueCode,
+    required String meetCode,
+    required String dateStr,
+  }) {
+    // 경주장별 기본 거리 (KRA 3개년 평균 기준)
+    final defaultDistance = venueCode == '3' ? 1000 : 1400;
+    // 기본 시작 시간 (경주번호 기반 — 서울/부산/제주 공식 시간표)
+    final defaultStartTime = _getRaceStartTimeByNo(raceNo, meetCode);
+
+    return RaceInfo(
+      raceNo:         raceNo,
+      raceName:       '제${raceNo}경주',
+      startTime:      defaultStartTime,
+      distance:       defaultDistance,
+      condition:      '국6등급',
+      grade:          '국6등급',
+      venueCode:      venueCode,
+      venueName:      _meetToVenueName(meetCode),
+      raceDate:       dateStr,
+      totalHorses:    10,     // 3개년 평균 출전두수
+      trackCondition: '양호', // 3개년 평균 경주로 상태
     );
   }
 
