@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/race_schedule_cache.dart';
 import '../services/kra_bulk_sync_service.dart';
+import '../services/kra_bulk_data_binder.dart';
 import '../models/race_models.dart';
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -374,15 +375,18 @@ class _BulkSyncTab extends StatefulWidget {
 }
 
 class _BulkSyncTabState extends State<_BulkSyncTab> {
-  final _sync = KraBulkSyncService();
-  BulkSyncStatus? _status;
-  BulkSyncResult? _lastResult;
+  final _sync   = KraBulkSyncService();
+  final _binder = KraBulkDataBinder();
+  BulkSyncStatus?       _status;
+  BulkSyncResult?       _lastResult;
+  BulkDataBinderDiagnostic? _diagnostic;
   bool _loading = false;
 
   @override
   void initState() {
     super.initState();
     _loadStatus();
+    _loadDiagnostic();
     // 진행 콜백 등록
     _sync.onProgress = (p) {
       if (mounted) setState(() {});
@@ -394,6 +398,11 @@ class _BulkSyncTabState extends State<_BulkSyncTab> {
     if (mounted) setState(() => _status = s);
   }
 
+  Future<void> _loadDiagnostic() async {
+    final d = await _binder.getDiagnostic();
+    if (mounted) setState(() => _diagnostic = d);
+  }
+
   Future<void> _runNow() async {
     setState(() { _loading = true; _lastResult = null; });
     final result = await _sync.runBulkSyncNow();
@@ -403,6 +412,7 @@ class _BulkSyncTabState extends State<_BulkSyncTab> {
         _lastResult = result;
       });
       await _loadStatus();
+      await _loadDiagnostic(); // 바인딩 진단 갱신
     }
   }
 
@@ -535,6 +545,9 @@ class _BulkSyncTabState extends State<_BulkSyncTab> {
             ..._lastResult!.details.map((r) => _resultRow(r)),
           ],
 
+          // ── 물리 엔진 바인딩 진단 카드 ────────────────────────────
+          if (_diagnostic != null) ...[const SizedBox(height: 16), _bindingDiagCard(_diagnostic!)],
+
           // ── API 목록 ───────────────────────────────────────────────
           const SizedBox(height: 16),
           _sectionTitle('수집 대상 23개 API'),
@@ -617,6 +630,56 @@ class _BulkSyncTabState extends State<_BulkSyncTab> {
     ]),
   );
 
+  Widget _bindingDiagCard(BulkDataBinderDiagnostic d) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: d.bindingReady
+            ? const Color(0xFF0D2A1A) : const Color(0xFF1A1A0D),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: d.bindingReady
+              ? const Color(0xFF2A5A3A) : const Color(0xFF4A4A1A),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(
+              d.bindingReady ? Icons.link : Icons.link_off,
+              size: 15,
+              color: d.bindingReady
+                  ? const Color(0xFF66BB6A) : const Color(0xFFFFCC02),
+            ),
+            const SizedBox(width: 6),
+            Text('물리 엔진 바인딩 진단',
+              style: TextStyle(
+                color: d.bindingReady
+                    ? const Color(0xFF81C784) : const Color(0xFFFFCC02),
+                fontSize: 12, fontWeight: FontWeight.bold,
+              )),
+          ]),
+          const SizedBox(height: 6),
+          Text(d.summary,
+            style: TextStyle(
+              color: d.bindingReady
+                  ? const Color(0xFF66BB6A) : const Color(0xFFB0A030),
+              fontSize: 11,
+            )),
+          if (d.availableApis.isNotEmpty) ...[const SizedBox(height: 4),
+            Text('가용: ${d.availableApis.join(', ')}',
+              style: const TextStyle(color: Color(0xFF4A7A5A), fontSize: 10)),
+          ],
+          if (d.missingApis.isNotEmpty) ...[const SizedBox(height: 2),
+            Text('미수집: ${d.missingApis.join(', ')}',
+              style: const TextStyle(color: Color(0xFF7A5A1A), fontSize: 10)),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _sectionTitle(String t) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
     child: Text(t, style: const TextStyle(
@@ -634,10 +697,20 @@ class _ErrorLogTab extends StatefulWidget {
   State<_ErrorLogTab> createState() => _ErrorLogTabState();
 }
 
+// 화이트리스트 신청 대상 4대 핵심 API
+const List<String> _whitelistTargetApis = [
+  'API187',       // 경마경주정보
+  'API26_2',      // 출전표 상세정보
+  'API4_3',       // 경주기록 (RACE RESULT)
+  'trnweekentry', // 조교사 차주 출전 예정마
+];
+
 class _ErrorLogTabState extends State<_ErrorLogTab> {
-  List<ApiErrorLogEntry> _logs = [];
-  bool _loading = true;
-  String _exportResult = '';
+  List<ApiErrorLogEntry> _logs     = [];
+  List<ApiErrorLogEntry> _filtered = [];
+  bool    _loading            = true;
+  String  _exportResult       = '';
+  bool    _showWhitelistOnly  = false;
 
   @override
   void initState() {
@@ -647,25 +720,51 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
 
   Future<void> _loadLogs() async {
     setState(() => _loading = true);
-    final logs = await RaceScheduleCache().getApiErrorLogs(limit: 50);
-    if (mounted) setState(() { _logs = logs; _loading = false; });
+    final logs = await RaceScheduleCache().getApiErrorLogs(limit: 100);
+    if (mounted) {
+      setState(() {
+        _logs = logs;
+        _applyFilter();
+        _loading = false;
+      });
+    }
   }
 
-  /// kra_api_error_dump.log 포맷으로 내보내기 (클립보드 복사)
-  Future<void> _exportToCsv() async {
-    final logs = await RaceScheduleCache().getApiErrorLogs(limit: 50);
+  void _applyFilter() {
+    if (!_showWhitelistOnly) {
+      _filtered = List.from(_logs);
+    } else {
+      _filtered = _logs.where((e) =>
+        _whitelistTargetApis.any((id) => e.apiName.contains(id))
+      ).toList();
+    }
+  }
+
+  /// kra_api_error_dump.log CSV 내보내기 (클립보드)
+  Future<void> _exportToCsv({bool whitelistOnly = false}) async {
+    final allLogs = await RaceScheduleCache().getApiErrorLogs(limit: 100);
+    final logs = whitelistOnly
+        ? allLogs.where((e) =>
+            _whitelistTargetApis.any((id) => e.apiName.contains(id))).toList()
+        : allLogs;
+
     final buf = StringBuffer();
     buf.writeln('# KRA API Error Dump — kra_api_error_dump.log');
     buf.writeln('# Generated: ${DateTime.now().toIso8601String()}');
+    if (whitelistOnly) {
+      buf.writeln('# Mode: 화이트리스트 신청용 4대 핵심 API 필터');
+      buf.writeln('# Target APIs: ${_whitelistTargetApis.join(", ")}');
+    }
     buf.writeln('# Total: ${logs.length} entries');
     buf.writeln('#');
     buf.writeln('Timestamp,API,StatusCode,ErrorBody,RequestURL,KeyNote,EncodingNote');
     for (final e in logs) {
+      final body = e.errorBody.replaceAll('"', "'");
       buf.writeln(
         '"${e.timestamp.toIso8601String()}",'
         '"${e.apiName}",'
         '"${e.statusCode}",'
-        '"${e.errorBody.replaceAll('"', "'")}",'
+        '"$body",'
         '"${e.requestUrl}",'
         '"${e.keyNote}",'
         '"${e.encodingNote}"',
@@ -674,8 +773,9 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
     await Clipboard.setData(ClipboardData(text: buf.toString()));
     if (mounted) {
       setState(() {
-        _exportResult = '✅ ${logs.length}건 에러 로그가 클립보드에 복사되었습니다.\n'
-            '텍스트 에디터에 붙여넣기 후 kra_api_error_dump.log로 저장하세요.';
+        _exportResult = '✅ ${logs.length}건 복사 완료.\n'
+            '${whitelistOnly ? "[화이트리스트 필터] " : ""}'
+            'kra_api_error_dump.log 저장 후 신청서에 첨부하세요.';
       });
     }
   }
@@ -690,6 +790,83 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // ── 화이트리스트 신청용 배너 ──────────────────────────────────
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          color: const Color(0xFF1A0D2A),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(children: [
+                Icon(Icons.verified_user, size: 14, color: Color(0xFFCE93D8)),
+                SizedBox(width: 6),
+                Text('화이트리스트 신청 대상 4대 핵심 API',
+                  style: TextStyle(color: Color(0xFFCE93D8), fontSize: 12,
+                      fontWeight: FontWeight.bold)),
+              ]),
+              const SizedBox(height: 4),
+              Row(children: _whitelistTargetApis.map((id) => Container(
+                margin: const EdgeInsets.only(right: 6, bottom: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3A1A4A),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF7B1FA2)),
+                ),
+                child: Text(id, style: const TextStyle(
+                    color: Color(0xFFCE93D8), fontSize: 10,
+                    fontFamily: 'monospace')),
+              )).toList()),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFCE93D8),
+                      side: const BorderSide(color: Color(0xFF7B1FA2)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6)),
+                    ),
+                    onPressed: () => _exportToCsv(whitelistOnly: true),
+                    icon: const Icon(Icons.filter_alt, size: 14),
+                    label: const Text('신청서 첨부용 로그만 내보내기', style: TextStyle(fontSize: 11)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // 화이트리스트 필터 토글
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _showWhitelistOnly = !_showWhitelistOnly;
+                      _applyFilter();
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _showWhitelistOnly
+                          ? const Color(0xFF3A1A4A) : const Color(0xFF1A1A3A),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: _showWhitelistOnly
+                            ? const Color(0xFF7B1FA2) : const Color(0xFF3A3A6A),
+                      ),
+                    ),
+                    child: Icon(
+                      _showWhitelistOnly
+                          ? Icons.filter_list_off : Icons.filter_list,
+                      size: 18,
+                      color: _showWhitelistOnly
+                          ? const Color(0xFFCE93D8) : const Color(0xFF8888BB),
+                    ),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+
         // ── 상단 툴바 ─────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -708,7 +885,7 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
                     ),
                     onPressed: _exportToCsv,
                     icon: const Icon(Icons.download, size: 16),
-                    label: const Text('CSV 내보내기 (클립보드)'),
+                    label: const Text('전체 CSV 내보내기 (클립보드)'),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -747,11 +924,20 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           color: const Color(0xFF0E0E20),
           child: Row(children: [
-            Text('에러 로그 ${_logs.length}건 (최신 50건)',
-              style: const TextStyle(color: Color(0xFF555580), fontSize: 11)),
+            Text(
+              _showWhitelistOnly
+                  ? '📋 화이트리스트 API ${_filtered.length}건'
+                  : '에러 로그 ${_filtered.length}건 (최신 100건)',
+              style: const TextStyle(color: Color(0xFF555580), fontSize: 11),
+            ),
             const Spacer(),
-            const Text('최신순', style: TextStyle(
-                color: Color(0xFF444466), fontSize: 10)),
+            if (_showWhitelistOnly)
+              const Text('핵심 4개 API만', style: TextStyle(
+                  color: Color(0xFF7B1FA2), fontSize: 10,
+                  fontWeight: FontWeight.bold))
+            else
+              const Text('최신순', style: TextStyle(
+                  color: Color(0xFF444466), fontSize: 10)),
           ]),
         ),
 
@@ -760,20 +946,27 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
           child: _loading
               ? const Center(child: CircularProgressIndicator(
                   color: Color(0xFF6C63FF)))
-              : _logs.isEmpty
-                  ? const Center(child: Column(
+              : _filtered.isEmpty
+                  ? Center(child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.check_circle_outline,
-                            color: Color(0xFF66BB6A), size: 36),
+                        Icon(
+                          _showWhitelistOnly
+                              ? Icons.check_circle_outline
+                              : Icons.check_circle_outline,
+                          color: const Color(0xFF66BB6A), size: 36),
                         SizedBox(height: 8),
-                        Text('에러 로그 없음', style: TextStyle(
-                            color: Color(0xFF555580), fontSize: 13)),
+                        Text(
+                          _showWhitelistOnly
+                              ? '4대 핵심 API 에러 없음 (양호)'
+                              : '에러 로그 없음',
+                          style: const TextStyle(
+                              color: Color(0xFF555580), fontSize: 13)),
                       ],
                     ))
                   : ListView.builder(
-                      itemCount: _logs.length,
-                      itemBuilder: (context, i) => _logCard(_logs[i]),
+                      itemCount: _filtered.length,
+                      itemBuilder: (context, i) => _logCard(_filtered[i]),
                     ),
         ),
       ],
@@ -783,9 +976,12 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
   Widget _logCard(ApiErrorLogEntry e) {
     final isTimeout = e.isTimeout;
     final is500 = e.is500;
+    final isWhitelistApi = _whitelistTargetApis.any(
+        (id) => e.apiName.contains(id));
     final borderColor = is500
         ? const Color(0xFFEF5350)
-        : (isTimeout ? const Color(0xFFFF9800) : const Color(0xFF3A3A6A));
+        : (isTimeout ? const Color(0xFFFF9800)
+            : (isWhitelistApi ? const Color(0xFF7B1FA2) : const Color(0xFF3A3A6A)));
     final statusColor = is500
         ? const Color(0xFFEF9A9A)
         : (isTimeout ? const Color(0xFFFFCC80) : const Color(0xFF9090CC));
@@ -819,6 +1015,20 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
             Expanded(child: Text(e.apiName,
               style: const TextStyle(color: Color(0xFF8888BB), fontSize: 11),
               overflow: TextOverflow.ellipsis)),
+            if (isWhitelistApi) ...[
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3A1A4A),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: const Color(0xFF7B1FA2)),
+                ),
+                child: const Text('WL', style: TextStyle(
+                    color: Color(0xFFCE93D8), fontSize: 9,
+                    fontWeight: FontWeight.bold)),
+              ),
+            ],
           ]),
           const SizedBox(height: 4),
           Text(e.errorBody,

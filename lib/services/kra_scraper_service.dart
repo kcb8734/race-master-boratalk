@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../models/race_models.dart';
 import 'race_schedule_cache.dart';
 import 'kra_mock_service.dart';
+import 'kra_bulk_data_binder.dart';
 
 // ══════════════════════════════════════════════════════════════════════════
 //  KraScraperService — KRA API 500 장애 Failover 레이어
@@ -116,11 +117,13 @@ class KraScraperService {
           tier: 3, description: 'XML 포맷 폴백 성공');
     }
 
-    // ── TIER-4: 로컬 캐시 복원 ───────────────────────────────────────────
+    // ── TIER-4: 로컬 캐시 + 벌크싱크 캐시 복원 ──────────────────────────
     if (kDebugMode) {
-      debugPrint('[Failover] TIER-4: 로컬 캐시 타임스탬프 복원 시도');
+      debugPrint('[Failover] TIER-4: 로컬 캐시 + 벌크싱크 캐시 복원 시도');
     }
     final mockBase = KraMockService.getRaces(venueCode, date);
+
+    // TIER-4a: RaceScheduleCache 타임스탬프 스냅샷 (관리자 인젝션 포함)
     final cachedRaces = await cache.applyCachedTimestamps(
       mockRaces: mockBase,
       venueCode: venueCode,
@@ -135,7 +138,7 @@ class KraScraperService {
     if (cacheInfo.hasCache) {
       if (kDebugMode) {
         debugPrint(
-          '[Failover] ✅ TIER-4 성공: 캐시 복원 '
+          '[Failover] ✅ TIER-4a 성공: RaceScheduleCache 복원 '
           '(저장: ${cacheInfo.savedAtLabel}, 출처: ${cacheInfo.sourceLabel})',
         );
       }
@@ -145,6 +148,36 @@ class KraScraperService {
         tier: 4,
         description: '로컬 캐시 복원 (${cacheInfo.savedAtLabel} 저장, 출처: ${cacheInfo.sourceLabel})',
         cacheInfo: cacheInfo,
+      );
+    }
+
+    // TIER-4b: KraBulkDataBinder — 새벽 벌크싱크 API187 캐시에서 경주 재구성
+    if (kDebugMode) {
+      debugPrint('[Failover] TIER-4b: 벌크싱크 API187 캐시 복원 시도');
+    }
+    final binder = KraBulkDataBinder();
+    final bulkRaces = await binder.enrichRaceInfoFromBulk(
+      baseRaces: mockBase,
+      venueCode: venueCode,
+      date: date,
+    );
+    // mockBase와 다르면 벌크 캐시에서 보강된 것
+    if (bulkRaces != mockBase && bulkRaces.isNotEmpty) {
+      await cache.logApiError(
+        apiName: 'Failover-TIER4b',
+        statusCode: 200,
+        errorBody: '벌크싱크 API187 캐시로 ${bulkRaces.length}경주 복원',
+        requestUrl: 'bulk_sync_cache',
+        encodingNote: 'TIER-4b BulkDataBinder',
+      );
+      if (kDebugMode) {
+        debugPrint('[Failover] ✅ TIER-4b 성공: 벌크싱크 캐시 ${bulkRaces.length}경주');
+      }
+      return FailoverResult(
+        races: bulkRaces,
+        source: 'bulk_cache',
+        tier: 4,
+        description: '벌크싱크 캐시 복원 (새벽 수집 API187 데이터)',
       );
     }
 
@@ -538,9 +571,10 @@ class FailoverResult {
     this.cacheInfo,
   });
 
-  bool get isFromApi    => tier <= 3;
-  bool get isFromCache  => source == 'cache';
-  bool get isFromMock   => source == 'mock';
+  bool get isFromApi        => tier <= 3;
+  bool get isFromCache      => source == 'cache' || source == 'bulk_cache';
+  bool get isFromBulkCache  => source == 'bulk_cache';
+  bool get isFromMock       => source == 'mock';
 
   String get tierLabel {
     switch (tier) {
