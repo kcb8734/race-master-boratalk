@@ -6,6 +6,7 @@ import '../providers/race_provider.dart';
 import '../utils/app_theme.dart';
 import 'sandbox_mode_screen.dart';
 import 'login_screen.dart';
+import 'admin_data_panel_screen.dart';
 
 class MyPageScreen extends StatefulWidget {
   const MyPageScreen({super.key});
@@ -144,6 +145,9 @@ class _MyPageScreenState extends State<MyPageScreen> {
                     const SizedBox(height: 20),
                     _buildSubscriptionSection(context),
                     const SizedBox(height: 20),
+                    // ── 관리자 데이터 파이프라인 패널 ───────────────
+                    _buildAdminPipelineBanner(context),
+                    const SizedBox(height: 12),
                     // ── 샌드박스 모드 배너 ──────────────────────────
                     _buildSandboxBanner(context),
                     const SizedBox(height: 20),
@@ -668,6 +672,69 @@ class _MyPageScreenState extends State<MyPageScreen> {
     ];
 
     return _menuGroup('⚙️ 앱 설정', menus, context);
+  }
+
+  /// 관리자 데이터 파이프라인 패널 진입 배너
+  Widget _buildAdminPipelineBanner(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => const AdminDataPanelScreen()),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0D1A0D), Color(0xFF0A1A2E)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: const Color(0xFF2E4A2E),
+            width: 1.2,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A3A1A),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF3A6A3A)),
+              ),
+              child: const Icon(Icons.storage,
+                  color: Color(0xFF66BB6A), size: 18),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('데이터 파이프라인 관리',
+                    style: TextStyle(
+                      color: Color(0xFF81C784),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    )),
+                  SizedBox(height: 2),
+                  Text(
+                    '수동 인젝션 · 새벽 벌크싱크 · API 에러 로그',
+                    style: TextStyle(
+                      color: Color(0xFF557755),
+                      fontSize: 11,
+                    )),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Color(0xFF3A5A3A), size: 20),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 샌드박스 모드 진입 배너 카드
