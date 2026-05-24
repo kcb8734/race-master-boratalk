@@ -6,7 +6,7 @@ import '../providers/race_provider.dart';
 import '../utils/app_theme.dart';
 import 'sandbox_mode_screen.dart';
 import 'login_screen.dart';
-import 'admin_data_panel_screen.dart';
+import 'admin_login_screen.dart';
 
 class MyPageScreen extends StatefulWidget {
   const MyPageScreen({super.key});
@@ -680,7 +680,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (_) => const AdminDataPanelScreen()),
+            builder: (_) => const AdminLoginScreen()),
       ),
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
