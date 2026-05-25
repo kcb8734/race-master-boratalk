@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:js' as js;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/race_schedule_cache.dart';
+import '../services/race_result_archive.dart';
 import '../services/kra_bulk_sync_service.dart';
 import '../services/kra_bulk_data_binder.dart';
 import '../models/race_models.dart';
@@ -112,6 +114,7 @@ class _ImageUploadTab extends StatefulWidget {
 // 업로드 이미지 항목
 // parseStatus 단계: 'uploading' → 'saving' → 'parsing' → 'converting' → 'done' | 'error'
 class _UploadedItem {
+  // ── 공통 식별자 ──────────────────────────────────────────────────────
   final String id;
   final String name;
   final String type;       // 'entry' | 'result'
@@ -122,6 +125,10 @@ class _UploadedItem {
   String parseStatus;
   String? parsedSummary;
   List<_ParsedRaceEntry> entries;
+
+  // ── 결과형 전용: 가로형 순위 매트릭스 + 파이프라인 로그 ───────────
+  _ResultMatrix? resultMatrix;
+  List<_ParseLog> parseLogs;
 
   _UploadedItem({
     required this.id,
@@ -134,7 +141,9 @@ class _UploadedItem {
     this.parseStatus = 'uploading',
     this.parsedSummary,
     this.entries = const [],
-  });
+    List<_ParseLog>? parseLogs,
+  })  : resultMatrix = null,
+        parseLogs = parseLogs ?? [];
 
   // ── JSON 직렬화 (SharedPreferences 영속화용) ────────────────────────
   Map<String, dynamic> toJson() => {
@@ -147,21 +156,27 @@ class _UploadedItem {
     'uploadedAt': uploadedAt.toIso8601String(),
     'parseStatus': parseStatus,
     'parsedSummary': parsedSummary,
-    // entries는 메모리 전용 (data URL 포함하지 않음)
+    // entries 영속화 (결과 데이터 보존)
+    'entries': entries.map((e) => e.toJson()).toList(),
   };
 
-  factory _UploadedItem.fromJson(Map<String, dynamic> j) => _UploadedItem(
-    id: j['id'] as String,
-    name: j['name'] as String,
-    type: j['type'] as String,
-    venueCode: j['venueCode'] as String,
-    dateStr: j['dateStr'] as String,
-    raceNo: j['raceNo'] as int,
-    uploadedAt: DateTime.parse(j['uploadedAt'] as String),
-    parseStatus: (j['parseStatus'] as String?) ?? 'done',
-    parsedSummary: j['parsedSummary'] as String?,
-    entries: const [],
-  );
+  factory _UploadedItem.fromJson(Map<String, dynamic> j) {
+    final rawEntries = j['entries'] as List<dynamic>? ?? [];
+    return _UploadedItem(
+      id: j['id'] as String,
+      name: j['name'] as String,
+      type: j['type'] as String,
+      venueCode: j['venueCode'] as String,
+      dateStr: j['dateStr'] as String,
+      raceNo: j['raceNo'] as int,
+      uploadedAt: DateTime.parse(j['uploadedAt'] as String),
+      parseStatus: (j['parseStatus'] as String?) ?? 'done',
+      parsedSummary: j['parsedSummary'] as String?,
+      entries: rawEntries
+          .map((e) => _ParsedRaceEntry.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
 
   String get typeLabel => type == 'entry' ? '출전표' : '경주기록';
   String get venueLabel {
@@ -229,13 +244,25 @@ class _UploadedItem {
   }
 }
 
+// ──────────────────────────────────────────────────────────────
+// _ParsedRaceEntry — 출전표(entry) / 경주기록(result) 양용 DTO
+// API4_3 racedetailresult 규격 호환
+// ──────────────────────────────────────────────────────────────
 class _ParsedRaceEntry {
-  final int gateNo;
-  final String horseName;
-  final String jockeyName;
-  final String trainerName;
-  final int    weight;
-  final String odds;
+  final int    gateNo;       // 마번(출주번호)
+  final String horseName;    // 말이름
+  final String jockeyName;   // 기수
+  final String trainerName;  // 조교사
+  final int    weight;       // 마체중(kg)
+  final String odds;         // 출전표용: 배당률 텍스트 (예: "3.2")
+
+  // ── 경주기록(result) 전용 필드 ────────────────────────────────
+  final int    rank;         // 착순 (0 = 미출전)
+  final String raceTime;     // 주파기록 (예: "1:13.4", "착순미집계")
+  final double winOdds;      // 단승식 배당률 (Float)
+  final double placeOdds;    // 연승식 배당률 (Float)
+  final String differ;       // 도착차 (예: "1/2마신", "코", "동착")
+  final bool   didStart;     // 출전 여부 (false = 취소)
 
   const _ParsedRaceEntry({
     required this.gateNo,
@@ -243,8 +270,132 @@ class _ParsedRaceEntry {
     required this.jockeyName,
     required this.trainerName,
     required this.weight,
-    required this.odds,
+    this.odds      = '-',
+    // 결과 필드 기본값
+    this.rank      = 0,
+    this.raceTime  = '-',
+    this.winOdds   = 0.0,
+    this.placeOdds = 0.0,
+    this.differ    = '',
+    this.didStart  = true,
   });
+
+  // JSON 직렬화 (SharedPreferences 영속화용)
+  Map<String, dynamic> toJson() => {
+    'gateNo':      gateNo,
+    'horseName':   horseName,
+    'jockeyName':  jockeyName,
+    'trainerName': trainerName,
+    'weight':      weight,
+    'odds':        odds,
+    'rank':        rank,
+    'raceTime':    raceTime,
+    'winOdds':     winOdds,
+    'placeOdds':   placeOdds,
+    'differ':      differ,
+    'didStart':    didStart,
+  };
+
+  factory _ParsedRaceEntry.fromJson(Map<String, dynamic> j) =>
+    _ParsedRaceEntry(
+      gateNo:      j['gateNo']      as int? ?? 0,
+      horseName:   j['horseName']   as String? ?? '',
+      jockeyName:  j['jockeyName']  as String? ?? '',
+      trainerName: j['trainerName'] as String? ?? '',
+      weight:      j['weight']      as int? ?? 0,
+      odds:        j['odds']        as String? ?? '-',
+      rank:        j['rank']        as int? ?? 0,
+      raceTime:    j['raceTime']    as String? ?? '-',
+      winOdds:     (j['winOdds']    as num?)?.toDouble() ?? 0.0,
+      placeOdds:   (j['placeOdds']  as num?)?.toDouble() ?? 0.0,
+      differ:      j['differ']      as String? ?? '',
+      didStart:    j['didStart']    as bool? ?? true,
+    );
+}
+
+// ──────────────────────────────────────────────────────────────
+// _ParseLog — 파이프라인 단계별 로그 버퍼 (에러 핸들링용)
+// ──────────────────────────────────────────────────────────────
+class _ParseLog {
+  final DateTime ts;
+  final String level;   // 'info' | 'warn' | 'error'
+  final String message;
+
+  _ParseLog({
+    required this.level,
+    required this.message,
+  }) : ts = DateTime.now();
+
+  String get icon => level == 'error' ? '❌'
+      : level == 'warn'  ? '⚠️'
+      : '✓ ';
+
+  Color get color => level == 'error'
+      ? const Color(0xFFEF5350)
+      : level == 'warn'
+          ? const Color(0xFFFFCC02)
+          : const Color(0xFF66BB6A);
+}
+
+// ──────────────────────────────────────────────────────────────
+// _ResultMatrix — 가로형 순위표 디커플링 엔진
+// 레이아웃: [경주번호 | 1착마번 | 2착마번 | 3착마번 | 4착마번 | 5착마번 | 주파기록]
+// ──────────────────────────────────────────────────────────────
+class _ResultMatrix {
+  final int raceNo;
+  final List<int> rankGateNos;  // [1착마번, 2착마번, 3착마번, 4착마번, 5착마번]
+  final String raceTime;        // 1착 주파기록
+  final List<double> winOddsList;   // 단승식 배당 (착순별)
+  final List<double> placeOddsList; // 연승식 배당 (착순별)
+
+  const _ResultMatrix({
+    required this.raceNo,
+    required this.rankGateNos,
+    this.raceTime = '-',
+    this.winOddsList   = const [],
+    this.placeOddsList = const [],
+  });
+
+  // 모크 데이터 생성 (OCR 미연동 환경에서 시뮬레이션)
+  static _ResultMatrix mockFor(int raceNo, List<_ParsedRaceEntry> entryHorses) {
+    // 출전표 마번 목록에서 랜덤하게 착순 배열
+    final gates = entryHorses.map((e) => e.gateNo).toList();
+    if (gates.isEmpty) {
+      gates.addAll([1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+    // 시뮬레이션: 단순 순환 배치 (실제 OCR 연동 시 좌표계 파싱으로 교체)
+    final shuffled = List<int>.from(gates);
+    for (var i = shuffled.length - 1; i > 0; i--) {
+      // deterministic pseudo-shuffle based on raceNo
+      final j = (raceNo * 7 + i * 3) % (i + 1);
+      final tmp = shuffled[i];
+      shuffled[i] = shuffled[j];
+      shuffled[j] = tmp;
+    }
+    final top5 = shuffled.take(5).toList();
+    while (top5.length < 5) top5.add(0);
+
+    // 배당률 생성 (단승식 기준: 1착 ≒ 낮음, 5착 ≒ 높음)
+    final oddsBases = [3.2, 5.8, 12.1, 24.5, 45.0];
+    final winOdds = oddsBases.map((o) =>
+      double.parse((o + (raceNo % 3) * 1.1).toStringAsFixed(1))).toList();
+    final plcOdds = winOdds.map((o) =>
+      double.parse((o * 0.4).toStringAsFixed(1))).toList();
+
+    // 주파기록 생성 (거리 기준 시뮬레이션)
+    final baseMin = 1;
+    final baseSec = 10 + (raceNo % 10);
+    final baseFrac = (raceNo * 3) % 9;
+    final raceTime = '$baseMin:${baseSec.toString().padLeft(2, '0')}.$baseFrac';
+
+    return _ResultMatrix(
+      raceNo:        raceNo,
+      rankGateNos:   top5,
+      raceTime:      raceTime,
+      winOddsList:   winOdds,
+      placeOddsList: plcOdds,
+    );
+  }
 }
 
 class _ImageUploadTabState extends State<_ImageUploadTab>
@@ -431,19 +582,182 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
 
-    // ── ⑤ 완료 — 목 데이터 생성 + SharedPreferences 저장 ──────────────
-    setState(() {
-      item.parseStatus = 'done';
-      if (item.type == 'entry') {
-        item.parsedSummary = '${item.raceNo}경주 출전표 인식 완료 — 데이터를 확인 후 저장하세요';
-        item.entries = _generateMockEntries(item.raceNo);
+    // ── ⑤ 완료 — 타입별 분기 파싱 + FK 조인 + SharedPreferences 저장 ─
+    if (item.type == 'entry') {
+      // ── 출전표 파싱 분기 ────────────────────────────────────────────
+      _addLog(item, 'info', '출전표 OCR 파싱 시작 (${item.raceNo}경주)');
+      final entries = _generateMockEntries(item.raceNo);
+      _addLog(item, 'info', '출전마 ${entries.length}두 인식 완료');
+      setState(() {
+        item.parseStatus   = 'done';
+        item.parsedSummary = '${item.raceNo}경주 출전표 — ${entries.length}두 인식 완료 · 저장 버튼으로 캐시 반영';
+        item.entries       = entries;
+      });
+    } else {
+      // ── 결과 이미지 파싱 분기 ─────────────────────────────────────────
+      // [1] 가로형 순위 매트릭스 디커플링 (OCR 좌표계 파싱 자리)
+      _addLog(item, 'info', '결과 이미지 가로형 레이아웃 디커플링 시작');
+      _addLog(item, 'info', '열 분리: [경주번호|1착|2착|3착|4착|5착|주파기록]');
+
+      // 기존 출전표에서 해당 경주 마번 목록 조회 (FK 조인용)
+      final entryItem = _items.firstWhere(
+        (it) => it.type == 'entry' &&
+                it.dateStr   == item.dateStr &&
+                it.venueCode == item.venueCode &&
+                it.raceNo    == item.raceNo  &&
+                it.parseStatus == 'done',
+        orElse: () => _UploadedItem(
+          id: '', name: '', type: 'entry', venueCode: item.venueCode,
+          dateStr: item.dateStr, raceNo: item.raceNo,
+          uploadedAt: DateTime.now(), entries: [],
+        ),
+      );
+
+      if (entryItem.entries.isEmpty) {
+        _addLog(item, 'warn',
+          '출전표 참조 없음 — 마번 기반 FK 조인 불가, 마번 숫자만으로 결과 생성');
       } else {
-        item.parsedSummary = '${item.raceNo}경주 기록 인식 완료 — 착순/기록 확인 후 저장하세요';
-        item.entries = _generateMockResults(item.raceNo);
+        _addLog(item, 'info',
+          '출전표 조인 성공 — ${entryItem.entries.length}두 마명/기수/조교사 바인딩');
       }
-    });
-    // 완료 후 영속 저장 (data URL 없이 메타데이터만)
+
+      // [2] 가로형 매트릭스 파싱 (모크: 실제 OCR 연동 시 좌표계 파서로 교체)
+      final matrix = _ResultMatrix.mockFor(item.raceNo, entryItem.entries);
+      _addLog(item, 'info',
+        '착순 파싱 완료: ${matrix.rankGateNos.join("→")} | 주파기록 ${matrix.raceTime}');
+
+      // [3] 세로형 개별 마필 객체 재조립 (FK 조인 알고리즘)
+      List<_ParsedRaceEntry> resultEntries;
+      try {
+        resultEntries = _joinResultMatrix(matrix, entryItem.entries);
+        _addLog(item, 'info', '마번×마명 FK 조인 완료 — ${resultEntries.length}두 결과 객체 생성');
+      } catch (e) {
+        _addLog(item, 'error', 'FK 조인 예외: $e');
+        resultEntries = _generateMockResults(item.raceNo);
+        _addLog(item, 'warn', '조인 실패 — 모크 결과로 폴백');
+      }
+
+      // [4] 배당률 Float 변환 검증
+      int oddsParseFail = 0;
+      for (final e in resultEntries) {
+        if (e.winOdds <= 0 && e.rank <= 3) {
+          _addLog(item, 'warn',
+            '마번 ${e.gateNo} 단승식 배당 파싱 실패 (원본: "${e.odds}") — 로그 버퍼 보존');
+          oddsParseFail++;
+        }
+      }
+      if (oddsParseFail == 0) {
+        _addLog(item, 'info', '배당률 Float 변환 검증 통과');
+      }
+
+      setState(() {
+        item.parseStatus   = 'done';
+        item.resultMatrix  = matrix;
+        item.entries       = resultEntries;
+        final top3 = resultEntries
+            .where((e) => e.rank >= 1 && e.rank <= 3 && e.didStart)
+            .toList()
+          ..sort((a, b) => a.rank.compareTo(b.rank));
+        final top3str = top3.map((e) =>
+            '${e.rank}착 마번${e.gateNo}${e.horseName.isNotEmpty ? "(${e.horseName})" : ""}').join(' · ');
+        item.parsedSummary =
+            '${item.raceNo}경주 결과 파싱 완료 | $top3str | ⏱${matrix.raceTime}';
+      });
+    }
+    // 완료 후 영속 저장 (entries 포함)
     await _saveItemsToPrefs();
+  }
+
+  // ── 파이프라인 로그 추가 헬퍼 ───────────────────────────────────────
+  void _addLog(_UploadedItem item, String level, String message) {
+    item.parseLogs.add(_ParseLog(level: level, message: message));
+    if (kDebugMode) {
+      debugPrint('[ParsePipeline][${level.toUpperCase()}] $message');
+    }
+  }
+
+  // ── FK 조인 알고리즘 ────────────────────────────────────────────────
+  // 가로형 매트릭스(착순→마번)를 출전표 데이터와 조인하여
+  // 세로형 HorseResult 규격(_ParsedRaceEntry) 리스트로 재조립
+  List<_ParsedRaceEntry> _joinResultMatrix(
+    _ResultMatrix matrix,
+    List<_ParsedRaceEntry> entryHorses,
+  ) {
+    // 출전표 마번 → 엔트리 맵 구성 (FK 매핑 테이블)
+    final entryMap = <int, _ParsedRaceEntry>{
+      for (final e in entryHorses) e.gateNo: e
+    };
+
+    final result = <_ParsedRaceEntry>[];
+
+    // [착순 정렬] 가로 매트릭스 → 세로 개별 객체 재조립
+    for (var i = 0; i < matrix.rankGateNos.length; i++) {
+      final gateNo = matrix.rankGateNos[i];
+      if (gateNo == 0) continue;
+
+      final rank = i + 1;
+      final winOdds   = i < matrix.winOddsList.length
+          ? matrix.winOddsList[i] : 0.0;
+      final placeOdds = i < matrix.placeOddsList.length
+          ? matrix.placeOddsList[i] : 0.0;
+      final raceTime  = rank == 1 ? matrix.raceTime : '-';
+
+      // FK 조인: 출전표 마번 기준으로 마명/기수/조교사 바인딩
+      final entryData = entryMap[gateNo];
+
+      // 배당률 Float 변환 try-catch (OCR 오차 방어)
+      double safeWin   = 0.0;
+      double safePlace = 0.0;
+      try {
+        safeWin   = winOdds > 0 ? winOdds : 0.0;
+        safePlace = placeOdds > 0 ? placeOdds : 0.0;
+      } catch (e) {
+        debugPrint('[OddsParser] 마번$gateNo 배당 변환 오류: $e');
+        // Drop 없이 0.0으로 대체, 로그 보존
+      }
+
+      result.add(_ParsedRaceEntry(
+        gateNo:      gateNo,
+        horseName:   entryData?.horseName   ?? '마번$gateNo',
+        jockeyName:  entryData?.jockeyName  ?? '-',
+        trainerName: entryData?.trainerName ?? '-',
+        weight:      entryData?.weight      ?? 0,
+        odds:        entryData?.odds        ?? '-',
+        rank:        rank,
+        raceTime:    raceTime,
+        winOdds:     safeWin,
+        placeOdds:   safePlace,
+        differ:      rank == 1 ? '' : '${(rank - 1) * 0.5}마신',
+        didStart:    true,
+      ));
+    }
+
+    // 출전표에 있지만 착순에 없는 마필 → 기록없음 처리 (취소/미출전)
+    for (final entry in entryHorses) {
+      if (!matrix.rankGateNos.contains(entry.gateNo)) {
+        result.add(_ParsedRaceEntry(
+          gateNo:      entry.gateNo,
+          horseName:   entry.horseName,
+          jockeyName:  entry.jockeyName,
+          trainerName: entry.trainerName,
+          weight:      entry.weight,
+          odds:        entry.odds,
+          rank:        0,
+          raceTime:    '-',
+          winOdds:     0.0,
+          placeOdds:   0.0,
+          differ:      '',
+          didStart:    false,
+        ));
+      }
+    }
+
+    result.sort((a, b) {
+      if (a.rank == 0) return 1;
+      if (b.rank == 0) return -1;
+      return a.rank.compareTo(b.rank);
+    });
+    return result;
   }
 
   List<_ParsedRaceEntry> _generateMockEntries(int raceNo) {
@@ -468,61 +782,131 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
   }
 
   List<_ParsedRaceEntry> _generateMockResults(int raceNo) {
+    // 폴백 모크 결과 (FK 조인 실패 시)
     final horses = [
-      ('청운대장', '조성곤', '박종훈', 488, '착순 1위'),
-      ('황금질주', '이현종', '김민수', 502, '착순 2위'),
-      ('폭풍기수', '문세영', '이상호', 494, '착순 3위'),
-      ('달빛제왕', '강민성', '박영철', 512, '착순 4위'),
-      ('바람신마', '최우성', '정민호', 484, '착순 5위'),
+      ('청운대장', '조성곤', '박종훈', 488),
+      ('황금질주', '이현종', '김민수', 502),
+      ('폭풍기수', '문세영', '이상호', 494),
+      ('달빛제왕', '강민성', '박영철', 512),
+      ('바람신마', '최우성', '정민호', 484),
     ];
+    final timeBase = '1:${(12 + raceNo % 8).toString().padLeft(2, '0')}.${raceNo % 9}';
     return horses.asMap().entries.map((e) => _ParsedRaceEntry(
-      gateNo: e.key + 1,
-      horseName: e.value.$1,
-      jockeyName: e.value.$2,
+      gateNo:      e.key + 1,
+      horseName:   e.value.$1,
+      jockeyName:  e.value.$2,
       trainerName: e.value.$3,
-      weight: e.value.$4,
-      odds: e.value.$5,
+      weight:      e.value.$4,
+      odds:        '-',
+      rank:        e.key + 1,
+      raceTime:    e.key == 0 ? timeBase : '-',
+      winOdds:     e.key == 0 ? 3.2 + (raceNo % 4) * 0.8 : 0.0,
+      placeOdds:   e.key < 3  ? 1.5 + e.key * 0.3 : 0.0,
+      differ:      e.key == 0 ? '' : '${(e.key * 0.5).toStringAsFixed(1)}마신',
+      didStart:    true,
     )).toList();
   }
 
-  // ── 경주 캐시에 저장 ─────────────────────────────────────────────────
+  // ── 경주 캐시 저장 — 출전표: RaceScheduleCache / 결과: RaceResultArchive ──
   Future<void> _saveToCache(_UploadedItem item) async {
     try {
       final y  = int.parse(item.dateStr.substring(0, 4));
       final mo = int.parse(item.dateStr.substring(4, 6));
       final d  = int.parse(item.dateStr.substring(6, 8));
-      final date = DateTime(y, mo, d);
-      final venueName = item.venueCode == '1' ? '서울'
+      final date       = DateTime(y, mo, d);
+      final venueName  = item.venueCode == '1' ? '서울'
           : item.venueCode == '2' ? '부산경남' : '제주';
+      final raceNoStr  = item.raceNo.toString();
 
-      final race = RaceInfo(
-        raceNo:         item.raceNo.toString(),
-        raceName:       '제${item.raceNo}경주 (이미지 업로드)',
-        startTime:      '--:--',
-        distance:       1400,
-        condition:      '업로드',
-        grade:          '확인요',
-        venueCode:      item.venueCode,
-        venueName:      venueName,
-        raceDate:       item.dateStr,
-        totalHorses:    item.entries.length,
-        trackCondition: '양호',
-        isSpecialRace:  false,
-        specialRaceName: '',
-      );
+      if (item.type == 'entry') {
+        // ── 출전표 → RaceScheduleCache (기존 경로) ────────────────────
+        final race = RaceInfo(
+          raceNo:          raceNoStr,
+          raceName:        '제${item.raceNo}경주 (이미지 업로드)',
+          startTime:       '--:--',
+          distance:        1400,
+          condition:       '업로드',
+          grade:           '확인요',
+          venueCode:       item.venueCode,
+          venueName:       venueName,
+          raceDate:        item.dateStr,
+          totalHorses:     item.entries.length,
+          trackCondition:  '양호',
+          isSpecialRace:   false,
+          specialRaceName: '',
+        );
+        final cache = RaceScheduleCache();
+        await cache.saveSnapshot(
+          races:      [race],
+          venueCode:  item.venueCode,
+          date:       date,
+          source:     'image_upload',
+        );
+        _addLog(item, 'info', '출전표 → RaceScheduleCache 저장 완료');
+        if (mounted) {
+          setState(() => _globalMsg =
+            '✅ 출전표 캐시 저장 완료 · 앱 새로고침 시 경주 목록에 반영됩니다.');
+        }
 
-      final cache = RaceScheduleCache();
-      await cache.saveSnapshot(
-        races: [race],
-        venueCode: item.venueCode,
-        date: date,
-        source: 'image_upload',
-      );
+      } else {
+        // ── 결과 이미지 → RaceResultArchive (새 경로) ─────────────────
+        // _ParsedRaceEntry → HorseResult 변환 (API4_3 DTO 규격)
+        final horses = <HorseResult>[];
+        for (final e in item.entries) {
+          try {
+            horses.add(HorseResult(
+              rank:        e.rank,
+              gateNo:      e.gateNo,
+              horseName:   e.horseName,
+              jockeyName:  e.jockeyName,
+              trainerName: e.trainerName,
+              weight:      e.weight,
+              raceTime:    e.rank == 1 ? e.raceTime : '-',
+              winOdds:     e.winOdds,
+              placeOdds:   e.placeOdds,
+              differ:      e.differ,
+              didStart:    e.didStart,
+              venueName:   venueName,
+            ));
+          } catch (ex) {
+            // 개별 마필 변환 실패 시 드롭 없이 로그만
+            _addLog(item, 'error',
+              '마번${e.gateNo} HorseResult 변환 오류: $ex — 해당 마필 스킵');
+            debugPrint('[SaveToCache] HorseResult 변환 오류 마번${e.gateNo}: $ex');
+          }
+        }
 
-      if (mounted) {
-        setState(() => _globalMsg = '✅ ${item.name} → 캐시 저장 완료! 앱 새로고침 시 반영됩니다.');
+        if (horses.isEmpty) {
+          throw Exception('변환된 HorseResult가 없습니다. 파싱 데이터를 확인하세요.');
+        }
+
+        final kraResult = KraRaceResult(
+          raceNo:    raceNoStr,
+          raceDate:  item.dateStr,
+          venueCode: item.venueCode,
+          venueName: venueName,
+          horses:    horses,
+        );
+
+        // RaceResultArchive 직접 저장 (배치 우회 — 이미지 업로드 경로)
+        await RaceResultArchive.instance.saveImageUploadResult(kraResult);
+        _addLog(item, 'info',
+          '결과 → RaceResultArchive 저장 완료 (${horses.length}두)');
+
+        if (mounted) {
+          final top3 = horses
+              .where((h) => h.rank >= 1 && h.rank <= 3 && h.didStart)
+              .toList()
+            ..sort((a, b) => a.rank.compareTo(b.rank));
+          final top3str = top3.map((h) =>
+              '${h.rank}착 ${h.horseName}').join(' · ');
+          setState(() => _globalMsg =
+            '✅ 경주기록 저장 완료 | $top3str | 결과 화면에서 확인 가능합니다.');
+        }
       }
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('[SaveToCache] ❌ 저장 실패: $e\n$stack');
+      _addLog(item, 'error', '캐시 저장 실패: $e');
       if (mounted) {
         setState(() => _globalMsg = '❌ 저장 실패: $e');
       }
@@ -961,7 +1345,18 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
             ),
           ),
 
-          // ── 펼쳐진 상세 (출전마 리스트) ───────────────────────────
+          // ── 파이프라인 진행 시각화 (처리 중 또는 완료 모두 표시) ─────────
+          if (item.isProcessing || item.parseStatus == 'done') ...[
+            const Divider(color: Color(0xFF1A1A3A), height: 1),
+            _pipelineIndicator(item),
+          ],
+
+          // ── 결과형: 포디엄 스냅샷 (완료 후 항상 표시) ───────────────────
+          if (item.type == 'result' && item.parseStatus == 'done') ...[
+            _resultSnapshotCard(item),
+          ],
+
+          // ── 펼쳐진 상세 (출전마 리스트 + 저장 버튼) ──────────────────────
           if (isExpanded && item.entries.isNotEmpty) ...[
             const Divider(color: Color(0xFF1A1A3A), height: 1),
             Padding(
@@ -975,34 +1370,50 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
                   // 출전마 행
                   ...item.entries.map((e) =>
                       _entryRow(e, item.type == 'result')),
-                  const SizedBox(height: 10),
-                  // 저장 버튼
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E3A2A),
-                        foregroundColor: const Color(0xFF81C784),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                        side: const BorderSide(color: Color(0xFF2E6A3A)),
+                  const SizedBox(height: 8),
+                  // 파이프라인 로그 (결과형만)
+                  if (item.type == 'result' && item.parseLogs.isNotEmpty) ...[
+                    _parseLogViewer(item),
+                    const SizedBox(height: 4),
+                  ],
+                  // 저장 버튼 (완료된 항목만)
+                  if (item.parseStatus == 'done')
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: item.type == 'result'
+                              ? const Color(0xFF1A1A3A)
+                              : const Color(0xFF1E3A2A),
+                          foregroundColor: item.type == 'result'
+                              ? const Color(0xFFFFD54F)
+                              : const Color(0xFF81C784),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          side: BorderSide(
+                            color: item.type == 'result'
+                                ? const Color(0xFF6A5A00)
+                                : const Color(0xFF2E6A3A),
+                          ),
+                        ),
+                        onPressed: () => _saveToCache(item),
+                        icon: Icon(
+                          item.type == 'result'
+                              ? Icons.leaderboard : Icons.save_alt,
+                          size: 16,
+                        ),
+                        label: Text(
+                          item.type == 'result'
+                              ? '착순 결과 아카이브에 저장'
+                              : '출전표 경주 캐시에 저장',
+                          style: const TextStyle(fontSize: 12),
+                        ),
                       ),
-                      onPressed: () => _saveToCache(item),
-                      icon: const Icon(Icons.save_alt, size: 16),
-                      label: const Text('경주 캐시에 저장',
-                          style: TextStyle(fontSize: 12)),
                     ),
-                  ),
                 ],
               ),
             ),
-          ],
-
-          // ── 파이프라인 진행 시각화 (처리 중 또는 완료 모두 표시) ─────────
-          if (item.isProcessing || item.parseStatus == 'done') ...[
-            const Divider(color: Color(0xFF1A1A3A), height: 1),
-            _pipelineIndicator(item),
           ],
         ],
       ),
@@ -1138,6 +1549,221 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
     );
   }
 
+  // ── 결과형 포디엄 스냅샷 카드 ─────────────────────────────────────────
+  // 착순 Top-3 포디엄 + 배당률 배지 + 주파기록 표시
+  Widget _resultSnapshotCard(_UploadedItem item) {
+    if (item.type != 'result' || item.parseStatus != 'done') {
+      return const SizedBox.shrink();
+    }
+    final top5 = item.entries
+        .where((e) => e.rank >= 1 && e.rank <= 5 && e.didStart)
+        .toList()
+      ..sort((a, b) => a.rank.compareTo(b.rank));
+    final winner = top5.isNotEmpty ? top5.first : null;
+
+    if (top5.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0D1F10), Color(0xFF12122A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF2E6A3A), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── 헤더 ───────────────────────────────────────────────
+          Row(children: [
+            const Icon(Icons.emoji_events, color: Color(0xFFFFD54F), size: 14),
+            const SizedBox(width: 6),
+            Text(
+              '${item.venueLabel} 제${item.raceNo}경주 착순 결과',
+              style: const TextStyle(
+                  color: Color(0xFFE0E0FF), fontSize: 12,
+                  fontWeight: FontWeight.bold),
+            ),
+            const Spacer(),
+            if (winner != null && winner.raceTime != '-') ...[
+              const Icon(Icons.timer, color: Color(0xFF9090CC), size: 11),
+              const SizedBox(width: 3),
+              Text(
+                winner.raceTime,
+                style: const TextStyle(
+                    color: Color(0xFFB0B0CC), fontSize: 10,
+                    fontWeight: FontWeight.w600),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 8),
+
+          // ── 포디엄 Row ─────────────────────────────────────────
+          Row(
+            children: top5.take(3).toList().asMap().entries.map((entry) {
+              final idx   = entry.key;
+              final horse = entry.value;
+              final rankColors = [
+                const Color(0xFFFFD700), // 1착 금
+                const Color(0xFFC0C0C0), // 2착 은
+                const Color(0xFFCD7F32), // 3착 동
+              ];
+              final bgColors = [
+                const Color(0xFF1A1500),
+                const Color(0xFF141414),
+                const Color(0xFF120A00),
+              ];
+              return Expanded(
+                child: Container(
+                  margin: EdgeInsets.only(right: idx < 2 ? 6 : 0),
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 8, horizontal: 6),
+                  decoration: BoxDecoration(
+                    color: bgColors[idx],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: rankColors[idx].withValues(alpha: 0.5),
+                        width: 1),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '${horse.rank}착',
+                        style: TextStyle(
+                            color: rankColors[idx],
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '${horse.gateNo}번',
+                        style: const TextStyle(
+                            color: Color(0xFF9090CC), fontSize: 9),
+                      ),
+                      Text(
+                        horse.horseName.isNotEmpty
+                            ? horse.horseName : '마번${horse.gateNo}',
+                        style: const TextStyle(
+                            color: Color(0xFFE0E0FF),
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold),
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 3),
+                      // 배당률 배지
+                      if (horse.winOdds > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1A2A3A),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            '단 ${horse.winOdds.toStringAsFixed(1)}배',
+                            style: const TextStyle(
+                                color: Color(0xFF64B5F6),
+                                fontSize: 8),
+                          ),
+                        ),
+                      if (horse.placeOdds > 0)
+                        Text(
+                          '연 ${horse.placeOdds.toStringAsFixed(1)}배',
+                          style: const TextStyle(
+                              color: Color(0xFF7070AA), fontSize: 8),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+
+          // ── 4~5착 간략 표시 ────────────────────────────────────
+          if (top5.length > 3) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              const Text('계속:',
+                  style: TextStyle(color: Color(0xFF555580), fontSize: 9)),
+              const SizedBox(width: 4),
+              ...top5.skip(3).map((h) => Container(
+                margin: const EdgeInsets.only(right: 6),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A2A),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${h.rank}착 ${h.gateNo}번'
+                  '${h.horseName.isNotEmpty ? " ${h.horseName}" : ""}',
+                  style: const TextStyle(
+                      color: Color(0xFF7070AA), fontSize: 9),
+                ),
+              )),
+            ]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── 파이프라인 로그 뷰어 ──────────────────────────────────────────────
+  Widget _parseLogViewer(_UploadedItem item) {
+    if (item.parseLogs.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0A18),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF1A1A3A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('파이프라인 로그',
+              style: TextStyle(color: Color(0xFF555580), fontSize: 9,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          ...item.parseLogs.map((log) => Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(log.icon,
+                    style: TextStyle(
+                        color: log.color, fontSize: 9)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    '[${log.ts.hour.toString().padLeft(2,'0')}:'
+                    '${log.ts.minute.toString().padLeft(2,'0')}:'
+                    '${log.ts.second.toString().padLeft(2,'0')}] '
+                    '${log.message}',
+                    style: TextStyle(
+                        color: log.level == 'error'
+                            ? const Color(0xFFEF9A9A)
+                            : log.level == 'warn'
+                                ? const Color(0xFFFFE082)
+                                : const Color(0xFF7070AA),
+                        fontSize: 9,
+                        fontFamily: 'monospace'),
+                  ),
+                ),
+              ],
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
   Widget _entryTableHeader(bool isResult) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -1146,12 +1772,12 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
         borderRadius: BorderRadius.circular(4),
       ),
       child: Row(children: [
-        _col('번', 24),
-        _col('마명', 90),
+        _col(isResult ? '착' : '번', 24),
+        _col(isResult ? '번·마명' : '마명', 90),
         _col('기수', 60),
         _col('조교사', 60),
-        _col('체중', 40),
-        Expanded(child: Text(isResult ? '착순' : '배당',
+        _col('체중', 38),
+        Expanded(child: Text(isResult ? '배당' : '배당률',
             style: const TextStyle(color: Color(0xFF6C63FF),
                 fontSize: 10, fontWeight: FontWeight.bold),
             textAlign: TextAlign.right)),
@@ -1160,23 +1786,85 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
   }
 
   Widget _entryRow(_ParsedRaceEntry e, bool isResult) {
+    // 착순 배지 색상
+    final rankColor = e.rank == 1 ? const Color(0xFFFFD700)
+        : e.rank == 2 ? const Color(0xFFC0C0C0)
+        : e.rank == 3 ? const Color(0xFFCD7F32)
+        : const Color(0xFF6C63FF);
+
+    // 미출전(취소)는 회색 처리
+    if (isResult && !e.didStart) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        child: Row(children: [
+          _col('${e.gateNo}', 24, color: const Color(0xFF444466)),
+          _col(e.horseName, 90, color: const Color(0xFF444466)),
+          _col(e.jockeyName, 60, color: const Color(0xFF333355)),
+          _col(e.trainerName, 60, color: const Color(0xFF333355)),
+          _col('${e.weight}', 40, color: const Color(0xFF333355)),
+          const Expanded(
+            child: Text('취소', style: TextStyle(
+                color: Color(0xFF555580), fontSize: 10),
+                textAlign: TextAlign.right),
+          ),
+        ]),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 2),
       child: Row(children: [
-        _col('${e.gateNo}', 24,
-            color: const Color(0xFF9090CC), bold: true),
-        _col(e.horseName, 90,
+        // 착순 배지 (결과형) 또는 마번 (출전표형)
+        isResult && e.rank > 0
+            ? Container(
+                width: 24, height: 18,
+                decoration: BoxDecoration(
+                  color: rankColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(
+                      color: rankColor.withValues(alpha: 0.5), width: 1),
+                ),
+                child: Center(
+                  child: Text('${e.rank}',
+                      style: TextStyle(
+                          color: rankColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold)),
+                ),
+              )
+            : _col('${e.gateNo}', 24,
+                color: const Color(0xFF9090CC), bold: true),
+        const SizedBox(width: 2),
+        _col(isResult ? '${e.gateNo} ${e.horseName}' : e.horseName, 88,
             color: const Color(0xFFE0E0FF), bold: true),
-        _col(e.jockeyName, 60),
-        _col(e.trainerName, 60),
-        _col('${e.weight}', 40),
-        Expanded(child: Text(e.odds,
-            style: TextStyle(
-              color: isResult
-                  ? const Color(0xFFFFD54F) : const Color(0xFF64B5F6),
-              fontSize: 11,
-            ),
-            textAlign: TextAlign.right)),
+        _col(e.jockeyName, 58),
+        _col(e.trainerName, 58),
+        _col(e.weight > 0 ? '${e.weight}' : '-', 36),
+        // 결과형: 단승/연승 배당 | 출전표형: 배당 텍스트
+        Expanded(
+          child: isResult
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (e.winOdds > 0)
+                      Text('단 ${e.winOdds.toStringAsFixed(1)}',
+                          style: const TextStyle(
+                              color: Color(0xFF64B5F6), fontSize: 9)),
+                    if (e.placeOdds > 0)
+                      Text('연 ${e.placeOdds.toStringAsFixed(1)}',
+                          style: const TextStyle(
+                              color: Color(0xFF7070AA), fontSize: 9)),
+                    if (e.winOdds <= 0 && e.placeOdds <= 0)
+                      const Text('-',
+                          style: TextStyle(
+                              color: Color(0xFF444466), fontSize: 9)),
+                  ],
+                )
+              : Text(e.odds,
+                  style: const TextStyle(
+                      color: Color(0xFF64B5F6), fontSize: 11),
+                  textAlign: TextAlign.right),
+        ),
       ]),
     );
   }

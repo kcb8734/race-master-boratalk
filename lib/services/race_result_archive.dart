@@ -153,6 +153,20 @@ class RaceResultArchive {
   }
 
   // ─────────────────────────────────────────────────────────────────
+  // [PUBLIC] 이미지 업로드 경로 직접 저장
+  // Admin 파이프라인에서 파싱 완료된 KraRaceResult를 직접 아카이빙
+  // 배치 윈도우 체크 없이 즉시 저장
+  // ─────────────────────────────────────────────────────────────────
+  Future<void> saveImageUploadResult(KraRaceResult result) async {
+    await _saveResult(result);
+    if (kDebugMode) {
+      debugPrint('[Archive] 📸 이미지 업로드 결과 저장 → '
+          '${result.raceDate} ${result.venueName} 제${result.raceNo}경주 '
+          '(${result.horses.length}두)');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // 단일 경주 결과 로컬 저장 (SharedPreferences JSON)
   // ─────────────────────────────────────────────────────────────────
   Future<void> _saveResult(KraRaceResult result) async {
