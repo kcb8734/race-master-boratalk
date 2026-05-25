@@ -777,7 +777,11 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
             h, darkHorseGates,
             allSortedByScore: allSorted,
           );
-          if (alerts.isEmpty) return const SizedBox.shrink();
+          // alerts가 비어도 행은 항상 표시 (6·7위 누락 방지)
+          // alerts가 비어있으면 기본 태그(AI 순위 표시)를 추가
+          final displayAlerts = alerts.isNotEmpty
+              ? alerts
+              : [('$aiRank위', Colors.white.withValues(alpha: 0.35))];
 
           final isDarkHorse = darkHorseGates.contains(h.gateNo);
           final darkRank = isDarkHorse ? darkFirst.indexOf(h) + 1 : 0;
@@ -857,7 +861,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
                       const SizedBox(height: 5),
                       Wrap(
                         spacing: 5, runSpacing: 4,
-                        children: alerts.map((a) => Container(
+                        children: displayAlerts.map((a) => Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 7, vertical: 3),
                           decoration: BoxDecoration(
@@ -979,6 +983,9 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     } else if (aiRank > (total * 0.7).floor()) {
       // 하위 30%
       alerts.add(('📉 하위권', const Color(0xFF78909C)));
+    } else {
+      // 중위권 (상위 40%~하위 30% 사이 — 6·7위 등)
+      alerts.add(('▪ 중위권', const Color(0xFF546E7A)));
     }
 
     // ── 복병 선정 태그 ───────────────────────────────────────────────

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import '../models/race_models.dart';
 import '../services/kra_api_service.dart';
+import '../services/race_result_archive.dart';
 import '../utils/horse_cap_colors.dart';
 
 // ──────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ class _RaceResultScreenState extends State<RaceResultScreen>
     with SingleTickerProviderStateMixin {
   KraRaceResult? _result;
   bool _isLoading = true;
+  bool _isFromArchive = false;   // 관리자 업로드 아카이브에서 로드된 경우
   String? _errorMsg;
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
@@ -54,6 +56,7 @@ class _RaceResultScreenState extends State<RaceResultScreen>
     setState(() {
       _isLoading = true;
       _errorMsg = null;
+      _isFromArchive = false;
     });
 
     try {
@@ -70,22 +73,55 @@ class _RaceResultScreenState extends State<RaceResultScreen>
         raceDate = DateTime.now();
       }
 
-      final result = await KraApiService.fetchRaceResult(
-        widget.race.venueCode,
-        raceDate,
-        widget.race.raceNo,
-      );
+      KraRaceResult? result;
+      try {
+        result = await KraApiService.fetchRaceResult(
+          widget.race.venueCode,
+          raceDate,
+          widget.race.raceNo,
+        );
+      } catch (apiErr) {
+        if (kDebugMode) debugPrint('[RaceResultScreen] API Error: $apiErr');
+        result = null;
+      }
 
       if (!mounted) return;
 
+      // ── API 결과가 있으면 사용 ──────────────────────────────────
       if (result != null && result.horses.isNotEmpty) {
         setState(() {
           _result = result;
           _isLoading = false;
         });
         _fadeCtrl.forward();
+        return;
+      }
+
+      // ── API 결과 없음 → 관리자 업로드 아카이브 폴백 ────────────
+      if (kDebugMode) {
+        debugPrint('[RaceResultScreen] API 결과 없음 → 아카이브 조회: '
+            '${widget.race.raceDate} / venue=${widget.race.venueCode} / '
+            'raceNo=${widget.race.raceNo}');
+      }
+
+      final archived = await RaceResultArchive.instance.loadByKey(
+        widget.race.raceDate,
+        widget.race.venueCode,
+        widget.race.raceNo.toString(),
+      );
+
+      if (!mounted) return;
+
+      if (archived != null && archived.horses.isNotEmpty) {
+        // 아카이브에서 로드 성공
+        setState(() {
+          _result = archived;
+          _isLoading = false;
+          _isFromArchive = true;
+        });
+        _fadeCtrl.forward();
       } else {
-        // API에서 데이터 없음 → 경주 미종료 또는 아직 집계 전
+        // API + 아카이브 모두 없음 → 경주 미종료 또는 집계 전
         setState(() {
           _isLoading = false;
           _errorMsg = '경주 결과가 아직 집계되지 않았습니다.\n경주 종료 후 잠시 후 다시 확인해 주세요.';
@@ -203,14 +239,41 @@ class _RaceResultScreenState extends State<RaceResultScreen>
                   ],
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  '제${widget.race.raceNo}경주  경주결과 · 배당',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.3,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      '제${widget.race.raceNo}경주  경주결과 · 배당',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    // 관리자 업로드 데이터 사용 중 배지
+                    if (_isFromArchive) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6B4FD8).withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(
+                              color: const Color(0xFF6B4FD8)
+                                  .withValues(alpha: 0.5)),
+                        ),
+                        child: const Text(
+                          '📋 업로드',
+                          style: TextStyle(
+                            color: Color(0xFFB39DDB),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
