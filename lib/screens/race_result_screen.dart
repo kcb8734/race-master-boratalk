@@ -390,6 +390,12 @@ class _RaceResultScreenState extends State<RaceResultScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── 관리자 업로드 데이터 소스 배너 (아카이브 폴백 시만 표시) ──
+          if (_isFromArchive) ...[
+            _buildArchiveSourceBanner(),
+            const SizedBox(height: 16),
+          ],
+
           // 1·2·3착 하이라이트 카드
           if (result.top3.isNotEmpty) _buildPodiumCard(result.top3),
           const SizedBox(height: 20),
@@ -408,6 +414,102 @@ class _RaceResultScreenState extends State<RaceResultScreen>
           _buildSectionTitle('📋 전체 착순 기록'),
           const SizedBox(height: 10),
           _buildResultTable(result.horses),
+        ],
+      ),
+    );
+  }
+
+  // ── 관리자 업로드 데이터 소스 안내 배너 ──────────────────────────────
+  Widget _buildArchiveSourceBanner() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1A1030), Color(0xFF0F0A20)],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: const Color(0xFF6B4FD8).withValues(alpha: 0.5)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6B4FD8).withValues(alpha: 0.1),
+            blurRadius: 12,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // 아이콘
+          Container(
+            width: 42, height: 42,
+            decoration: BoxDecoration(
+              color: const Color(0xFF6B4FD8).withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: const Color(0xFF6B4FD8).withValues(alpha: 0.4)),
+            ),
+            child: const Center(
+              child: Text('📋', style: TextStyle(fontSize: 18)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // 텍스트
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6B4FD8).withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                            color: const Color(0xFF6B4FD8)
+                                .withValues(alpha: 0.45)),
+                      ),
+                      child: const Text(
+                        '관리자 업로드 데이터',
+                        style: TextStyle(
+                          color: Color(0xFFB39DDB),
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Text(
+                      'KRA API 응답 없음',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.35),
+                        fontSize: 9.5,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '관리자가 직접 업로드한 경주 결과 이미지에서 파싱된 데이터입니다.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'KRA 공공 API 정상화 후 새로고침하면 공식 데이터로 자동 교체됩니다.',
+                  style: TextStyle(
+                    color: const Color(0xFF6B4FD8).withValues(alpha: 0.75),
+                    fontSize: 10,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

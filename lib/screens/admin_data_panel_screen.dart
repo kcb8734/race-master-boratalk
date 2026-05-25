@@ -130,6 +130,10 @@ class _UploadedItem {
   _ResultMatrix? resultMatrix;
   List<_ParseLog> parseLogs;
 
+  // ── 아카이브/캐시 저장 완료 여부 (홈 연동 상태 표시용) ────────────
+  bool isSavedToArchive;   // true → RaceResultArchive or RaceScheduleCache 저장 완료
+  DateTime? savedAt;       // 저장 완료 시각
+
   _UploadedItem({
     required this.id,
     required this.name,
@@ -142,6 +146,8 @@ class _UploadedItem {
     this.parsedSummary,
     this.entries = const [],
     List<_ParseLog>? parseLogs,
+    this.isSavedToArchive = false,
+    this.savedAt,
   })  : resultMatrix = null,
         parseLogs = parseLogs ?? [];
 
@@ -156,6 +162,8 @@ class _UploadedItem {
     'uploadedAt': uploadedAt.toIso8601String(),
     'parseStatus': parseStatus,
     'parsedSummary': parsedSummary,
+    'isSavedToArchive': isSavedToArchive,
+    'savedAt': savedAt?.toIso8601String(),
     // entries 영속화 (결과 데이터 보존)
     'entries': entries.map((e) => e.toJson()).toList(),
   };
@@ -172,6 +180,10 @@ class _UploadedItem {
       uploadedAt: DateTime.parse(j['uploadedAt'] as String),
       parseStatus: (j['parseStatus'] as String?) ?? 'done',
       parsedSummary: j['parsedSummary'] as String?,
+      isSavedToArchive: (j['isSavedToArchive'] as bool?) ?? false,
+      savedAt: j['savedAt'] != null
+          ? DateTime.tryParse(j['savedAt'] as String)
+          : null,
       entries: rawEntries
           .map((e) => _ParsedRaceEntry.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -590,7 +602,7 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
       _addLog(item, 'info', '출전마 ${entries.length}두 인식 완료');
       setState(() {
         item.parseStatus   = 'done';
-        item.parsedSummary = '${item.raceNo}경주 출전표 — ${entries.length}두 인식 완료 · 저장 버튼으로 캐시 반영';
+        item.parsedSummary = '${item.raceNo}경주 출전표 — ${entries.length}두 인식 완료 · 홈 경주 목록 자동 연동 중';
         item.entries       = entries;
       });
     } else {
@@ -666,6 +678,12 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
     }
     // 완료 후 영속 저장 (entries 포함)
     await _saveItemsToPrefs();
+
+    // ── 파이프라인 완료 즉시 아카이브/캐시 자동 저장 ─────────────────────
+    // 'done' 상태가 된 항목을 즉시 홈화면에 연동 (수동 버튼 클릭 불필요)
+    if (item.parseStatus == 'done') {
+      await _saveToCache(item);
+    }
   }
 
   // ── 파이프라인 로그 추가 헬퍼 ───────────────────────────────────────
@@ -844,8 +862,12 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
         );
         _addLog(item, 'info', '출전표 → RaceScheduleCache 저장 완료');
         if (mounted) {
-          setState(() => _globalMsg =
-            '✅ 출전표 캐시 저장 완료 · 앱 새로고침 시 경주 목록에 반영됩니다.');
+          setState(() {
+            item.isSavedToArchive = true;
+            item.savedAt = DateTime.now();
+            _globalMsg = '✅ 출전표 캐시 저장 완료 · 앱 새로고침 시 경주 목록에 반영됩니다.';
+          });
+          await _saveItemsToPrefs();
         }
 
       } else {
@@ -891,7 +913,7 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
         // RaceResultArchive 직접 저장 (배치 우회 — 이미지 업로드 경로)
         await RaceResultArchive.instance.saveImageUploadResult(kraResult);
         _addLog(item, 'info',
-          '결과 → RaceResultArchive 저장 완료 (${horses.length}두)');
+          '결과 → RaceResultArchive 저장 완료 (${horses.length}두) → 홈 경기결과 자동 연동');
 
         if (mounted) {
           final top3 = horses
@@ -900,8 +922,12 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
             ..sort((a, b) => a.rank.compareTo(b.rank));
           final top3str = top3.map((h) =>
               '${h.rank}착 ${h.horseName}').join(' · ');
-          setState(() => _globalMsg =
-            '✅ 경주기록 저장 완료 | $top3str | 결과 화면에서 확인 가능합니다.');
+          setState(() {
+            item.isSavedToArchive = true;
+            item.savedAt = DateTime.now();
+            _globalMsg = '✅ 경주기록 저장 완료 | $top3str\n홈 → 경기 결과보기에서 즉시 확인 가능합니다.';
+          });
+          await _saveItemsToPrefs();
         }
       }
     } catch (e, stack) {
@@ -1356,6 +1382,10 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
             _resultSnapshotCard(item),
           ],
 
+          // ── 홈 연동 완료 배너 (자동 저장 완료 즉시 표시) ─────────────────
+          if (item.parseStatus == 'done' && item.isSavedToArchive)
+            _homeLinkedBanner(item),
+
           // ── 펼쳐진 상세 (출전마 리스트 + 저장 버튼) ──────────────────────
           if (isExpanded && item.entries.isNotEmpty) ...[
             const Divider(color: Color(0xFF1A1A3A), height: 1),
@@ -1376,41 +1406,11 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
                     _parseLogViewer(item),
                     const SizedBox(height: 4),
                   ],
-                  // 저장 버튼 (완료된 항목만)
+                  // ── 저장 상태 버튼: 미저장→수동 저장 / 저장완료→재저장 버튼 ──
                   if (item.parseStatus == 'done')
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: item.type == 'result'
-                              ? const Color(0xFF1A1A3A)
-                              : const Color(0xFF1E3A2A),
-                          foregroundColor: item.type == 'result'
-                              ? const Color(0xFFFFD54F)
-                              : const Color(0xFF81C784),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                          side: BorderSide(
-                            color: item.type == 'result'
-                                ? const Color(0xFF6A5A00)
-                                : const Color(0xFF2E6A3A),
-                          ),
-                        ),
-                        onPressed: () => _saveToCache(item),
-                        icon: Icon(
-                          item.type == 'result'
-                              ? Icons.leaderboard : Icons.save_alt,
-                          size: 16,
-                        ),
-                        label: Text(
-                          item.type == 'result'
-                              ? '착순 결과 아카이브에 저장'
-                              : '출전표 경주 캐시에 저장',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ),
+                    item.isSavedToArchive
+                        ? _savedConfirmButton(item)
+                        : _saveActionButton(item),
                 ],
               ),
             ),
@@ -1545,6 +1545,191 @@ class _ImageUploadTabState extends State<_ImageUploadTab>
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ① 홈 연동 완료 배너 — 자동 저장 완료 즉시 카드 하단에 표시
+  // ─────────────────────────────────────────────────────────────────────
+  Widget _homeLinkedBanner(_UploadedItem item) {
+    final isResult = item.type == 'result';
+    final timeLabel = item.savedAt != null
+        ? '${item.savedAt!.hour.toString().padLeft(2,"0")}:${item.savedAt!.minute.toString().padLeft(2,"0")} 자동 저장됨'
+        : '자동 저장 완료';
+    final mainLabel = isResult
+        ? '홈 → 경기 결과보기에 즉시 반영됨'
+        : '홈 → 경주 목록에 반영됨';
+    final subLabel = isResult
+        ? 'API 미응답 시 이 데이터가 폴백으로 자동 표시됩니다'
+        : '앱 새로고침 후 경주 선택 화면에서 확인 가능합니다';
+    final color = isResult ? const Color(0xFF4CAF50) : const Color(0xFF42A5F5);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(10, 4, 10, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32, height: 32,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Icon(
+                isResult ? Icons.home_outlined : Icons.calendar_today_outlined,
+                color: color, size: 16,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(mainLabel,
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 11, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(subLabel,
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 9.5)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Text('✓ 연동',
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 9, fontWeight: FontWeight.w800)),
+              ),
+              const SizedBox(height: 3),
+              Text(timeLabel,
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      fontSize: 8.5)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ② 저장 완료 확인 버튼 — 이미 저장된 항목, 재저장 가능
+  // ─────────────────────────────────────────────────────────────────────
+  Widget _savedConfirmButton(_UploadedItem item) {
+    final isResult = item.type == 'result';
+    return Row(
+      children: [
+        // 저장 완료 표시
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 9),
+            decoration: BoxDecoration(
+              color: isResult
+                  ? const Color(0xFF1A2A1A)
+                  : const Color(0xFF1A2030),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isResult
+                    ? const Color(0xFF2E6A3A)
+                    : const Color(0xFF1E4A7A),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.check_circle_outline,
+                    color: isResult
+                        ? const Color(0xFF66BB6A)
+                        : const Color(0xFF42A5F5),
+                    size: 15),
+                const SizedBox(width: 6),
+                Text(
+                  isResult ? '홈 결과보기 연동 완료' : '경주 캐시 저장 완료',
+                  style: TextStyle(
+                    color: isResult
+                        ? const Color(0xFF66BB6A)
+                        : const Color(0xFF42A5F5),
+                    fontSize: 11, fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        // 재저장 버튼 (작게)
+        GestureDetector(
+          onTap: () => _saveToCache(item),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A2A),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF333355)),
+            ),
+            child: const Icon(Icons.refresh,
+                color: Color(0xFF555580), size: 14),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ③ 저장 액션 버튼 — 아직 저장 안 된 항목 (자동 저장 실패 폴백)
+  // ─────────────────────────────────────────────────────────────────────
+  Widget _saveActionButton(_UploadedItem item) {
+    final isResult = item.type == 'result';
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isResult
+              ? const Color(0xFF1A1A3A)
+              : const Color(0xFF1E3A2A),
+          foregroundColor: isResult
+              ? const Color(0xFFFFD54F)
+              : const Color(0xFF81C784),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8)),
+          side: BorderSide(
+            color: isResult
+                ? const Color(0xFF6A5A00)
+                : const Color(0xFF2E6A3A),
+          ),
+        ),
+        onPressed: () => _saveToCache(item),
+        icon: Icon(
+          isResult ? Icons.leaderboard : Icons.save_alt,
+          size: 16,
+        ),
+        label: Text(
+          isResult
+              ? '홈 결과보기에 저장 (수동)'
+              : '경주 캐시에 저장 (수동)',
+          style: const TextStyle(fontSize: 12),
+        ),
       ),
     );
   }
