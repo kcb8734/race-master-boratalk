@@ -969,137 +969,220 @@ class EntryTextParser {
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  //  6. DATA TIPS 파싱
+  //  6. DATA TIPS 파싱  ── 마명(horseName) 딕셔너리 기반 역추적 매핑 ──
   // ══════════════════════════════════════════════════════════════════════
+  //
+  //  [설계 원칙]
+  //  1) 마명(horseName)을 Key로 삼는 Map<String, int> nameToGate 빌드
+  //     → 마번+공백 없이 "11세명피크" 형식도 마명으로 gateNo 역추적
+  //  2) 섹션 추출 후 각 줄을 _parseDtLine() 으로 {gateNo, name, value} 추출
+  //     → gateNo 먼저 시도, 실패 시 마명 딕셔너리에서 역방향 조회
+  //  3) 속도지수 섹션 끝 탐지: '\n\n' 우선 탐지, 없으면 파일 끝까지
+  //  4) 상금 단위: 백만/억원/만원/천원 모두 처리
+  //  5) 속도지수 fallback: 미등재 마필 → 경주군 평균값 (디폴트85 하드코딩 제거)
+  //
   static ParsedDataTips _parseDataTips(
     String dataTipsText,
     List<ParsedHorseEntry> horses,
     List<String> warnings,
   ) {
-    // ── 레이팅 Top 파싱 ────────────────────────────────────────────────
-    // 패턴: 레이팅 컬럼 아래 "9 블랙마마 16.7%" 또는 숫자만 (현재 샘플에서는 없음)
-    final ratingRanking = <MapEntry<int, double>>[];
-
-    // ── 1700m(거리별) 승률 파싱 ────────────────────────────────────────
-    // 패턴: "9 블랙마마 16.7%"
-    final distWinRanking = <MapEntry<int, double>>[];
-    final distWinPattern = RegExp(
-      r'(\d{1,2})\s+([가-힣]+(?:\s+[가-힣]+)?)\s+([\d.]+)%',
-      multiLine: true,
-    );
-    // 승률 컬럼 구간 추출
-    final winSection = _extractSection(dataTipsText, '1700m 승률', '1700m 최고기록');
-    for (final m in distWinPattern.allMatches(winSection)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      final rate   = double.tryParse(m.group(3)!) ?? 0.0;
-      if (gateNo >= 1 && gateNo <= 11) {
-        distWinRanking.add(MapEntry(gateNo, rate / 100.0));
-      }
+    // ── Step 0: 마명 → 마번 역방향 딕셔너리 구축 ──────────────────────
+    // 공백 제거·초성 일치 등 fuzzy 처리: 마명 정규화 후 Map 구성
+    final nameToGate = <String, int>{};
+    for (final h in horses) {
+      // 원본 마명
+      nameToGate[h.horseName.trim()] = h.gateNo;
+      // 공백 제거 버전 (다음절 마명 공백 오류 대응)
+      nameToGate[h.horseName.replaceAll(' ', '')] = h.gateNo;
     }
 
-    // ── 1700m 최고기록 파싱 ────────────────────────────────────────────
-    // 패턴: "8 명품족 1:53.3"
-    final distBestRanking = <MapEntry<int, String>>[];
-    final bestSection = _extractSection(dataTipsText, '1700m 최고기록', '최근 1년 상금');
-    final timeLinePattern = RegExp(
-      r'(\d{1,2})\s+([가-힣]+(?:\s+[가-힣]+)?)\s+(\d:\d{2}\.\d)',
+    // ── 헬퍼: 한 줄에서 (마번, 마명, 숫자값) 추출 ─────────────────────
+    // 지원 형식:
+    //   "9 블랙마마 14.0"       (공백구분)
+    //   "11세명피크 13.7"       (마번+마명 붙여쓰기)
+    //   "11 세명피크 13.7"      (표준)
+    //   "6 레전드매치 94"       (속도지수)
+    //   "9 블랙마마 16.7%"      (승률)
+    //   "8 명품족 1:53.3"       (최고기록)
+    //   "11 세명피크 9.9백만"   (상금)
+    //   "2 온누리빛 94pt"       (레이팅)
+
+    // 패턴A: 마번 + 공백 + 마명 + 공백 + 값
+    final linePatternA = RegExp(
+      r'^\s*(\d{1,2})\s+([가-힣]{2,8}(?:\s+[가-힣]{1,4})?)\s+([\d:.]+(?:\.\d)?(?:pt|%|백만|억원|만원|천원)?)',
       multiLine: true,
     );
-    for (final m in timeLinePattern.allMatches(bestSection)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      if (gateNo >= 1 && gateNo <= 11) {
-        distBestRanking.add(MapEntry(gateNo, m.group(3)!));
+    // 패턴B: 마번 + 마명(공백없음) + 공백 + 값  → "11세명피크 13.7"
+    final linePatternB = RegExp(
+      r'^\s*(\d{1,2})([가-힣]{2,8})\s+([\d:.]+(?:\.\d)?(?:pt|%|백만|억원|만원|천원)?)',
+      multiLine: true,
+    );
+
+    // 단일 섹션 전체 파싱: Map<int gateNo, double value>
+    Map<int, double> parseSectionDouble(
+      String section,
+      double Function(String raw) valueParser,
+    ) {
+      final result = <int, double>{};
+      void tryAdd(int gateNo, String nameRaw, String valRaw) {
+        if (gateNo < 1 || gateNo > 16) return;
+        final v = valueParser(valRaw);
+        if (v <= 0) return;
+        result.putIfAbsent(gateNo, () => v);
       }
+
+      for (final m in linePatternA.allMatches(section)) {
+        int gateNo = int.tryParse(m.group(1)!) ?? 0;
+        final nameRaw = m.group(2)!.trim();
+        final valRaw  = m.group(3)!.trim();
+        // 마명 역추적 교차검증: gateNo가 이미 nameToGate와 다른 경우 보정
+        if (gateNo == 0) {
+          gateNo = nameToGate[nameRaw] ??
+                   nameToGate[nameRaw.replaceAll(' ', '')] ?? 0;
+        }
+        tryAdd(gateNo, nameRaw, valRaw);
+      }
+      // 패턴A 매칭 실패한 줄 → 패턴B로 재시도
+      for (final m in linePatternB.allMatches(section)) {
+        int gateNo = int.tryParse(m.group(1)!) ?? 0;
+        final nameRaw = m.group(2)!.trim();
+        final valRaw  = m.group(3)!.trim();
+        if (gateNo == 0) {
+          gateNo = nameToGate[nameRaw] ??
+                   nameToGate[nameRaw.replaceAll(' ', '')] ?? 0;
+        }
+        tryAdd(gateNo, nameRaw, valRaw);
+      }
+      return result;
     }
 
-    // ── 최근 1년 상금 파싱 ────────────────────────────────────────────
-    // 패턴: "6 블랙선 24.2백만" 또는 "10.5백만"
-    final prize1YearRanking = <MapEntry<int, int>>[];
-    final prize6MonthRanking = <MapEntry<int, int>>[];
+    // 최고기록(mm:ss.d) 파싱용 별도 헬퍼
+    Map<int, String> parseSectionBestTime(String section) {
+      final result = <int, String>{};
+      final bestPat = RegExp(
+        r'^\s*(\d{1,2})\s*([가-힣]{2,8}(?:\s+[가-힣]{1,4})?)\s+(\d:\d{2}\.\d)',
+        multiLine: true,
+      );
+      for (final m in bestPat.allMatches(section)) {
+        int gateNo = int.tryParse(m.group(1)!) ?? 0;
+        final nameRaw = m.group(2)!.trim();
+        if (gateNo == 0) gateNo = nameToGate[nameRaw] ?? 0;
+        if (gateNo >= 1 && gateNo <= 16) {
+          result.putIfAbsent(gateNo, () => m.group(3)!);
+        }
+      }
+      return result;
+    }
 
+    // 상금 금액 파싱 (단위 변환 포함)
+    double parseMoneyVal(String raw) {
+      // "9.9백만" → 9900000, "1.2억원" → 120000000, "24.2백만" → 24200000
+      final mBaek = RegExp(r'([\d.]+)백만').firstMatch(raw);
+      if (mBaek != null) {
+        return (double.tryParse(mBaek.group(1)!) ?? 0.0) * 1000000;
+      }
+      final mEok = RegExp(r'([\d.]+)억원').firstMatch(raw);
+      if (mEok != null) {
+        return (double.tryParse(mEok.group(1)!) ?? 0.0) * 100000000;
+      }
+      final mMan = RegExp(r'([\d.]+)만원').firstMatch(raw);
+      if (mMan != null) {
+        return (double.tryParse(mMan.group(1)!) ?? 0.0) * 10000;
+      }
+      final mCheon = RegExp(r'([\d.]+)천원').firstMatch(raw);
+      if (mCheon != null) {
+        return (double.tryParse(mCheon.group(1)!) ?? 0.0) * 1000;
+      }
+      return double.tryParse(raw.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0.0;
+    }
+
+    // ── Step 1: 섹션별 파싱 실행 ──────────────────────────────────────
+
+    // 1-1. 레이팅 (단위: pt)
+    final ratingSection = _extractSection(dataTipsText, '레이팅', '1700m');
+    final ratingMap = parseSectionDouble(ratingSection, (v) {
+      return double.tryParse(v.replaceAll('pt', '').trim()) ?? 0.0;
+    });
+
+    // 1-2. 거리별 승률 (단위: %)
+    final winSection = _extractSection(
+        dataTipsText,
+        RegExp(r'\d+m\s*승률').firstMatch(dataTipsText)?.group(0) ?? '승률',
+        RegExp(r'\d+m\s*최고기록').firstMatch(dataTipsText)?.group(0) ?? '최고기록');
+    final distWinMap = parseSectionDouble(winSection, (v) {
+      return (double.tryParse(v.replaceAll('%', '').trim()) ?? 0.0) / 100.0;
+    });
+
+    // 1-3. 거리별 최고기록 (mm:ss.d)
+    final bestSection = _extractSection(
+        dataTipsText,
+        RegExp(r'\d+m\s*최고기록').firstMatch(dataTipsText)?.group(0) ?? '최고기록',
+        '최근 1년');
+    final distBestMap = parseSectionBestTime(bestSection);
+
+    // 1-4. 최근 1년 상금
     final prize1Section = _extractSection(dataTipsText, '최근 1년 상금', '최근 6개월 상금');
+    final prize1Map = parseSectionDouble(prize1Section, parseMoneyVal);
+
+    // 1-5. 최근 6개월 상금
     final prize6Section = _extractSection(dataTipsText, '최근 6개월 상금', '초반 200m');
+    final prize6Map = parseSectionDouble(prize6Section, parseMoneyVal);
 
-    final prizeLinePattern = RegExp(
-      r'(\d{1,2})\s*(?:[가-힣]+(?:\s+[가-힣]+)?)\s+([\d.]+)\s*(백만|만원|천원)',
-      multiLine: true,
-    );
-
-    for (final m in prizeLinePattern.allMatches(prize1Section)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      final amount = _parsePrizeAmountFloat(m.group(2)!, m.group(3)!);
-      if (gateNo >= 1 && gateNo <= 11) {
-        prize1YearRanking.add(MapEntry(gateNo, amount));
-      }
-    }
-    for (final m in prizeLinePattern.allMatches(prize6Section)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      final amount = _parsePrizeAmountFloat(m.group(2)!, m.group(3)!);
-      if (gateNo >= 1 && gateNo <= 11) {
-        prize6MonthRanking.add(MapEntry(gateNo, amount));
-      }
-    }
-
-    // ── 초반 200m / 종반 200m 파싱 ───────────────────────────────────
-    // 패턴: "9 블랙마마 14.0" (초)
-    final s1fRanking = <MapEntry<int, double>>[];
-    final g1fRanking = <MapEntry<int, double>>[];
-
+    // 1-6. 초반 200m (S1F) — 단위: 초(소수)
     final s1fSection = _extractSection(dataTipsText, '초반 200m', '종반 200m');
+    final s1fMap = parseSectionDouble(s1fSection, (v) {
+      return double.tryParse(v) ?? 0.0;
+    });
+
+    // 1-7. 종반 200m (G1F) — 단위: 초(소수)
+    // 섹션 끝: '속도지수' 키워드 먼저, 없으면 파일 끝
     final g1fSection = _extractSection(dataTipsText, '종반 200m', '속도지수');
+    final g1fMap = parseSectionDouble(g1fSection, (v) {
+      return double.tryParse(v) ?? 0.0;
+    });
 
-    final timeSecPattern = RegExp(
-      r'(\d{1,2})\s+([가-힣]+(?:\s+[가-힣]+)?)\s+([\d.]+)',
-      multiLine: true,
-    );
-    for (final m in timeSecPattern.allMatches(s1fSection)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      final t      = double.tryParse(m.group(3)!) ?? 0.0;
-      if (gateNo >= 1 && gateNo <= 11 && t > 0) {
-        s1fRanking.add(MapEntry(gateNo, t));
-      }
-    }
-    for (final m in timeSecPattern.allMatches(g1fSection)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      final t      = double.tryParse(m.group(3)!) ?? 0.0;
-      if (gateNo >= 1 && gateNo <= 11 && t > 0) {
-        g1fRanking.add(MapEntry(gateNo, t));
-      }
-    }
+    // 1-8. 속도지수 — 섹션 끝: 빈 줄 or 파일 끝 (둘 다 처리)
+    // _extractSectionToEnd가 파일 끝까지 반환 → 안전
+    final speedSection = _extractSectionToEnd(dataTipsText, '속도지수');
+    final speedMap = parseSectionDouble(speedSection, (v) {
+      final n = double.tryParse(v.replaceAll(RegExp(r'[^\d.]'), '').trim());
+      return (n != null && n >= 50 && n <= 150) ? n : 0.0;
+    });
 
-    // ── 속도지수 파싱 ─────────────────────────────────────────────────
-    // 패턴: "8 명품족 92"
-    final speedIndexRanking = <MapEntry<int, double>>[];
-    final speedSection = _extractSection(dataTipsText, '속도지수', '\n\n');
-    final speedPattern = RegExp(
-      r'(\d{1,2})\s+([가-힣]+(?:\s+[가-힣]+)?)\s+(\d{2,3})',
-      multiLine: true,
-    );
-    for (final m in speedPattern.allMatches(speedSection)) {
-      final gateNo = int.tryParse(m.group(1)!) ?? 0;
-      final idx    = double.tryParse(m.group(3)!) ?? 0.0;
-      if (gateNo >= 1 && gateNo <= 11 && idx > 0) {
-        speedIndexRanking.add(MapEntry(gateNo, idx));
-      }
-    }
+    // ── Step 2: MapEntry 리스트로 변환 ────────────────────────────────
+    List<MapEntry<int, T>> toEntries<T>(Map<int, T> m) =>
+        m.entries.map((e) => MapEntry(e.key, e.value)).toList();
 
     return ParsedDataTips(
-      ratingRanking:     ratingRanking,
-      distWinRanking:    distWinRanking,
-      distBestRanking:   distBestRanking,
-      prize1YearRanking: prize1YearRanking,
-      prize6MonthRanking:prize6MonthRanking,
-      s1fRanking:        s1fRanking,
-      g1fRanking:        g1fRanking,
-      speedIndexRanking: speedIndexRanking,
+      ratingRanking:      toEntries(ratingMap),
+      distWinRanking:     toEntries(distWinMap),
+      distBestRanking:    toEntries(distBestMap),
+      prize1YearRanking:  toEntries(prize1Map)
+          .map((e) => MapEntry(e.key, e.value.round())).toList(),
+      prize6MonthRanking: toEntries(prize6Map)
+          .map((e) => MapEntry(e.key, e.value.round())).toList(),
+      s1fRanking:         toEntries(s1fMap),
+      g1fRanking:         toEntries(g1fMap),
+      speedIndexRanking:  toEntries(speedMap),
     );
   }
 
-  // ── DATA TIPS 구간 텍스트 추출 헬퍼 ─────────────────────────────────
+  // ── DATA TIPS 구간 텍스트 추출 헬퍼 (섹션 시작→다음 섹션) ──────────
   static String _extractSection(String text, String startKey, String endKey) {
     final si = text.indexOf(startKey);
     if (si < 0) return '';
     final ei = text.indexOf(endKey, si + startKey.length);
+    return ei > si
+        ? text.substring(si + startKey.length, ei)
+        : text.substring(si + startKey.length);
+  }
+
+  // ── 섹션 시작 → 파일 끝까지 (속도지수처럼 마지막 섹션용) ─────────
+  static String _extractSectionToEnd(String text, String startKey) {
+    final si = text.indexOf(startKey);
+    if (si < 0) return '';
+    // 빈 줄 (\n\n) 우선 탐지 → 없으면 파일 끝까지
+    final ei = text.indexOf('\n\n', si + startKey.length);
     return ei > si
         ? text.substring(si + startKey.length, ei)
         : text.substring(si + startKey.length);
@@ -1113,26 +1196,45 @@ class EntryTextParser {
     ParsedDataTips tips,
     List<String> warnings,
   ) {
-    // 경주군 평균값 계산 (fallback용)
-    final avgS1f = tips.s1fRanking.isNotEmpty
-        ? tips.s1fRanking.map((e) => e.value).reduce((a, b) => a + b) /
-          tips.s1fRanking.length
-        : 14.0;
-    final avgG1f = tips.g1fRanking.isNotEmpty
-        ? tips.g1fRanking.map((e) => e.value).reduce((a, b) => a + b) /
-          tips.g1fRanking.length
-        : 14.0;
-    final avgSpeed = tips.speedIndexRanking.isNotEmpty
-        ? tips.speedIndexRanking.map((e) => e.value).reduce((a, b) => a + b) /
-          tips.speedIndexRanking.length
-        : 85.0;
+    // ── 경주군 평균값 계산 (fallback용) ──────────────────────────────
+    // s1f/g1f: 실측값만 평균 (0값 제외)
+    final s1fActual = tips.s1fRanking.where((e) => e.value > 0).toList();
+    final g1fActual = tips.g1fRanking.where((e) => e.value > 0).toList();
+    final speedActual = tips.speedIndexRanking.where((e) => e.value > 0).toList();
+
+    final avgS1f = s1fActual.isNotEmpty
+        ? s1fActual.map((e) => e.value).reduce((a, b) => a + b) / s1fActual.length
+        : 13.5;
+    final avgG1f = g1fActual.isNotEmpty
+        ? g1fActual.map((e) => e.value).reduce((a, b) => a + b) / g1fActual.length
+        : 13.8;
+    // 속도지수 평균: 하드코딩 85 대신 실측 평균 사용
+    final avgSpeed = speedActual.isNotEmpty
+        ? speedActual.map((e) => e.value).reduce((a, b) => a + b) / speedActual.length
+        : 88.0; // 일반적인 경주 평균 속도지수
+
+    // ── 주행스타일 판정 임계값 동적 계산 ────────────────────────────
+    // S1F 범위 기반: 경주군 최소-최대 차이의 20%를 임계값으로 설정
+    final s1fMin = s1fActual.isNotEmpty
+        ? s1fActual.map((e) => e.value).reduce((a, b) => a < b ? a : b) : avgS1f;
+    final s1fMax = s1fActual.isNotEmpty
+        ? s1fActual.map((e) => e.value).reduce((a, b) => a > b ? a : b) : avgS1f;
+    final g1fMin = g1fActual.isNotEmpty
+        ? g1fActual.map((e) => e.value).reduce((a, b) => a < b ? a : b) : avgG1f;
+    final g1fMax = g1fActual.isNotEmpty
+        ? g1fActual.map((e) => e.value).reduce((a, b) => a > b ? a : b) : avgG1f;
+
+    // 임계값: 범위의 20% (최소 0.1초)
+    final s1fThreshold = ((s1fMax - s1fMin) * 0.20).clamp(0.10, 0.50);
+    final g1fThreshold = ((g1fMax - g1fMin) * 0.20).clamp(0.10, 0.50);
 
     return horses.map((horse) {
-      // DATA TIPS에서 해당 마번 데이터 조회
+      // ── DATA TIPS에서 해당 마번 데이터 조회 (마번 기준 직접 조회) ──
       double distWinRate = 0.0;
       String distBestTime = '';
       int prize1Year = 0, prize6Month = 0;
-      double s1fTime = avgS1f, g1fTime = avgG1f, speedIndex = avgSpeed;
+      // 실측값 없으면 null (평균 대입은 아래에서 처리)
+      double? s1fTimeRaw, g1fTimeRaw, speedIndexRaw;
 
       // 거리별 승률
       final dwr = tips.distWinRanking
@@ -1153,35 +1255,94 @@ class EntryTextParser {
           .where((e) => e.key == horse.gateNo).firstOrNull;
       if (p6 != null) prize6Month = p6.value;
 
-      // S1F / G1F
+      // S1F — 실측값 저장 (fallback은 아래 주행스타일 분류 후)
       final s1 = tips.s1fRanking
           .where((e) => e.key == horse.gateNo).firstOrNull;
-      if (s1 != null) s1fTime = s1.value;
+      if (s1 != null && s1.value > 0) s1fTimeRaw = s1.value;
 
+      // G1F
       final g1 = tips.g1fRanking
           .where((e) => e.key == horse.gateNo).firstOrNull;
-      if (g1 != null) g1fTime = g1.value;
+      if (g1 != null && g1.value > 0) g1fTimeRaw = g1.value;
 
-      // 속도지수
+      // 속도지수 — 실측값 없으면 null (평균값으로 나중에 채움)
       final si = tips.speedIndexRanking
           .where((e) => e.key == horse.gateNo).firstOrNull;
-      if (si != null) speedIndex = si.value;
+      if (si != null && si.value > 0) speedIndexRaw = si.value;
 
-      // ── 주행 스타일 자동 분류 ──────────────────────────────────────
-      // 초반 빠름(s1f 낮음) + 종반 느림(g1f 높음) → 선행
-      // 초반 느림(s1f 높음) + 종반 빠름(g1f 낮음) → 추입
+      // ── 주행 스타일 정밀 분류기 ───────────────────────────────────
+      //
+      //  [분류 로직]
+      //  실측 s1f/g1f 모두 있는 경우만 분류 → 한쪽만 있으면 unknown
+      //
+      //  s1fRelative = horse.s1f - avgS1f
+      //    음수 → 초반 빠름  (선행 후보)
+      //    양수 → 초반 느림  (추입 후보)
+      //
+      //  g1fRelative = horse.g1f - avgG1f
+      //    음수 → 종반 빠름  (추입 후보)
+      //    양수 → 종반 느림  (선행 후보)
+      //
+      //  [임계값] 경주군 범위의 20% (동적 계산)
+      //
+      //  선행 (frontRunner):  s1f << avg AND g1f >> avg
+      //  추입 (closer):       s1f >> avg AND g1f << avg
+      //  선입 (stalker):      그 외 (초반 중간권 + 종반 중간권)
+      //  unknown:             s1f/g1f 실측값 없음
+      //
       RunningStyle style = RunningStyle.unknown;
-      if (s1fTime > 0 && g1fTime > 0) {
-        final s1fRelative = s1fTime - avgS1f; // 음수 = 빠름
-        final g1fRelative = g1fTime - avgG1f; // 음수 = 빠름
-        if (s1fRelative < -0.2 && g1fRelative > 0.2) {
-          style = RunningStyle.frontRunner;  // 선행
-        } else if (s1fRelative > 0.2 && g1fRelative < -0.2) {
-          style = RunningStyle.closer;       // 추입
+      final double s1fTime;
+      final double g1fTime;
+
+      if (s1fTimeRaw != null && g1fTimeRaw != null) {
+        s1fTime = s1fTimeRaw;
+        g1fTime = g1fTimeRaw;
+        final s1fRelative = s1fTime - avgS1f; // 음수 = 초반 빠름
+        final g1fRelative = g1fTime - avgG1f; // 음수 = 종반 빠름
+
+        if (s1fRelative <= -s1fThreshold && g1fRelative >= g1fThreshold) {
+          style = RunningStyle.frontRunner;  // 선행: 초반↑ 종반↓
+        } else if (s1fRelative >= s1fThreshold && g1fRelative <= -g1fThreshold) {
+          style = RunningStyle.closer;       // 추입: 초반↓ 종반↑
+        } else if (s1fRelative <= 0 && g1fRelative <= 0) {
+          // 초반/종반 모두 평균보다 빠름 → 선입(stalker)
+          style = RunningStyle.stalker;
+        } else if (s1fRelative <= -s1fThreshold) {
+          // 초반만 빠름, 종반은 평균 → 선행 경향
+          style = RunningStyle.frontRunner;
+        } else if (g1fRelative <= -g1fThreshold) {
+          // 종반만 빠름, 초반은 평균 → 추입 경향
+          style = RunningStyle.closer;
         } else {
-          style = RunningStyle.stalker;      // 선입
+          style = RunningStyle.stalker;      // 선입: 나머지
         }
+      } else if (s1fTimeRaw != null) {
+        // s1f만 있음: 초반 기록만으로 분류
+        s1fTime = s1fTimeRaw;
+        g1fTime = avgG1f; // 종반 fallback
+        final s1fRelative = s1fTime - avgS1f;
+        style = s1fRelative <= -s1fThreshold
+            ? RunningStyle.frontRunner
+            : s1fRelative >= s1fThreshold
+                ? RunningStyle.stalker
+                : RunningStyle.stalker;
+      } else if (g1fTimeRaw != null) {
+        // g1f만 있음: 종반 기록만으로 분류
+        s1fTime = avgS1f; // 초반 fallback
+        g1fTime = g1fTimeRaw;
+        final g1fRelative = g1fTime - avgG1f;
+        style = g1fRelative <= -g1fThreshold
+            ? RunningStyle.closer
+            : RunningStyle.stalker;
+      } else {
+        // 실측값 없음 → 평균값 사용 + unknown
+        s1fTime = avgS1f;
+        g1fTime = avgG1f;
+        style = RunningStyle.unknown;
       }
+
+      // 속도지수: 실측값 우선, 없으면 경주군 평균 (하드코딩 85 제거)
+      final double speedIndex = speedIndexRaw ?? avgSpeed;
 
       // ── 업데이트된 HorseAdvancedStat 생성 ─────────────────────────
       final updatedStat = HorseAdvancedStat(
@@ -1407,18 +1568,6 @@ class EntryTextParser {
       case '만원': return (value * 10000).round();
       case '억원': return (value * 100000000).round();
       default:     return value.round();
-    }
-  }
-
-  /// 소수점 상금 → 정수(원) 변환 (예: "24.2 백만" → 24200000)
-  static int _parsePrizeAmountFloat(String numStr, String unit) {
-    final clean = numStr.replaceAll(',', '');
-    final value = double.tryParse(clean) ?? 0.0;
-    switch (unit) {
-      case '백만':  return (value * 1000000).round();
-      case '만원':  return (value * 10000).round();
-      case '천원':  return (value * 1000).round();
-      default:      return value.round();
     }
   }
 
