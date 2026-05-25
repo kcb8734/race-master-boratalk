@@ -8,6 +8,7 @@ import '../services/race_schedule_cache.dart';
 import '../services/race_result_archive.dart';
 import '../services/kra_bulk_sync_service.dart';
 import '../services/kra_bulk_data_binder.dart';
+import '../services/entry_text_parser.dart';
 import '../models/race_models.dart';
 import 'admin_login_screen.dart';
 
@@ -32,7 +33,7 @@ class _AdminDataPanelScreenState extends State<AdminDataPanelScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -85,6 +86,7 @@ class _AdminDataPanelScreenState extends State<AdminDataPanelScreen>
           labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
           tabs: const [
             Tab(icon: Icon(Icons.add_photo_alternate, size: 18), text: '출전표 업로드'),
+            Tab(icon: Icon(Icons.text_snippet, size: 18), text: '텍스트 파싱'),
             Tab(icon: Icon(Icons.schedule, size: 18), text: '벌크 싱크'),
             Tab(icon: Icon(Icons.bug_report, size: 18), text: '에러 로그'),
           ],
@@ -94,6 +96,7 @@ class _AdminDataPanelScreenState extends State<AdminDataPanelScreen>
         controller: _tabController,
         children: const [
           _ImageUploadTab(),
+          _TextParseTab(),
           _BulkSyncTab(),
           _ErrorLogTab(),
         ],
@@ -2996,6 +2999,772 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
             Text('▸ ${e.encodingNote}',
               style: const TextStyle(color: Color(0xFF5A5A80), fontSize: 9)),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  Tab 2 (신규): 출전표 텍스트 붙여넣기 파서
+// ══════════════════════════════════════════════════════════════════════════
+class _TextParseTab extends StatefulWidget {
+  const _TextParseTab();
+  @override
+  State<_TextParseTab> createState() => _TextParseTabState();
+}
+
+class _TextParseTabState extends State<_TextParseTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  final _textCtrl = TextEditingController();
+  bool _isParsing = false;
+  ParsedRaceCard? _lastResult;
+  String _statusMsg = '';
+  String _injectionLog = '';
+  bool _showLog = false;
+
+  // 저장된 파싱 카드 목록
+  List<Map<String, dynamic>> _savedCards = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedCards();
+  }
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSavedCards() async {
+    final cards = await EntryTextParser.listAllParsedCards();
+    if (mounted) setState(() => _savedCards = cards);
+  }
+
+  // ── 파싱 실행 ──────────────────────────────────────────────────────────
+  Future<void> _runParse() async {
+    final text = _textCtrl.text.trim();
+    if (text.isEmpty) {
+      setState(() => _statusMsg = '⚠️ 출전표 텍스트를 붙여넣어 주세요.');
+      return;
+    }
+
+    setState(() {
+      _isParsing   = true;
+      _statusMsg   = '⏳ 파싱 중... (0 크레딧 소모)';
+      _injectionLog = '';
+      _showLog     = false;
+    });
+
+    try {
+      // 파싱 실행 (Regex 기반 — 외부 API 없음)
+      await Future.delayed(const Duration(milliseconds: 200)); // UI 갱신용
+      final card = EntryTextParser.parse(text);
+
+      // SharedPreferences 저장
+      await EntryTextParser.saveToCache(card);
+
+      // RaceScheduleCache에도 경주 메타 저장 (홈화면 연동)
+      await _syncToRaceScheduleCache(card);
+
+      final log = EntryTextParser.generateInjectionTestLog(card);
+
+      setState(() {
+        _isParsing    = false;
+        _lastResult   = card;
+        _injectionLog = log;
+        _statusMsg    = '✅ 파싱 완료! ${card.horses.length}마필 데이터 저장됨 '
+            '(경고 ${card.warnings.length}건)';
+      });
+
+      _loadSavedCards();
+    } catch (e) {
+      setState(() {
+        _isParsing = false;
+        _statusMsg = '❌ 파싱 오류: $e';
+      });
+    }
+  }
+
+  // ── RaceScheduleCache 연동 ────────────────────────────────────────────
+  Future<void> _syncToRaceScheduleCache(ParsedRaceCard card) async {
+    try {
+      final header = card.header;
+      final venueCode = _venueNameToCode(header.venue);
+      final today = DateTime.now();
+
+      // RaceInfo 목록 생성 (홈화면 경주 목록 갱신용)
+      final races = <RaceInfo>[
+        RaceInfo(
+          raceNo:        header.raceNo.toString(),
+          raceName:      '${header.raceNo}경주 (텍스트 파싱)',
+          startTime:     '',
+          distance:      header.distance,
+          condition:     header.condition,
+          grade:         header.grade,
+          venueCode:     venueCode,
+          venueName:     header.venue,
+          raceDate:      _formatDate(today),
+          totalHorses:   card.horses.length,
+          trackCondition:header.moisture > 0 ? '${header.moisture}%' : '-',
+        ),
+      ];
+
+      await RaceScheduleCache().saveSnapshot(
+        races:     races,
+        venueCode: venueCode,
+        date:      today,
+        source:    'text_parse',
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('[TextParseTab] RaceScheduleCache 연동 오류: $e');
+    }
+  }
+
+  String _venueNameToCode(String name) {
+    if (name.contains('부산') || name.contains('경남')) return '2';
+    if (name.contains('제주')) return '3';
+    return '1'; // 서울 기본
+  }
+
+  String _formatDate(DateTime dt) =>
+    '${dt.year}${dt.month.toString().padLeft(2,'0')}${dt.day.toString().padLeft(2,'0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── 헤더 ─────────────────────────────────────────────────────
+          _buildHeader(),
+          const SizedBox(height: 16),
+
+          // ── 텍스트 입력 영역 ─────────────────────────────────────────
+          _buildTextInput(),
+          const SizedBox(height: 12),
+
+          // ── 파싱 버튼 ────────────────────────────────────────────────
+          _buildParseButton(),
+          const SizedBox(height: 12),
+
+          // ── 상태 메시지 ──────────────────────────────────────────────
+          if (_statusMsg.isNotEmpty) _buildStatusMsg(),
+
+          // ── 파싱 결과 ────────────────────────────────────────────────
+          if (_lastResult != null) ...[
+            const SizedBox(height: 16),
+            _buildResultCard(),
+          ],
+
+          // ── 인젝션 테스트 로그 ────────────────────────────────────────
+          if (_injectionLog.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _buildLogToggle(),
+            if (_showLog) ...[
+              const SizedBox(height: 8),
+              _buildLogView(),
+            ],
+          ],
+
+          // ── 저장된 파싱 카드 목록 ─────────────────────────────────────
+          if (_savedCards.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            _buildSavedCardList(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A3A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF3A3A6A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.text_snippet, color: Color(0xFF6C63FF), size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                '출전표 텍스트 파서',
+                style: TextStyle(
+                  color: Color(0xFFE0E0FF),
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A3A1A),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF2E7D32)),
+                ),
+                child: const Text(
+                  '0 크레딧',
+                  style: TextStyle(
+                    color: Color(0xFF4CAF50),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '출전표 전체 텍스트를 붙여넣으면 마명·기수·체중·최근성적·DATA TIPS 10종을\n'
+            'Regex 파서가 자동 추출합니다. (외부 API 없음 — 완전 로컬 처리)',
+            style: TextStyle(color: Color(0xFF8888BB), fontSize: 11, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTextInput() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              '출전표 Raw Text',
+              style: TextStyle(
+                color: Color(0xFFAAAAAA),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              icon: const Icon(Icons.clear, size: 14, color: Color(0xFF555580)),
+              label: const Text(
+                '초기화',
+                style: TextStyle(color: Color(0xFF555580), fontSize: 11),
+              ),
+              onPressed: () => setState(() => _textCtrl.clear()),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D1F),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF3A3A6A)),
+          ),
+          child: TextField(
+            controller: _textCtrl,
+            maxLines: 14,
+            minLines: 8,
+            style: const TextStyle(
+              color: Color(0xFFD0D0EE),
+              fontSize: 11,
+              fontFamily: 'monospace',
+              height: 1.4,
+            ),
+            decoration: const InputDecoration(
+              hintText: '예) 서울  2경주국6등급  연령오픈...\n1브리도갤럭시\n3거(230213)흑갈색...\n\nDATA TIPS\n레이팅 승률 복승률...',
+              hintStyle: TextStyle(
+                color: Color(0xFF3A3A5A),
+                fontSize: 10,
+                height: 1.5,
+              ),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.all(12),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '텍스트 길이: ${_textCtrl.text.length}자',
+          style: const TextStyle(color: Color(0xFF444466), fontSize: 10),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildParseButton() {
+    return SizedBox(
+      height: 48,
+      child: ElevatedButton.icon(
+        onPressed: _isParsing ? null : _runParse,
+        icon: _isParsing
+            ? const SizedBox(
+                width: 16, height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Icon(Icons.play_arrow, size: 20),
+        label: Text(
+          _isParsing ? '파싱 중...' : '파싱 시작 (0 크레딧)',
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _isParsing
+              ? const Color(0xFF3A3A6A)
+              : const Color(0xFF6C63FF),
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusMsg() {
+    final isError   = _statusMsg.startsWith('❌');
+    final isWarning = _statusMsg.startsWith('⚠️');
+    final isSuccess = _statusMsg.startsWith('✅');
+    Color bg = isError
+        ? const Color(0xFF2A1A1A)
+        : isWarning
+            ? const Color(0xFF2A2A1A)
+            : isSuccess
+                ? const Color(0xFF1A2A1A)
+                : const Color(0xFF1A1A2A);
+    Color border = isError
+        ? const Color(0xFFC62828)
+        : isWarning
+            ? const Color(0xFFF9A825)
+            : isSuccess
+                ? const Color(0xFF2E7D32)
+                : const Color(0xFF3A3A6A);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+      ),
+      child: Text(
+        _statusMsg,
+        style: TextStyle(
+          color: isError
+              ? const Color(0xFFEF9A9A)
+              : isSuccess
+                  ? const Color(0xFFA5D6A7)
+                  : const Color(0xFFE0E0FF),
+          fontSize: 12,
+          height: 1.4,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResultCard() {
+    final card = _lastResult!;
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF12122A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF4CAF50)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 헤더
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1A3A1A),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(7)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 16),
+                const SizedBox(width: 8),
+                Text(
+                  '${card.header.venue} ${card.header.raceNo}경주 '
+                  '${card.header.distance}m 파싱 완료',
+                  style: const TextStyle(
+                    color: Color(0xFF4CAF50),
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '${card.horses.length}마필',
+                  style: const TextStyle(
+                    color: Color(0xFF81C784),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 마필 요약 목록
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                // 테이블 헤더
+                _buildResultTableHeader(),
+                const Divider(color: Color(0xFF2A2A4A), height: 8),
+                // 마필 행
+                ...card.horses.map((h) => _buildHorseRow(h)),
+              ],
+            ),
+          ),
+          // DATA TIPS 요약
+          if (card.dataTips.speedIndexRanking.isNotEmpty ||
+              card.dataTips.s1fRanking.isNotEmpty)
+            _buildDataTipsSummary(card.dataTips),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultTableHeader() {
+    return Row(
+      children: const [
+        SizedBox(width: 28, child: Text('마번', style: _hdrStyle)),
+        Expanded(flex: 3, child: Text('마명', style: _hdrStyle)),
+        Expanded(flex: 2, child: Text('기수', style: _hdrStyle)),
+        SizedBox(width: 36, child: Text('부중', style: _hdrStyle)),
+        SizedBox(width: 40, child: Text('체중', style: _hdrStyle)),
+        Expanded(flex: 2, child: Text('주행스타일', style: _hdrStyle)),
+        Expanded(flex: 2, child: Text('속도지수', style: _hdrStyle)),
+      ],
+    );
+  }
+
+  static const _hdrStyle = TextStyle(
+    color: Color(0xFF8888BB),
+    fontSize: 10,
+    fontWeight: FontWeight.w600,
+  );
+
+  Widget _buildHorseRow(ParsedHorseEntry h) {
+    final styleLabel = EntryTextParser.runningStyleLabel(h.advancedStat.runningStyle);
+    final styleColor = h.advancedStat.runningStyle == RunningStyle.frontRunner
+        ? const Color(0xFFFF8A65)
+        : h.advancedStat.runningStyle == RunningStyle.closer
+            ? const Color(0xFF64B5F6)
+            : const Color(0xFF81C784);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 28,
+            child: Text(
+              '${h.gateNo}',
+              style: const TextStyle(
+                color: Color(0xFF6C63FF),
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              h.horseName,
+              style: const TextStyle(color: Color(0xFFE0E0FF), fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              h.jockeyName.isNotEmpty ? h.jockeyName : '-',
+              style: const TextStyle(color: Color(0xFFAABBCC), fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SizedBox(
+            width: 36,
+            child: Text(
+              '${h.wgBudam}',
+              style: const TextStyle(color: Color(0xFFCCCCDD), fontSize: 11),
+            ),
+          ),
+          SizedBox(
+            width: 40,
+            child: Text(
+              h.weight > 0 ? '${h.weight}' : '-',
+              style: TextStyle(
+                color: h.weightChange > 0
+                    ? const Color(0xFFEF9A9A)
+                    : h.weightChange < 0
+                        ? const Color(0xFFA5D6A7)
+                        : const Color(0xFFCCCCDD),
+                fontSize: 11,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: styleColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(
+                styleLabel,
+                style: TextStyle(
+                  color: styleColor,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              h.advancedStat.speedIndex > 0
+                  ? h.advancedStat.speedIndex.toStringAsFixed(0)
+                  : '-',
+              style: TextStyle(
+                color: h.advancedStat.speedIndex >= 90
+                    ? const Color(0xFFFFD54F)
+                    : const Color(0xFFCCCCDD),
+                fontSize: 11,
+                fontWeight: h.advancedStat.speedIndex >= 90
+                    ? FontWeight.bold : FontWeight.normal,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDataTipsSummary(ParsedDataTips tips) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1A2A),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF1A3A5A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '▸ DATA TIPS 파싱 결과',
+            style: TextStyle(
+              color: Color(0xFF64B5F6),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 16,
+            runSpacing: 6,
+            children: [
+              _tipsChip('1700m 승률', tips.distWinRanking.length),
+              _tipsChip('최고기록', tips.distBestRanking.length),
+              _tipsChip('1년 상금', tips.prize1YearRanking.length),
+              _tipsChip('6개월 상금', tips.prize6MonthRanking.length),
+              _tipsChip('S1F(초반)', tips.s1fRanking.length),
+              _tipsChip('G1F(종반)', tips.g1fRanking.length),
+              _tipsChip('속도지수', tips.speedIndexRanking.length),
+            ],
+          ),
+          if (tips.s1fRanking.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text(
+              '주행 스타일 분류 (S1F vs G1F 기반)',
+              style: TextStyle(color: Color(0xFF8888BB), fontSize: 10),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _tipsChip(String label, int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: count > 0
+            ? const Color(0xFF1A2A3A)
+            : const Color(0xFF1A1A2A),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+          color: count > 0
+              ? const Color(0xFF2A4A6A)
+              : const Color(0xFF2A2A4A),
+        ),
+      ),
+      child: Text(
+        '$label: $count건',
+        style: TextStyle(
+          color: count > 0
+              ? const Color(0xFF90CAF9)
+              : const Color(0xFF444466),
+          fontSize: 10,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogToggle() {
+    return GestureDetector(
+      onTap: () => setState(() => _showLog = !_showLog),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A3A),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF3A3A6A)),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _showLog ? Icons.expand_less : Icons.expand_more,
+              color: const Color(0xFF6C63FF),
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              '인젝션 테스트 로그 (클릭하여 펼치기)',
+              style: TextStyle(
+                color: Color(0xFF6C63FF),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogView() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF050510),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF2A2A4A)),
+      ),
+      constraints: const BoxConstraints(maxHeight: 400),
+      child: SingleChildScrollView(
+        child: SelectableText(
+          _injectionLog,
+          style: const TextStyle(
+            color: Color(0xFF99EEBB),
+            fontSize: 10,
+            fontFamily: 'monospace',
+            height: 1.5,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSavedCardList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.storage, color: Color(0xFF8888BB), size: 16),
+            const SizedBox(width: 8),
+            Text(
+              '저장된 파싱 카드 (${_savedCards.length}건)',
+              style: const TextStyle(
+                color: Color(0xFF8888BB),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              icon: const Icon(Icons.refresh, size: 14, color: Color(0xFF555580)),
+              label: const Text('새로고침',
+                  style: TextStyle(color: Color(0xFF555580), fontSize: 10)),
+              onPressed: _loadSavedCards,
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ..._savedCards.map((c) => _buildSavedCardRow(c)),
+      ],
+    );
+  }
+
+  Widget _buildSavedCardRow(Map<String, dynamic> card) {
+    final key = (card['key'] as String? ?? '').replaceFirst('parsed_race_card:', '');
+    final parsedAt = card['parsedAt'] as String? ?? '';
+    final horseCount = card['horseCount'] as int? ?? 0;
+    final warnings = (card['warnings'] as List<dynamic>?)?.length ?? 0;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF12122A),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF2A2A4A)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline, color: Color(0xFF4CAF50), size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  key,
+                  style: const TextStyle(
+                    color: Color(0xFFCCCCEE),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  '${horseCount}마필 | 파싱: ${parsedAt.substring(0, parsedAt.length.clamp(0, 19))}'
+                  '${warnings > 0 ? " | ⚠️ $warnings건" : ""}',
+                  style: const TextStyle(
+                    color: Color(0xFF555577),
+                    fontSize: 10,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.link, color: Color(0xFF4CAF50), size: 14),
+          const SizedBox(width: 4),
+          const Text(
+            '홈 연동 ✓',
+            style: TextStyle(color: Color(0xFF4CAF50), fontSize: 10),
+          ),
         ],
       ),
     );

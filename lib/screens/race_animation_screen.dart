@@ -5,6 +5,7 @@ import '../models/race_models.dart';
 import '../models/race_horse_data.dart';
 import '../models/horse_physics_profile.dart';
 import '../services/split_time_fetcher.dart';
+import '../services/entry_text_parser.dart';
 import '../providers/user_calibration_controller.dart';
 import '../utils/horse_cap_colors.dart';
 
@@ -772,6 +773,22 @@ class _Horse {
   /// 고배당 서지 버프: HighOddsWindow 발동 시 배당 상위 3마번 → G1F 가속도 +20%
   bool surgeBuff  = false;
 
+  // ── [PARSER] 출전표 텍스트 파서 가중치 매트릭스 ─────────────────
+  /// 주로 함수율 기반 속도 가중치 (HorseTrackPerformance.speedWeightForMoisture)
+  /// 범위: 0.85~1.15 (기본값 1.0)
+  double parsedTrackSpeedWeight = 1.0;
+  /// 진흙 주로 패널티 감면 (HorseTrackPerformance.muddyPenaltyRelief)
+  /// 범위: 0.0~0.3 (기본값 0.0)
+  double parsedMuddyRelief = 0.0;
+  /// 최근 컨디션 가중치 (HorseAdvancedStat.conditionWeight)
+  /// 범위: 0.9~1.1 (기본값 1.0)
+  double parsedConditionWeight = 1.0;
+  /// 거리 적성 가중치 (HorseAdvancedStat.distanceAptitude)
+  /// 범위: 0.85~1.15 (기본값 1.0)
+  double parsedDistanceAptitude = 1.0;
+  /// 선행/추입 스타일 (RunningStyle enum)
+  RunningStyle parsedRunningStyle = RunningStyle.unknown;
+
   _Horse({
     required this.entry,
     required this.prog,
@@ -1130,6 +1147,92 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
     if (needFetch.isNotEmpty) {
       _loadPhysicsProfilesAsync(needFetch);
     }
+
+    // ── [PARSER] 출전표 텍스트 파서 가중치 비동기 로딩 (0 크레딧) ──────────
+    // EntryTextParser.loadTrackPerformance / loadAdvancedStat → SharedPreferences
+    // 파서 데이터가 없으면 중립값(1.0)으로 fallback → 시뮬 중단 없음
+    _loadParserWeightsAsync(entries);
+  }
+
+  // ── [PARSER] 출전표 파서 가중치 비동기 로딩 ──────────────────────────────
+  //  설계 원칙:
+  //    - 파서 데이터 없음 → 중립값(1.0) 유지 (시뮬 중단 없음)
+  //    - 로딩 완료 후 _horses[i] 파서 가중치 필드 업데이트
+  //    - mounted 체크 → dispose 후 setState 방지
+  void _loadParserWeightsAsync(List<HorseEntry> entries) {
+    final venue   = _venueName; // '서울' | '부산경남' | '제주'
+    final raceNoInt = int.tryParse(widget.race.raceNo) ?? 0;
+    final moisture = _parseMoisture(widget.race.trackCondition);
+
+    Future.wait(
+      entries.map((e) async {
+        try {
+          final trackPerf = await EntryTextParser.loadTrackPerformance(
+            venue: venue, raceNo: raceNoInt, gateNo: e.gateNo);
+          final advStat = await EntryTextParser.loadAdvancedStat(
+            venue: venue, raceNo: raceNoInt, gateNo: e.gateNo);
+
+          if (!mounted) return;
+
+          // _horses 리스트에서 마번이 일치하는 _Horse 찾기
+          final horse = _horses.where(
+              (h) => h.entry.gateNo == e.gateNo).firstOrNull;
+          if (horse == null) return;
+
+          // ── 주로 성능 가중치 적용 ──────────────────────────────
+          if (trackPerf != null) {
+            horse.parsedTrackSpeedWeight =
+                trackPerf.speedWeightForMoisture(moisture);
+            horse.parsedMuddyRelief =
+                trackPerf.muddyPenaltyRelief(moisture);
+
+            // speedS에 주로 속도 가중치 즉시 반영
+            // (게이트뷰 대기 중이면 baseSpeed 재계산)
+            if (_phase == _Phase.waiting) {
+              final newBase = horse.rawCalibratedBase > 0
+                  ? horse.rawCalibratedBase
+                  : horse.baseSpeed;
+              // parsedTrackSpeedWeight × conditionWeight 복합 보정
+              final combined = horse.parsedTrackSpeedWeight *
+                  horse.parsedConditionWeight;
+              horse.baseSpeed = newBase * combined;
+            }
+          }
+
+          // ── 고급 스탯 가중치 적용 ──────────────────────────────
+          if (advStat != null) {
+            horse.parsedConditionWeight = advStat.conditionWeight;
+            horse.parsedDistanceAptitude = advStat.distanceAptitude;
+            horse.parsedRunningStyle = advStat.runningStyle;
+
+            // 게이트뷰 대기 중이면 baseSpeed 재계산 (conditionWeight 반영)
+            if (_phase == _Phase.waiting) {
+              final newBase = horse.rawCalibratedBase > 0
+                  ? horse.rawCalibratedBase
+                  : horse.baseSpeed;
+              final combined = horse.parsedTrackSpeedWeight *
+                  horse.parsedConditionWeight;
+              horse.baseSpeed = newBase * combined;
+            }
+          }
+        } catch (_) {
+          // 파서 데이터 없음 → 중립값 유지 (시뮬 중단 없음)
+        }
+      }),
+    );
+  }
+
+  /// trackCondition 문자열 → 함수율 정수로 변환
+  /// '맑3%' → 3, '흐14%' → 14, '강8%' → 8, 없으면 → 3 (기본값)
+  int _parseMoisture(String trackCondition) {
+    final m = RegExp(r'(\d+)%').firstMatch(trackCondition);
+    if (m != null) return int.tryParse(m.group(1) ?? '3') ?? 3;
+    // 텍스트 키워드 fallback
+    if (trackCondition.contains('불량')) return 25;
+    if (trackCondition.contains('포화')) return 20;
+    if (trackCondition.contains('다습')) return 12;
+    if (trackCondition.contains('양호')) return 8;
+    return 3; // 기본: 건조
   }
 
   // ── [NEW] 비동기 물리 프로필 로딩 (레이스 시작 전 게이트뷰 중 백그라운드 조회) ──
@@ -1237,7 +1340,9 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
       if (!inCorner && !inBoost && !inSpurt && h.rawCalibratedBase > 0) {
         final latestMult = _calibCtrl.zone1SpeedMultFinal(
             h.rawPhysicsProfile, h.entry.gateNo);
-        h.baseSpeed = h.rawCalibratedBase * latestMult;
+        // [PARSER] parsedTrackSpeedWeight × parsedConditionWeight 복합 보정
+        final parserMult = h.parsedTrackSpeedWeight * h.parsedConditionWeight;
+        h.baseSpeed = h.rawCalibratedBase * latestMult * parserMult;
       }
 
       // ── 1단계: Zone별 기본 속도 조정 ──────────────────────────────────
@@ -1261,11 +1366,23 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         // ② ★ trackCondition 페널티 — 코너 압축(8→4레인) 시 주로상태 저항 적용
         //    computeCornerTrackPenalty: 양호=1.0, 불량=~0.88, 매우불량=~0.82
         //    외측 레인(laneF≈1)은 코너 반경 증가로 추가 페널티 ×1.3 적용
-        final trackMult = computeCornerTrackPenalty(
+        double trackMult = computeCornerTrackPenalty(
           widget.race.trackCondition,
           laneF,
         );
+        // ── [PARSER] 진흙 주로 패널티 감면 (muddyPenaltyRelief) ──────────────
+        // 포화/불량(함수율15%+) 시 parsedMuddyRelief(0.0~0.3)만큼 패널티 완화
+        // trackMult가 1.0 미만(페널티 구간)에서만 적용
+        if (trackMult < 1.0 && h.parsedMuddyRelief > 0) {
+          final penalty = 1.0 - trackMult; // 페널티 크기 (양수)
+          final relieved = penalty * (1.0 - h.parsedMuddyRelief);
+          trackMult = 1.0 - relieved; // 감면된 페널티 적용
+        }
         speedMult *= trackMult;
+
+        // ── [PARSER] 주로 속도 가중치 — 코너 구간 전체 적용 ─────────────────
+        // parsedTrackSpeedWeight (0.85~1.15): 함수율+주로 전적 기반 종합 가중치
+        speedMult *= h.parsedTrackSpeedWeight;
 
         // ③ [NEW] 코너 손실 방지력: HorsePhysicsProfile.cornerDeccelMult
         //    기본 0.88 + corneringEfficiency×0.07 (0.88~0.95)
@@ -1297,7 +1414,14 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         final stat = (h.speedNorm + h.formNorm) * 0.5;
         // [NEW] initialDrive 보정: 초반 가속력 강한 말이 코너 진입 속도 우위
         final driveBuff = h.physicsProfile.initialDrive * 0.06;
-        speedMult  *= 1.12 + bf * 0.15 * stat + bf * 0.08 * user + driveBuff;
+        // [PARSER] 선행마(frontRunner) 코너 진입 가속도 추가 버프 (+3%)
+        // 선행마는 초반 속도 우위를 이용해 코너 진입 전 포지션 선점
+        final runStyleDriveBuff = (h.parsedRunningStyle == RunningStyle.frontRunner)
+            ? 0.03
+            : (h.parsedRunningStyle == RunningStyle.stalker)
+                ? 0.01
+                : 0.0;
+        speedMult  *= 1.12 + bf * 0.15 * stat + bf * 0.08 * user + driveBuff + runStyleDriveBuff;
         h.boostActive = true;
         h.boostGlow   = (_glowAnim.value * 0.6 + bf * 0.4).clamp(0, 1);
       } else if (!inCorner) {
@@ -1315,8 +1439,21 @@ class _RaceAnimationScreenState extends State<RaceAnimationScreen>
         final user = (h.userBonus / 5.0).clamp(-1.0, 1.0);
         // [NEW] finalSpurt 기반 스태미나 소진 저항: 종반 탄력 강한 말은 fade 감소
         final spurtResist = h.physicsProfile.finalSpurt * 0.05;
-        final fade = ((1.0 - stam) * sf * 0.22 - spurtResist * sf).clamp(0.0, 0.22);
-        final boost = stam * sf * 0.08 + user * sf * 0.06;
+        // [PARSER] 거리 적성 기반 스태미나 소진율 감면 (distanceAptitude)
+        //   distanceAptitude(0.85~1.15): 1700m 승률 등 거리 적성 지표
+        //   적성 높음(>1.0) → 스태미나 소진 추가 완화 최대 -5%
+        //   적성 낮음(<1.0) → 스태미나 소진 증가 최대 +5%
+        final distResist = (h.parsedDistanceAptitude - 1.0) * 0.25; // -0.0375~+0.0375
+        final fade = ((1.0 - stam) * sf * 0.22
+            - spurtResist * sf
+            - distResist * sf).clamp(0.0, 0.22);
+        // [PARSER] 추입마(closer) → 스퍼트 구간 가속도 추가 버프
+        final runStyleBoost = (h.parsedRunningStyle == RunningStyle.closer)
+            ? sf * 0.04
+            : (h.parsedRunningStyle == RunningStyle.frontRunner)
+                ? -sf * 0.02  // 선행마: 스퍼트 후반 약간 감속
+                : 0.0;
+        final boost = stam * sf * 0.08 + user * sf * 0.06 + runStyleBoost;
         speedMult *= (1.0 - fade + boost).clamp(0.6, 1.18);
         h.spurtFading = (stam < 0.5);
       }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/race_provider.dart';
 import '../models/race_models.dart';
+import '../services/entry_text_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/horse_cap_colors.dart';
 
@@ -16,6 +17,11 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
   // 자동 갱신 카운트다운 표시용 타이머
   Timer? _uiTimer;
 
+  // ── 텍스트 파서 연동 데이터 ────────────────────────────────────────────
+  /// 마번 → ParsedHorseEntry 맵 (텍스트 파서 출전표 데이터)
+  Map<int, ParsedHorseEntry> _parsedHorseMap = {};
+  bool _hasParsedData = false;
+
   @override
   void initState() {
     super.initState();
@@ -23,6 +29,98 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
+    // 텍스트 파서 데이터 로드 (비동기)
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadParsedData());
+  }
+
+  /// 파싱된 출전표 데이터 로드 (홈 화면 경주 기반)
+  Future<void> _loadParsedData() async {
+    try {
+      final provider = Provider.of<RaceProvider>(context, listen: false);
+      final race = provider.selectedRace;
+      if (race == null) return;
+
+      final venueName = _venueCodeToName(race.venueCode);
+      final raceNo    = int.tryParse(race.raceNo) ?? 1;
+
+      final summary = await EntryTextParser.loadHorseSummary(
+        venue: venueName, raceNo: raceNo,
+      );
+      if (summary == null || summary.isEmpty) return;
+
+      // 마번 → ParsedHorseEntry 임시 맵 구성 (요약 데이터로 경량 버전 생성)
+      final map = <int, ParsedHorseEntry>{};
+      for (final s in summary) {
+        final gateNo   = (s['gateNo']       as int?) ?? 0;
+        final name     = (s['horseName']    as String?) ?? '';
+        final jockey   = (s['jockeyName']   as String?) ?? '';
+        final budam    = (s['wgBudam']      as num?)?.toDouble() ?? 55.0;
+        final weight   = (s['weight']       as int?) ?? 0;
+        final wChg     = (s['weightChange'] as int?) ?? 0;
+        final recent   = (s['recentRecord'] as String?) ?? '';
+        final best     = (s['bestTime']     as String?) ?? '';
+        final speedIdx = (s['speedIndex']   as num?)?.toDouble() ?? 0.0;
+        final styleIdx = (s['runningStyle'] as int?) ?? RunningStyle.unknown.index;
+        final prize6m  = (s['prize6Month']  as int?) ?? 0;
+        final winRate  = (s['careerWinRate'] as num?)?.toDouble() ?? 0.0;
+        final rawRanks = s['recentRanks'] as List<dynamic>?;
+        final recentRanks = rawRanks?.map((r) => (r as int?) ?? 0).toList() ?? [];
+
+        if (gateNo < 1) continue;
+
+        final advStat = HorseAdvancedStat(
+          horseGateNo:    gateNo,
+          horseName:      name,
+          careerWinRate:  winRate,
+          speedIndex:     speedIdx,
+          prize6Month:    prize6m,
+          s1fTime:        0.0,
+          g1fTime:        0.0,
+          runningStyle:   RunningStyle.values[styleIdx.clamp(0, RunningStyle.values.length - 1)],
+        );
+
+        map[gateNo] = ParsedHorseEntry(
+          gateNo:        gateNo,
+          horseName:     name,
+          jockeyName:    jockey,
+          wgBudam:       budam,
+          weight:        weight,
+          weightChange:  wChg,
+          recentRecord:  recent,
+          bestTime:      best,
+          trackPerformance: HorseTrackPerformance(
+            horseGateNo: gateNo, horseName: name,
+          ),
+          advancedStat:  advStat,
+          pastRaces: recentRanks.asMap().entries.map((e) => PastRaceBlock(
+            dateCode:   '',
+            venue:      '',
+            raceNo:     e.key + 1,
+            grade:      '',
+            distance:   race.distance,
+            condition:  '',
+            weather:    '',
+            moisture:   0,
+            selfRank:   e.value,
+            totalHorses:11,
+            finishes:   [],
+          )).toList(),
+        );
+      }
+
+      if (mounted && map.isNotEmpty) {
+        setState(() {
+          _parsedHorseMap = map;
+          _hasParsedData  = true;
+        });
+      }
+    } catch (_) {}
+  }
+
+  String _venueCodeToName(String code) {
+    if (code == '2') return '부산경남';
+    if (code == '3') return '제주';
+    return '서울';
   }
 
   @override
@@ -223,15 +321,336 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
         children: [
           // 실시간 갱신 상태 바 (데이터 변동 있을 때 표시)
           _buildLiveStatusBar(provider),
+          // 텍스트 파서 데이터 연동 배너
+          if (_hasParsedData) _buildParsedDataBanner(),
           _buildRaceOverview(race, horses),
           const SizedBox(height: 16),
           _buildApiInsightSection(sorted, darkHorses),
           const SizedBox(height: 16),
+          // 텍스트 파서: 출전마 상세정보 (기수·체중·최근성적)
+          if (_hasParsedData) _buildParsedHorseTable(sorted),
           _buildHorseSpecialInfo(sorted, darkHorseGates),
           const SizedBox(height: 16),
           _buildWeightAlertSection(sorted),
           const SizedBox(height: 16),
           _buildOddsSection(sorted, darkHorseGates),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 텍스트 파서 연동: 출전표 데이터 표시 배너
+  // ─────────────────────────────────────────────────────────────────────
+  Widget _buildParsedDataBanner() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1A1A3A), Color(0xFF0D1A2A)],
+        ),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF4CAF50).withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.text_snippet, color: Color(0xFF4CAF50), size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '📋 출전표 텍스트 파싱 데이터 반영 중 (${_parsedHorseMap.length}마필)',
+              style: const TextStyle(
+                color: Color(0xFF81C784),
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const Text(
+            '0 크레딧',
+            style: TextStyle(color: Color(0xFF4CAF50), fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 텍스트 파서 연동: 출전마 상세정보 테이블
+  // ─────────────────────────────────────────────────────────────────────
+  Widget _buildParsedHorseTable(List<HorseEntry> sorted) {
+    if (_parsedHorseMap.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1A1A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF1A3A2A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 섹션 헤더
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: const BoxDecoration(
+              color: Color(0xFF0D2020),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
+            ),
+            child: Row(
+              children: const [
+                Icon(Icons.assignment, color: Color(0xFF4DB6AC), size: 15),
+                SizedBox(width: 8),
+                Text(
+                  '📋 출전표 파싱 데이터',
+                  style: TextStyle(
+                    color: Color(0xFF4DB6AC),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 테이블 헤더
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: Row(
+              children: const [
+                SizedBox(width: 26, child: Text('번', style: _pHdrStyle)),
+                Expanded(flex: 3, child: Text('마명', style: _pHdrStyle)),
+                Expanded(flex: 2, child: Text('기수', style: _pHdrStyle)),
+                SizedBox(width: 38, child: Text('부담중량', style: _pHdrStyle)),
+                SizedBox(width: 44, child: Text('체중(변화)', style: _pHdrStyle)),
+                Expanded(flex: 2, child: Text('최근성적', style: _pHdrStyle)),
+                Expanded(flex: 2, child: Text('스타일/지수', style: _pHdrStyle)),
+              ],
+            ),
+          ),
+          const Divider(color: Color(0xFF1A3A2A), height: 4),
+          // 마필 행
+          ...sorted.map((h) => _buildParsedHorseRow(h)),
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
+  }
+
+  static const _pHdrStyle = TextStyle(
+    color: Color(0xFF4A7A70),
+    fontSize: 9,
+    fontWeight: FontWeight.w600,
+  );
+
+  Widget _buildParsedHorseRow(HorseEntry h) {
+    final parsed = _parsedHorseMap[h.gateNo];
+
+    // 파싱 데이터 우선 사용, 없으면 API 데이터 폴백
+    final jockey      = parsed?.jockeyName.isNotEmpty == true
+        ? parsed!.jockeyName : h.jockeyName;
+    final wgBudam     = parsed?.wgBudam ?? h.wgBudam;
+    final weight      = parsed?.weight ?? h.weight;
+    final weightChg   = parsed?.weightChange ?? h.weightChange;
+    final recentRanks = parsed?.pastRaces.map((r) => r.selfRank).toList() ?? [];
+    final style       = parsed?.advancedStat.runningStyle ?? RunningStyle.unknown;
+    final speedIdx    = parsed?.advancedStat.speedIndex ?? 0.0;
+    final isFromParse = parsed != null;
+
+    final styleLabel = EntryTextParser.runningStyleLabel(style);
+    final styleColor = style == RunningStyle.frontRunner
+        ? const Color(0xFFFF8A65)
+        : style == RunningStyle.closer
+            ? const Color(0xFF64B5F6)
+            : style == RunningStyle.stalker
+                ? const Color(0xFF81C784)
+                : const Color(0xFF888888);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: isFromParse
+            ? const Color(0xFF0A1A15).withValues(alpha: 0.5)
+            : Colors.transparent,
+        border: Border(
+          bottom: BorderSide(color: const Color(0xFF1A3A2A), width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 마번
+          SizedBox(
+            width: 26,
+            child: Container(
+              width: 20, height: 20,
+              decoration: BoxDecoration(
+                color: HorseCapColors.getCapData(h.gateNo).bg,
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: Text(
+                  '${h.gateNo}',
+                  style: TextStyle(
+                    color: HorseCapColors.getCapData(h.gateNo).text,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // 마명
+          Expanded(
+            flex: 3,
+            child: Text(
+              h.horseName,
+              style: TextStyle(
+                color: isFromParse
+                    ? const Color(0xFFE0FFF0)
+                    : const Color(0xFFCCCCDD),
+                fontSize: 10,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // 기수
+          Expanded(
+            flex: 2,
+            child: Row(
+              children: [
+                Text(
+                  jockey.isNotEmpty ? jockey : '-',
+                  style: const TextStyle(
+                    color: Color(0xFFAABBCC),
+                    fontSize: 10,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (isFromParse)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 2),
+                    child: Icon(Icons.text_snippet,
+                        color: Color(0xFF4DB6AC), size: 8),
+                  ),
+              ],
+            ),
+          ),
+          // 부담중량
+          SizedBox(
+            width: 38,
+            child: Text(
+              '${wgBudam}kg',
+              style: const TextStyle(
+                color: Color(0xFFCCCCDD),
+                fontSize: 10,
+              ),
+            ),
+          ),
+          // 체중 + 변화
+          SizedBox(
+            width: 44,
+            child: Text(
+              weight > 0
+                  ? '$weight(${weightChg >= 0 ? '+' : ''}$weightChg)'
+                  : '-',
+              style: TextStyle(
+                color: weightChg > 0
+                    ? const Color(0xFFEF9A9A)
+                    : weightChg < 0
+                        ? const Color(0xFFA5D6A7)
+                        : const Color(0xFFCCCCDD),
+                fontSize: 9,
+              ),
+            ),
+          ),
+          // 최근 4경주 성적
+          Expanded(
+            flex: 2,
+            child: recentRanks.isNotEmpty
+                ? Wrap(
+                    spacing: 3,
+                    children: recentRanks.take(4).map((rank) {
+                      Color rankColor = rank == 1
+                          ? const Color(0xFFFFD700)
+                          : rank <= 3
+                              ? const Color(0xFF81C784)
+                              : rank <= 5
+                                  ? const Color(0xFFCCCCDD)
+                                  : const Color(0xFF666688);
+                      return Container(
+                        width: 14, height: 14,
+                        decoration: BoxDecoration(
+                          color: rankColor.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(
+                            color: rankColor.withValues(alpha: 0.5),
+                            width: 0.5,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '$rank',
+                            style: TextStyle(
+                              color: rankColor,
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  )
+                : Text(
+                    h.recentRecord.isNotEmpty ? h.recentRecord : '-',
+                    style: const TextStyle(
+                      color: Color(0xFF666688),
+                      fontSize: 9,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+          ),
+          // 주행스타일 / 속도지수
+          Expanded(
+            flex: 2,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (style != RunningStyle.unknown)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: styleColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text(
+                      styleLabel,
+                      style: TextStyle(
+                        color: styleColor,
+                        fontSize: 8,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                if (speedIdx > 0) ...[
+                  const SizedBox(width: 3),
+                  Text(
+                    speedIdx.toStringAsFixed(0),
+                    style: TextStyle(
+                      color: speedIdx >= 90
+                          ? const Color(0xFFFFD54F)
+                          : const Color(0xFF888899),
+                      fontSize: 9,
+                      fontWeight: speedIdx >= 90
+                          ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
