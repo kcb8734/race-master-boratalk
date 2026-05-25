@@ -1,6 +1,7 @@
+import 'dart:convert';
+import 'dart:js' as js;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/race_schedule_cache.dart';
 import '../services/kra_bulk_sync_service.dart';
@@ -182,34 +183,96 @@ class _ParsedRaceEntry {
 class _ImageUploadTabState extends State<_ImageUploadTab> {
   // ── 상태 ──────────────────────────────────────────────────────────────
   final List<_UploadedItem> _items = [];
-  final _urlCtrl   = TextEditingController();
   final _nameCtrl  = TextEditingController();
   String _selType  = 'entry';    // 'entry' | 'result'
   String _selVenue = '1';
   int    _selRaceNo = 1;
-  // ignore: unused_field
-  bool   _urlMode   = false;     // URL 입력 모드 (향후 실제 파일 선택 시 활용)
+  late DateTime _selectedDate;   // 캘린더 선택 날짜
   _UploadedItem? _expanded;      // 상세 펼침 항목
   String _globalMsg = '';
+  String? _pickedFileName;       // 선택된 파일명
+  String? _pickedFileDataUrl;    // 선택된 이미지 data URL (미리보기용)
 
-  // 날짜: 오늘
-  late String _dateStr;
+  // YYYYMMDD 변환
+  String get _dateStr {
+    final d = _selectedDate;
+    return '${d.year}${d.month.toString().padLeft(2,'0')}${d.day.toString().padLeft(2,'0')}';
+  }
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now().toLocal();
-    _dateStr = '${now.year}${now.month.toString().padLeft(2,'0')}'
-               '${now.day.toString().padLeft(2,'0')}';
+    _selectedDate = DateTime.now().toLocal();
     // 데모 데이터 1건 추가 (사용법 안내용)
     _addDemoItem();
   }
 
   @override
   void dispose() {
-    _urlCtrl.dispose();
     _nameCtrl.dispose();
     super.dispose();
+  }
+
+  // ── 캘린더 날짜 선택 ─────────────────────────────────────────────────
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now().add(const Duration(days: 30)),
+      locale: const Locale('ko', 'KR'),
+      builder: (ctx, child) => Theme(
+        data: ThemeData.dark().copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFF6C63FF),
+            onPrimary: Colors.white,
+            surface: Color(0xFF1A1A3A),
+            onSurface: Color(0xFFE0E0FF),
+          ),
+          dialogBackgroundColor: const Color(0xFF12122A),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null && mounted) {
+      setState(() => _selectedDate = picked);
+    }
+  }
+
+  // ── 웹 파일 선택 (dart:js + HTML input) ─────────────────────────────
+  void _pickFile() {
+    // JavaScript로 hidden file input 생성 후 클릭
+    js.context.callMethod('eval', [
+      r"""
+      (function() {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*,.jpg,.jpeg,.png,.gif,.webp,.bmp';
+        input.onchange = function(e) {
+          var file = e.target.files[0];
+          if (!file) return;
+          var reader = new FileReader();
+          reader.onload = function(re) {
+            window._flutterFileResult = {name: file.name, data: re.target.result};
+            if (window._flutterFileCallback) window._flutterFileCallback(file.name);
+          };
+          reader.readAsDataURL(file);
+        };
+        input.click();
+      })();
+      """
+    ]);
+    // 콜백 등록 - JS에서 파일 선택 완료 시 호출
+    js.context['_flutterFileCallback'] = js.allowInterop((String fileName) {
+      final result = js.context['_flutterFileResult'];
+      if (result != null && mounted) {
+        setState(() {
+          _pickedFileName  = fileName;
+          _pickedFileDataUrl = result['data'].toString();
+          _nameCtrl.text = fileName;
+        });
+      }
+    });
   }
 
   void _addDemoItem() {
@@ -239,11 +302,13 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
     _items.add(demo);
   }
 
-  // ── 파일 업로드 처리 (웹: URL 입력, 앱: 시뮬레이션) ──────────────────
+  // ── 파일 업로드 처리 ──────────────────────────────────────────────────────
   Future<void> _handleUpload() async {
+    final venueName = _selVenue == '1' ? '서울' : _selVenue == '2' ? '부경' : '제주';
+    final typeLabel  = _selType == 'entry' ? '출전표' : '경주기록';
     final name = _nameCtrl.text.trim().isNotEmpty
         ? _nameCtrl.text.trim()
-        : '${_dateStr}_${_selVenue == '1' ? '서울' : _selVenue == '2' ? '부경' : '제주'}_제${_selRaceNo}경주_${_selType == 'entry' ? '출전표' : '경주기록'}.jpg';
+        : '${_dateStr}_${venueName}_제${_selRaceNo}경주_$typeLabel.jpg';
 
     final item = _UploadedItem(
       id: 'img_${DateTime.now().millisecondsSinceEpoch}',
@@ -258,8 +323,8 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
     setState(() {
       _items.insert(0, item);
       _nameCtrl.clear();
-      _urlCtrl.clear();
-      _urlMode = false;
+      _pickedFileName    = null;
+      _pickedFileDataUrl = null;
       _globalMsg = '';
     });
 
@@ -368,6 +433,10 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
 
   @override
   Widget build(BuildContext context) {
+    // 날짜 표시용
+    final displayDate =
+        '${_selectedDate.year}.${_selectedDate.month.toString().padLeft(2, '0')}.${_selectedDate.day.toString().padLeft(2, '0')}';
+
     return Column(
       children: [
         // ── 업로드 컨트롤 패널 ─────────────────────────────────────────
@@ -377,27 +446,142 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 타입 선택
+              // ── Row 1: 타입 칩 + 경주장 + 경주번호 ───────────────────────
               Row(children: [
                 _typeChip('entry', '📋 출전표'),
                 const SizedBox(width: 8),
                 _typeChip('result', '🏆 경주기록'),
                 const Spacer(),
-                // 경주장 드롭다운
                 _venueDropdown(),
                 const SizedBox(width: 8),
-                // 경주번호
                 _raceNoDropdown(),
               ]),
               const SizedBox(height: 8),
 
-              // 파일 이름 (선택)
+              // ── Row 2: 경기일자 캘린더 선택 버튼 ─────────────────────────
+              GestureDetector(
+                onTap: _pickDate,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1A3A),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF3A3A6A)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.calendar_today,
+                        color: Color(0xFF6C63FF), size: 16),
+                    const SizedBox(width: 10),
+                    Text(
+                      '경기일자: $displayDate',
+                      style: const TextStyle(
+                          color: Color(0xFFE0E0FF), fontSize: 13,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    const Text('탭하여 변경',
+                        style: TextStyle(
+                            color: Color(0xFF555580), fontSize: 10)),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_drop_down,
+                        color: Color(0xFF6C63FF), size: 18),
+                  ]),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ── Row 3: 파일 선택 영역 (점선 박스) ────────────────────────
+              GestureDetector(
+                onTap: _pickFile,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 14, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F0F28),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _pickedFileName != null
+                          ? const Color(0xFF6C63FF)
+                          : const Color(0xFF3A3A6A),
+                      width: _pickedFileName != null ? 1.5 : 1,
+                    ),
+                  ),
+                  child: _pickedFileName != null && _pickedFileDataUrl != null
+                      // ── 이미지 선택 완료: 미리보기 ──
+                      ? Row(children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: Image.network(
+                              _pickedFileDataUrl!,
+                              width: 56, height: 56,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                width: 56, height: 56,
+                                color: const Color(0xFF2A2A4A),
+                                child: const Icon(Icons.broken_image,
+                                    color: Color(0xFF6C63FF), size: 28),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _pickedFileName!,
+                                  style: const TextStyle(
+                                      color: Color(0xFFE0E0FF),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                const Text('이미지 선택 완료 — 탭하여 변경',
+                                    style: TextStyle(
+                                        color: Color(0xFF6C63FF),
+                                        fontSize: 10)),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.check_circle,
+                              color: Color(0xFF66BB6A), size: 22),
+                        ])
+                      // ── 파일 미선택: 안내 텍스트 ──
+                      : const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.add_photo_alternate,
+                                color: Color(0xFF4A4A7A), size: 30),
+                            SizedBox(height: 6),
+                            Text(
+                              '탭하여 이미지 파일 선택',
+                              style: TextStyle(
+                                  color: Color(0xFF7070AA), fontSize: 12),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'JPG · PNG · GIF · WEBP · BMP',
+                              style: TextStyle(
+                                  color: Color(0xFF444466), fontSize: 10),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ── Row 4: 파일명 입력 ──────────────────────────────────────
               TextField(
                 controller: _nameCtrl,
                 style: const TextStyle(color: Color(0xFFE0E0FF), fontSize: 12),
                 decoration: InputDecoration(
                   hintText: '파일명 (선택사항 — 비워두면 자동 생성)',
-                  hintStyle: const TextStyle(color: Color(0xFF444466), fontSize: 11),
+                  hintStyle: const TextStyle(
+                      color: Color(0xFF444466), fontSize: 11),
                   filled: true,
                   fillColor: const Color(0xFF1A1A3A),
                   prefixIcon: const Icon(Icons.label_outline,
@@ -414,7 +598,7 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
               ),
               const SizedBox(height: 8),
 
-              // 업로드 버튼 (대형)
+              // ── Row 5: 업로드 / 추가 버튼 (대형) ──────────────────────────
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
@@ -442,7 +626,8 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
               const Text(
                 '* 웹 환경: 이미지를 선택하거나 경주 정보를 직접 입력 후 추가\n'
                 '* AI 파싱 엔진 연동 시 OCR로 마번/마명/기수 자동 추출',
-                style: TextStyle(color: Color(0xFF444466), fontSize: 10, height: 1.4),
+                style: TextStyle(
+                    color: Color(0xFF444466), fontSize: 10, height: 1.4),
               ),
             ],
           ),
@@ -1297,7 +1482,7 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
     }
   }
 
-  /// CSV 내보내기 (클립보드)
+  /// CSV 내보내기 — dart:js Blob URL 방식으로 실제 파일 다운로드
   Future<void> _exportToCsv({bool whitelistOnly = false}) async {
     final allLogs = await RaceScheduleCache().getApiErrorLogs(limit: 100);
     final logs = whitelistOnly
@@ -1305,10 +1490,13 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
             _whitelistTargetApis.any((id) => e.apiName.contains(id))).toList()
         : allLogs;
 
+    final buf = StringBuffer();
+    _writeCsvHeader(buf, whitelistOnly);
+
     if (logs.isEmpty) {
-      // 로그 없으면 샘플 데이터로 즉시 CSV 생성
-      final buf = StringBuffer();
-      _writeCsvHeader(buf, whitelistOnly);
+      // 실제 로그 없으면 샘플 데이터로 CSV 생성
+      buf.writeln('# [샘플 데이터 — 실제 에러 없음]');
+      buf.writeln('Timestamp,API,StatusCode,ErrorBody,RequestURL,KeyNote,EncodingNote');
       for (final s in _sampleWlErrors) {
         if (whitelistOnly &&
             !_whitelistTargetApis.any((id) => (s['api'] as String).contains(id))) {
@@ -1325,39 +1513,70 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
           '"${s['encNote']}"',
         );
       }
-      await Clipboard.setData(ClipboardData(text: buf.toString()));
-      if (mounted) {
-        setState(() => _exportResult =
-            '✅ 샘플 에러 데이터로 CSV 생성 완료 (실제 에러 없음).\n'
-            '클립보드에 복사됨 — 파일에 붙여넣어 신청서에 첨부하세요.');
+    } else {
+      buf.writeln('# Total: ${logs.length} entries');
+      buf.writeln('#');
+      buf.writeln('Timestamp,API,StatusCode,ErrorBody,RequestURL,KeyNote,EncodingNote');
+      for (final e in logs) {
+        final body = e.errorBody.replaceAll('"', "'");
+        buf.writeln(
+          '"${e.timestamp.toIso8601String()}",'
+          '"${e.apiName}",'
+          '"${e.statusCode}",'
+          '"$body",'
+          '"${e.requestUrl}",'
+          '"${e.keyNote}",'
+          '"${e.encodingNote}"',
+        );
       }
-      return;
     }
 
-    final buf = StringBuffer();
-    _writeCsvHeader(buf, whitelistOnly);
-    buf.writeln('# Total: ${logs.length} entries');
-    buf.writeln('#');
-    buf.writeln('Timestamp,API,StatusCode,ErrorBody,RequestURL,KeyNote,EncodingNote');
-    for (final e in logs) {
-      final body = e.errorBody.replaceAll('"', "'");
-      buf.writeln(
-        '"${e.timestamp.toIso8601String()}",'
-        '"${e.apiName}",'
-        '"${e.statusCode}",'
-        '"$body",'
-        '"${e.requestUrl}",'
-        '"${e.keyNote}",'
-        '"${e.encodingNote}"',
-      );
-    }
-    await Clipboard.setData(ClipboardData(text: buf.toString()));
-    if (mounted) {
-      setState(() {
-        _exportResult = '✅ ${logs.length}건 CSV 복사 완료.\n'
-            '${whitelistOnly ? "[화이트리스트 필터] " : ""}'
-            '텍스트 파일로 저장 후 신청서에 첨부하세요.';
-      });
+    // ── dart:js Blob URL → <a download> 파일 다운로드 ──────────────────────
+    final csvContent = buf.toString();
+    final now        = DateTime.now();
+    final dateSuffix =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    final fileName   = whitelistOnly
+        ? 'kra_whitelist_errors_$dateSuffix.csv'
+        : 'kra_api_error_dump_$dateSuffix.csv';
+
+    try {
+      final encodedContent = jsonEncode(csvContent);
+      js.context.callMethod('eval', [
+        """
+        (function() {
+          var content = $encodedContent;
+          var blob    = new Blob([content], {type: 'text/csv;charset=utf-8;'});
+          var url     = URL.createObjectURL(blob);
+          var a       = document.createElement('a');
+          a.href      = url;
+          a.download  = '$fileName';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function() {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }, 500);
+        })();
+        """
+      ]);
+
+      if (mounted) {
+        final count = logs.isEmpty ? _sampleWlErrors.length : logs.length;
+        setState(() {
+          _exportResult = '✅ $fileName 다운로드 시작!\n'
+              '${whitelistOnly ? '[화이트리스트 필터] ' : ''}$count건 포함 — 신청서에 첨부하세요.';
+        });
+      }
+    } catch (e) {
+      // Blob 다운로드 실패 시 클립보드로 폴백
+      await Clipboard.setData(ClipboardData(text: csvContent));
+      if (mounted) {
+        setState(() {
+          _exportResult = '⚠️ 다운로드 실패 — 클립보드에 복사됨.\n'
+              '텍스트 파일에 붙여넣어 $fileName 으로 저장하세요.';
+        });
+      }
     }
   }
 
@@ -1518,7 +1737,7 @@ class _ErrorLogTabState extends State<_ErrorLogTab> {
                     ),
                     onPressed: _exportToCsv,
                     icon: const Icon(Icons.download, size: 16),
-                    label: const Text('전체 CSV 내보내기 (클립보드)'),
+                    label: const Text('전체 CSV 다운로드'),
                   ),
                 ),
                 const SizedBox(width: 8),
