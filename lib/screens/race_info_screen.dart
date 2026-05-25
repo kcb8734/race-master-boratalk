@@ -1,4 +1,5 @@
 import 'dart:async' show Timer;
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/race_provider.dart';
@@ -7,49 +8,68 @@ import '../services/entry_text_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/horse_cap_colors.dart';
 
+// ══════════════════════════════════════════════════════════════════════════
+//  RaceInfoScreen — 출전표 상세 분석 탭 (전면 개편 v2.0)
+//
+//  ▸ HorseCardList : 마필 카드 (기본정보 + TrendLine 꺾은선 + 주로전적)
+//  ▸ Top5GridView  : 복승률/6개월상금/유전능력/거리기록 4카테고리 TOP5
+//  ▸ SpeedBarChart : S1F(초반200m) / G1F(종반200m) 가로 바 차트
+//  ▸ 파서 실시간 연동 + 데이터 누락 fallback 처리
+// ══════════════════════════════════════════════════════════════════════════
+
 class RaceInfoScreen extends StatefulWidget {
   const RaceInfoScreen({super.key});
   @override
   State<RaceInfoScreen> createState() => _RaceInfoScreenState();
 }
 
-class _RaceInfoScreenState extends State<RaceInfoScreen> {
-  // 자동 갱신 카운트다운 표시용 타이머
+class _RaceInfoScreenState extends State<RaceInfoScreen>
+    with SingleTickerProviderStateMixin {
   Timer? _uiTimer;
+  late TabController _tabController;
 
-  // ── 텍스트 파서 연동 데이터 ────────────────────────────────────────────
-  /// 마번 → ParsedHorseEntry 맵 (텍스트 파서 출전표 데이터)
+  // ── 파서 연동 데이터 ──────────────────────────────────────────────────
   Map<int, ParsedHorseEntry> _parsedHorseMap = {};
   bool _hasParsedData = false;
+  bool _isLoadingParsed = false;
+
+  // ── TOP5 파서 데이터 (PDF 구조 기반) ─────────────────────────────────
+  /// 마번 → 유전능력 점수 (parsedHorseMap advancedStat 기반 fallback)
+  Map<int, double> _geneticScoreMap = {};
+  /// 마번 → 거리기록 추정 문자열
+  Map<int, String> _distanceRecordMap = {};
 
   @override
   void initState() {
     super.initState();
-    // 1초마다 UI 갱신 (카운트다운 표시)
+    _tabController = TabController(length: 2, vsync: this);
     _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
-    // 텍스트 파서 데이터 로드 (비동기)
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadParsedData());
   }
 
-  /// 파싱된 출전표 데이터 로드 (홈 화면 경주 기반)
+  // ── 파서 데이터 로드 ──────────────────────────────────────────────────
   Future<void> _loadParsedData() async {
+    if (_isLoadingParsed) return;
+    setState(() => _isLoadingParsed = true);
     try {
       final provider = Provider.of<RaceProvider>(context, listen: false);
       final race = provider.selectedRace;
       if (race == null) return;
 
       final venueName = _venueCodeToName(race.venueCode);
-      final raceNo    = int.tryParse(race.raceNo) ?? 1;
+      final raceNo = int.tryParse(race.raceNo) ?? 1;
 
       final summary = await EntryTextParser.loadHorseSummary(
         venue: venueName, raceNo: raceNo,
       );
       if (summary == null || summary.isEmpty) return;
 
-      // 마번 → ParsedHorseEntry 임시 맵 구성 (요약 데이터로 경량 버전 생성)
       final map = <int, ParsedHorseEntry>{};
+      final genMap = <int, double>{};
+      final distMap = <int, String>{};
+
       for (final s in summary) {
         final gateNo   = (s['gateNo']       as int?) ?? 0;
         final name     = (s['horseName']    as String?) ?? '';
@@ -63,35 +83,52 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
         final styleIdx = (s['runningStyle'] as int?) ?? RunningStyle.unknown.index;
         final prize6m  = (s['prize6Month']  as int?) ?? 0;
         final winRate  = (s['careerWinRate'] as num?)?.toDouble() ?? 0.0;
+        final placeRate = (s['careerPlaceRate'] as num?)?.toDouble() ?? 0.0;
+        final s1f      = (s['s1fTime']      as num?)?.toDouble() ?? 0.0;
+        final g1f      = (s['g1fTime']      as num?)?.toDouble() ?? 0.0;
         final rawRanks = s['recentRanks'] as List<dynamic>?;
         final recentRanks = rawRanks?.map((r) => (r as int?) ?? 0).toList() ?? [];
+        final distBest  = (s['distBestTime'] as String?) ?? '';
+        final distWinR  = (s['distWinRate']  as num?)?.toDouble() ?? 0.0;
 
         if (gateNo < 1) continue;
+
+        // 유전능력 점수: 파서 없을 때 speedIndex + prize6m 기반 추정
+        final genScore = speedIdx > 0
+            ? speedIdx + (prize6m / 1000000.0).clamp(0, 30)
+            : 0.0;
+        if (genScore > 0) genMap[gateNo] = genScore;
+
+        // 거리기록 문자열
+        if (distBest.isNotEmpty) distMap[gateNo] = distBest;
 
         final advStat = HorseAdvancedStat(
           horseGateNo:    gateNo,
           horseName:      name,
           careerWinRate:  winRate,
+          careerPlaceRate: placeRate,
           speedIndex:     speedIdx,
           prize6Month:    prize6m,
-          s1fTime:        0.0,
-          g1fTime:        0.0,
+          s1fTime:        s1f,
+          g1fTime:        g1f,
+          distBestTime:   distBest,
+          distWinRate:    distWinR,
           runningStyle:   RunningStyle.values[styleIdx.clamp(0, RunningStyle.values.length - 1)],
         );
 
         map[gateNo] = ParsedHorseEntry(
-          gateNo:        gateNo,
-          horseName:     name,
-          jockeyName:    jockey,
-          wgBudam:       budam,
-          weight:        weight,
-          weightChange:  wChg,
-          recentRecord:  recent,
-          bestTime:      best,
+          gateNo:       gateNo,
+          horseName:    name,
+          jockeyName:   jockey,
+          wgBudam:      budam,
+          weight:       weight,
+          weightChange: wChg,
+          recentRecord: recent,
+          bestTime:     best,
           trackPerformance: HorseTrackPerformance(
             horseGateNo: gateNo, horseName: name,
           ),
-          advancedStat:  advStat,
+          advancedStat: advStat,
           pastRaces: recentRanks.asMap().entries.map((e) => PastRaceBlock(
             dateCode:   '',
             venue:      '',
@@ -102,7 +139,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
             weather:    '',
             moisture:   0,
             selfRank:   e.value,
-            totalHorses:11,
+            totalHorses: 11,
             finishes:   [],
           )).toList(),
         );
@@ -111,10 +148,15 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
       if (mounted && map.isNotEmpty) {
         setState(() {
           _parsedHorseMap = map;
-          _hasParsedData  = true;
+          _geneticScoreMap = genMap;
+          _distanceRecordMap = distMap;
+          _hasParsedData = true;
         });
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _isLoadingParsed = false);
+    }
   }
 
   String _venueCodeToName(String code) {
@@ -126,9 +168,13 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
   @override
   void dispose() {
     _uiTimer?.cancel();
+    _tabController.dispose();
     super.dispose();
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  //  빌드
+  // ══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -141,8 +187,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
               child: Consumer<RaceProvider>(
                 builder: (_, provider, __) {
                   final horses = provider.horses;
-                  final race   = provider.selectedRace;
-
+                  final race = provider.selectedRace;
                   if (horses.isEmpty || race == null) {
                     return _buildEmptyState();
                   }
@@ -156,9 +201,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 헤더
-  // ───────────────────────────────────────────────────────────
+  // ── 헤더 ────────────────────────────────────────────────────────────────
   Widget _buildHeader() {
     return Container(
       color: const Color(0xFF0A1628),
@@ -177,7 +220,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
               children: [
                 Text('📋', style: TextStyle(fontSize: 16)),
                 SizedBox(width: 6),
-                Text('경주 정보',
+                Text('출전표 분석',
                     style: TextStyle(
                         color: Colors.white,
                         fontSize: 15, fontWeight: FontWeight.w900)),
@@ -190,13 +233,12 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
               builder: (_, p, __) => Text(
                 p.selectedRace != null
                     ? '${p.selectedRace!.venueCode == "1" ? "서울" : p.selectedRace!.venueCode == "2" ? "부산경남" : "제주"} 제${p.selectedRace!.raceNo}경주'
-                    : 'AI 분석 기반 특이사항',
+                    : '경주를 선택해주세요',
                 style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
               ),
             ),
           ),
-          // 실시간 갱신 상태 표시
           Consumer<RaceProvider>(
             builder: (_, p, __) => _buildRefreshIndicator(p),
           ),
@@ -205,18 +247,12 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 실시간 갱신 인디케이터 (헤더 우측)
-  // ───────────────────────────────────────────────────────────
   Widget _buildRefreshIndicator(RaceProvider provider) {
     if (provider.selectedRace == null) return const SizedBox.shrink();
-
     final status = provider.refreshStatus;
     final isAuto = provider.isAutoRefreshEnabled;
-
     Color dotColor;
     String statusText;
-
     if (provider.isRefreshing) {
       dotColor = const Color(0xFFFFD700);
       statusText = '갱신 중…';
@@ -225,9 +261,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
       final min = sec ~/ 60;
       final remSec = sec % 60;
       dotColor = const Color(0xFF4CAF50);
-      statusText = min > 0
-          ? '${min}분 후 갱신'
-          : '${remSec}초 후 갱신';
+      statusText = min > 0 ? '${min}분 후 갱신' : '${remSec}초 후 갱신';
     } else if (status == RefreshStatus.error) {
       dotColor = const Color(0xFFFF5252);
       statusText = '갱신 실패';
@@ -235,7 +269,6 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
       dotColor = Colors.white.withValues(alpha: 0.3);
       statusText = provider.lastUpdatedLabel;
     }
-
     return GestureDetector(
       onTap: () => provider.manualRefresh(),
       child: Container(
@@ -248,7 +281,6 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 상태 점
             if (provider.isRefreshing)
               SizedBox(
                 width: 8, height: 8,
@@ -260,16 +292,12 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
             else
               Container(
                 width: 6, height: 6,
-                decoration: BoxDecoration(
-                  color: dotColor,
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
               ),
             const SizedBox(width: 5),
             Text(statusText,
                 style: TextStyle(
-                    color: dotColor,
-                    fontSize: 9.5, fontWeight: FontWeight.w700)),
+                    color: dotColor, fontSize: 9.5, fontWeight: FontWeight.w700)),
             const SizedBox(width: 4),
             Icon(Icons.refresh, color: dotColor, size: 12),
           ],
@@ -278,9 +306,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 빈 상태
-  // ───────────────────────────────────────────────────────────
+  // ── 빈 상태 ─────────────────────────────────────────────────────────────
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -293,7 +319,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
                   color: AppTheme.textWhite,
                   fontSize: 16, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          Text('홈에서 경주를 선택하면\nAI 분석 기반 특이사항을 확인할 수 있습니다.',
+          Text('홈에서 경주를 선택하면\n출전표 분석 데이터를 확인할 수 있습니다.',
               textAlign: TextAlign.center,
               style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5), fontSize: 13)),
@@ -302,374 +328,890 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 메인 콘텐츠
-  // ───────────────────────────────────────────────────────────
-  Widget _buildContent(RaceInfo race, List<HorseEntry> horses,
-      RaceProvider provider) {
-    final sorted = [...horses]..sort(
-        (a, b) => b.finalScore.compareTo(a.finalScore));
+  // ══════════════════════════════════════════════════════════════════════
+  //  메인 콘텐츠 (탭 구조)
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildContent(RaceInfo race, List<HorseEntry> horses, RaceProvider provider) {
+    final sorted = [...horses]..sort((a, b) => a.gateNo.compareTo(b.gateNo));
 
-    // 복병마 2개 선정
+    return Column(
+      children: [
+        // ── 탭 바 ────────────────────────────────────────────────────────
+        Container(
+          color: const Color(0xFF0A1628),
+          child: TabBar(
+            controller: _tabController,
+            indicatorColor: const Color(0xFFFFD700),
+            indicatorWeight: 2.5,
+            labelColor: const Color(0xFFFFD700),
+            unselectedLabelColor: Colors.white.withValues(alpha: 0.45),
+            labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            tabs: const [
+              Tab(icon: Icon(Icons.bar_chart, size: 15), text: '출전마 분석'),
+              Tab(icon: Icon(Icons.track_changes, size: 15), text: '경주 통계'),
+            ],
+          ),
+        ),
+        // ── 파서 상태 배너 ─────────────────────────────────────────────
+        _buildParserStatusBanner(),
+        // ── 탭 뷰 ────────────────────────────────────────────────────────
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              // 탭1: 출전마 분석 (마필 카드 + TrendLine)
+              _buildHorseCardsTab(race, sorted, provider),
+              // 탭2: 경주 통계 (TOP5 그리드 + SpeedBarChart)
+              _buildStatsTab(race, sorted),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── 파서 상태 배너 ────────────────────────────────────────────────────
+  Widget _buildParserStatusBanner() {
+    if (_isLoadingParsed) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        color: const Color(0xFF0A1628),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 10, height: 10,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4DB6AC)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('출전표 파싱 데이터 로드 중...',
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5), fontSize: 10)),
+          ],
+        ),
+      );
+    }
+    if (!_hasParsedData) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        color: const Color(0xFF0A1628),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline,
+                color: Colors.white.withValues(alpha: 0.3), size: 12),
+            const SizedBox(width: 6),
+            Text('파싱 데이터 없음 — API 데이터로 표시',
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.4), fontSize: 10)),
+          ],
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      color: const Color(0xFF0A1628),
+      child: Row(
+        children: [
+          Container(
+            width: 6, height: 6,
+            decoration: const BoxDecoration(
+              color: Color(0xFF4CAF50), shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '출전표 파싱 데이터 반영 중 (${_parsedHorseMap.length}마필)',
+            style: const TextStyle(color: Color(0xFF81C784), fontSize: 10),
+          ),
+          const Spacer(),
+          const Text('0 크레딧',
+              style: TextStyle(color: Color(0xFF4CAF50), fontSize: 9)),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  탭1: 출전마 분석 탭
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildHorseCardsTab(
+      RaceInfo race, List<HorseEntry> horses, RaceProvider provider) {
     final darkHorses = _selectDarkHorses(horses);
-    final darkHorseGates = darkHorses.map((h) => h.gateNo).toSet();
+    final darkGates = darkHorses.map((h) => h.gateNo).toSet();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 24),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 실시간 갱신 상태 바 (데이터 변동 있을 때 표시)
+          // 실시간 갱신 상태
           _buildLiveStatusBar(provider),
-          // 텍스트 파서 데이터 연동 배너
-          if (_hasParsedData) _buildParsedDataBanner(),
+          // 경주 개요
           _buildRaceOverview(race, horses),
-          const SizedBox(height: 16),
-          _buildApiInsightSection(sorted, darkHorses),
-          const SizedBox(height: 16),
-          // 텍스트 파서: 출전마 상세정보 (기수·체중·최근성적)
-          if (_hasParsedData) _buildParsedHorseTable(sorted),
-          _buildHorseSpecialInfo(sorted, darkHorseGates),
-          const SizedBox(height: 16),
-          _buildWeightAlertSection(sorted),
-          const SizedBox(height: 16),
-          _buildOddsSection(sorted, darkHorseGates),
+          const SizedBox(height: 14),
+          // 섹션 제목
+          _sectionTitle('🐴 마필 카드 (기세 트렌드)'),
+          const SizedBox(height: 10),
+          // 마필 카드 리스트
+          ...horses.map((h) => _buildHorseCard(h, race, darkGates.contains(h.gateNo))),
+          const SizedBox(height: 14),
+          // AI 추천 복병마 (기존 기능 유지)
+          if (darkHorses.isNotEmpty) ...[
+            _sectionTitle('💣 AI 추천 복병마'),
+            const SizedBox(height: 10),
+            _buildDarkHorseCards(darkHorses),
+          ],
+          const SizedBox(height: 14),
+          // 배당 순위 섹션
+          _buildOddsSection([...horses]..sort(
+              (a, b) => a.odds.compareTo(b.odds)), darkGates),
         ],
       ),
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // 텍스트 파서 연동: 출전표 데이터 표시 배너
-  // ─────────────────────────────────────────────────────────────────────
-  Widget _buildParsedDataBanner() {
+  // ══════════════════════════════════════════════════════════════════════
+  //  탭2: 경주 통계 탭
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildStatsTab(RaceInfo race, List<HorseEntry> horses) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // TOP5 그리드 뷰
+          _sectionTitle('🏆 기타 추리 항목별 TOP 5'),
+          const SizedBox(height: 10),
+          _buildTop5GridView(horses, race),
+          const SizedBox(height: 18),
+          // S1F / G1F 바 차트
+          _sectionTitle('⚡ 경주 구간 스퍼트 분석'),
+          const SizedBox(height: 10),
+          _buildSpeedBarChartSection(horses),
+          const SizedBox(height: 18),
+          // 기존 API 인사이트 (하단 유지)
+          _sectionTitle('🤖 AI 분석 인사이트'),
+          const SizedBox(height: 10),
+          _buildApiInsightSection(
+              [...horses]..sort((a, b) => b.finalScore.compareTo(a.finalScore)),
+              _selectDarkHorses(horses)),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  마필 카드 (HorseCard)
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildHorseCard(HorseEntry h, RaceInfo race, bool isDark) {
+    final parsed = _parsedHorseMap[h.gateNo];
+    final jockey = parsed?.jockeyName.isNotEmpty == true
+        ? parsed!.jockeyName : h.jockeyName;
+    final budam = parsed?.wgBudam ?? h.wgBudam;
+    final weight = parsed?.weight ?? h.weight;
+    final weightChg = parsed?.weightChange ?? h.weightChange;
+    final style = parsed?.advancedStat.runningStyle ?? RunningStyle.unknown;
+    final speedIdx = parsed?.advancedStat.speedIndex ?? 0.0;
+    final prize6m = parsed?.advancedStat.prize6Month ?? 0;
+    final recentRanks = parsed?.pastRaces.map((r) => r.selfRank).toList() ?? [];
+    final capData = HorseCapColors.getCapData(h.gateNo);
+    final styleColor = _styleColor(style);
+    final styleLabel = EntryTextParser.runningStyleLabel(style);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1A1A3A), Color(0xFF0D1A2A)],
+        color: isDark
+            ? const Color(0xFF1A0C08)
+            : const Color(0xFF0C1420),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark
+              ? const Color(0xFFFF7043).withValues(alpha: 0.4)
+              : const Color(0xFF1A3050),
+          width: isDark ? 1.5 : 1.0,
         ),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF4CAF50).withValues(alpha: 0.6)),
+      ),
+      child: Column(
+        children: [
+          // ── 카드 상단: 기본정보 + 주행스타일 ─────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 마번 원형 뱃지
+                Container(
+                  width: 32, height: 32,
+                  decoration: BoxDecoration(
+                    color: capData.bg,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: capData.bg.withValues(alpha: 0.4),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text('${h.gateNo}',
+                        style: TextStyle(
+                            color: capData.text,
+                            fontSize: 13, fontWeight: FontWeight.w900)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // 마명 + 부담중량
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(h.horseName,
+                                style: TextStyle(
+                                    color: isDark
+                                        ? const Color(0xFFFF7043)
+                                        : Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800),
+                                overflow: TextOverflow.ellipsis),
+                          ),
+                          if (isDark)
+                            const Text('💣', style: TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          _infoChip(
+                            '기수: ${jockey.isNotEmpty ? jockey : "-"}',
+                            const Color(0xFF64B5F6),
+                          ),
+                          const SizedBox(width: 5),
+                          _infoChip(
+                            '${budam}kg',
+                            const Color(0xFFFFD700),
+                          ),
+                          if (weight > 0) ...[
+                            const SizedBox(width: 5),
+                            _infoChip(
+                              '체중 $weight(${weightChg >= 0 ? '+' : ''}$weightChg)',
+                              weightChg > 2
+                                  ? const Color(0xFFEF9A9A)
+                                  : weightChg < -2
+                                      ? const Color(0xFFA5D6A7)
+                                      : Colors.white.withValues(alpha: 0.5),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                // 우측: 배당 + 속도지수
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('${h.odds.toStringAsFixed(1)}배',
+                        style: TextStyle(
+                            color: h.odds < 5
+                                ? const Color(0xFFFF5252)
+                                : h.odds < 15
+                                    ? const Color(0xFFFFD700)
+                                    : Colors.white.withValues(alpha: 0.6),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800)),
+                    if (speedIdx > 0)
+                      Container(
+                        margin: const EdgeInsets.only(top: 3),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: speedIdx >= 90
+                              ? const Color(0xFFFFD700).withValues(alpha: 0.15)
+                              : const Color(0xFF333355),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '속도 ${speedIdx.toStringAsFixed(0)}',
+                          style: TextStyle(
+                              color: speedIdx >= 90
+                                  ? const Color(0xFFFFD54F)
+                                  : Colors.white.withValues(alpha: 0.5),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    if (style != RunningStyle.unknown)
+                      Container(
+                        margin: const EdgeInsets.only(top: 3),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: styleColor.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color: styleColor.withValues(alpha: 0.35)),
+                        ),
+                        child: Text(styleLabel,
+                            style: TextStyle(
+                                color: styleColor,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // ── 트렌드 라인 ──────────────────────────────────────────────
+          if (recentRanks.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: _TrendLineWidget(
+                ranks: recentRanks,
+                prize6m: prize6m,
+                gateNo: h.gateNo,
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: _buildNoDataStrip(
+                '최근 성적 데이터 없음',
+                h.recentRecord.isNotEmpty ? h.recentRecord : null,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              color: color.withValues(alpha: 0.85),
+              fontSize: 9.5, fontWeight: FontWeight.w500)),
+    );
+  }
+
+  Widget _buildNoDataStrip(String msg, String? fallback) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+            color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.text_snippet, color: Color(0xFF4CAF50), size: 14),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '📋 출전표 텍스트 파싱 데이터 반영 중 (${_parsedHorseMap.length}마필)',
-              style: const TextStyle(
-                color: Color(0xFF81C784),
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          const Text(
-            '0 크레딧',
-            style: TextStyle(color: Color(0xFF4CAF50), fontSize: 10),
+          Icon(Icons.remove, color: Colors.white.withValues(alpha: 0.2), size: 12),
+          const SizedBox(width: 6),
+          Text(
+            fallback != null && fallback.isNotEmpty
+                ? '최근기록: $fallback'
+                : msg,
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.3),
+                fontSize: 10),
           ),
         ],
       ),
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // 텍스트 파서 연동: 출전마 상세정보 테이블
-  // ─────────────────────────────────────────────────────────────────────
-  Widget _buildParsedHorseTable(List<HorseEntry> sorted) {
-    if (_parsedHorseMap.isEmpty) return const SizedBox.shrink();
+  // ══════════════════════════════════════════════════════════════════════
+  //  TOP 5 그리드 뷰 (PDF 기반 4카테고리)
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildTop5GridView(List<HorseEntry> horses, RaceInfo race) {
+    // ── 카테고리 1: 복승률 높은 말 ─────────────────────────────────────
+    final top5PlaceRate = _buildPlaceRateTop5(horses);
+    // ── 카테고리 2: 최근 6개월 경주당 상금 많은 말 ───────────────────────
+    final top5Prize6m = _buildPrize6mTop5(horses);
+    // ── 카테고리 3: 유전능력 좋은 말 ──────────────────────────────────
+    final top5Genetic = _buildGeneticTop5(horses);
+    // ── 카테고리 4: 거리기록 빠른 말 ──────────────────────────────────
+    final top5DistRecord = _buildDistRecordTop5(horses, race.distance);
 
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _Top5Card(
+              title: '복승률',
+              icon: '🏅',
+              color: const Color(0xFFFFD700),
+              items: top5PlaceRate,
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: _Top5Card(
+              title: '6개월 상금',
+              icon: '💰',
+              color: const Color(0xFF4CAF50),
+              items: top5Prize6m,
+            )),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _Top5Card(
+              title: '유전능력',
+              icon: '🧬',
+              color: const Color(0xFFCE93D8),
+              items: top5Genetic,
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: _Top5Card(
+              title: '${race.distance}m 기록',
+              icon: '⏱️',
+              color: const Color(0xFF4FC3F7),
+              items: top5DistRecord,
+            )),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // 복승률 TOP5
+  List<_Top5Item> _buildPlaceRateTop5(List<HorseEntry> horses) {
+    final items = <_Top5Item>[];
+    for (final h in horses) {
+      final parsed = _parsedHorseMap[h.gateNo];
+      double rate = parsed?.advancedStat.careerPlaceRate ?? 0.0;
+      if (rate <= 0) rate = (h.jockeyRcWins * 0.6).clamp(0.0, 1.0);
+      if (rate > 0) {
+        items.add(_Top5Item(
+          gateNo: h.gateNo,
+          horseName: h.horseName,
+          value: '${(rate * 100).toStringAsFixed(1)}%',
+          sortKey: rate,
+        ));
+      }
+    }
+    items.sort((a, b) => b.sortKey.compareTo(a.sortKey));
+    return items.take(5).toList();
+  }
+
+  // 6개월 상금 TOP5
+  List<_Top5Item> _buildPrize6mTop5(List<HorseEntry> horses) {
+    final items = <_Top5Item>[];
+    for (final h in horses) {
+      final parsed = _parsedHorseMap[h.gateNo];
+      final prize = parsed?.advancedStat.prize6Month ?? 0;
+      if (prize > 0) {
+        final label = prize >= 100000000
+            ? '${(prize / 100000000.0).toStringAsFixed(1)}억원'
+            : prize >= 10000000
+                ? '${(prize / 10000000.0).toStringAsFixed(1)}천만'
+                : prize >= 1000000
+                    ? '${(prize / 1000000.0).toStringAsFixed(1)}백만'
+                    : '${prize ~/ 1000}천원';
+        items.add(_Top5Item(
+          gateNo: h.gateNo,
+          horseName: h.horseName,
+          value: label,
+          sortKey: prize.toDouble(),
+        ));
+      }
+    }
+    items.sort((a, b) => b.sortKey.compareTo(a.sortKey));
+    return items.take(5).toList();
+  }
+
+  // 유전능력 TOP5 (속도지수 + 상금 기반)
+  List<_Top5Item> _buildGeneticTop5(List<HorseEntry> horses) {
+    final items = <_Top5Item>[];
+    for (final h in horses) {
+      final score = _geneticScoreMap[h.gateNo] ?? 0.0;
+      if (score > 0) {
+        items.add(_Top5Item(
+          gateNo: h.gateNo,
+          horseName: h.horseName,
+          value: '${score.toStringAsFixed(1)}pt',
+          sortKey: score,
+        ));
+      }
+    }
+    items.sort((a, b) => b.sortKey.compareTo(a.sortKey));
+    return items.take(5).toList();
+  }
+
+  // 거리기록 TOP5
+  List<_Top5Item> _buildDistRecordTop5(List<HorseEntry> horses, int distance) {
+    final items = <_Top5Item>[];
+    for (final h in horses) {
+      final distBest = _distanceRecordMap[h.gateNo] ?? '';
+      final parsed = _parsedHorseMap[h.gateNo];
+      final bestTime = distBest.isNotEmpty
+          ? distBest
+          : parsed?.bestTime.isNotEmpty == true
+              ? parsed!.bestTime
+              : '';
+      if (bestTime.isNotEmpty) {
+        // 기록을 초 단위 float으로 변환해 정렬키로 사용
+        final sortKey = _timeToSeconds(bestTime);
+        if (sortKey > 0) {
+          items.add(_Top5Item(
+            gateNo: h.gateNo,
+            horseName: h.horseName,
+            value: bestTime,
+            sortKey: sortKey,
+            ascending: true, // 기록은 빠를수록(낮을수록) 좋음
+          ));
+        }
+      }
+    }
+    items.sort((a, b) => a.sortKey.compareTo(b.sortKey)); // 오름차순
+    return items.take(5).toList();
+  }
+
+  double _timeToSeconds(String t) {
+    // "1:24.5" → 84.5
+    try {
+      if (t.contains(':')) {
+        final parts = t.split(':');
+        final min = double.tryParse(parts[0]) ?? 0;
+        final sec = double.tryParse(parts[1]) ?? 0;
+        return min * 60 + sec;
+      }
+      return double.tryParse(t) ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  S1F / G1F 가로 바 차트 섹션
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildSpeedBarChartSection(List<HorseEntry> horses) {
+    // S1F 데이터 수집
+    final s1fList = <_SpeedBarItem>[];
+    final g1fList = <_SpeedBarItem>[];
+
+    for (final h in horses) {
+      final parsed = _parsedHorseMap[h.gateNo];
+      final s1f = parsed?.advancedStat.s1fTime ?? 0.0;
+      final g1f = parsed?.advancedStat.g1fTime ?? 0.0;
+      if (s1f > 0) {
+        s1fList.add(_SpeedBarItem(gateNo: h.gateNo, horseName: h.horseName, time: s1f));
+      }
+      if (g1f > 0) {
+        g1fList.add(_SpeedBarItem(gateNo: h.gateNo, horseName: h.horseName, time: g1f));
+      }
+    }
+
+    // 정렬: 기록 빠른 순 (시간 낮은 순)
+    s1fList.sort((a, b) => a.time.compareTo(b.time));
+    g1fList.sort((a, b) => a.time.compareTo(b.time));
+
+    final hasS1f = s1fList.isNotEmpty;
+    final hasG1f = g1fList.isNotEmpty;
+
+    if (!hasS1f && !hasG1f) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0C1420),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF1A3050)),
+        ),
+        child: Column(
+          children: [
+            Icon(Icons.bar_chart, color: Colors.white.withValues(alpha: 0.2), size: 32),
+            const SizedBox(height: 8),
+            Text('구간 기록 데이터 없음\n출전표 텍스트를 파싱하면 표시됩니다.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35), fontSize: 12)),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        if (hasS1f) ...[
+          _SpeedBarChart(
+            title: '경주 초반 빠른 말',
+            subtitle: '출발 후 200m 구간 (S1F)',
+            icon: '🚀',
+            color: const Color(0xFFFF7043),
+            items: s1fList.take(7).toList(),
+            lowerIsBetter: true,
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (hasG1f)
+          _SpeedBarChart(
+            title: '경주 후반 빠른 말',
+            subtitle: '마지막 200m 구간 (G1F)',
+            icon: '💨',
+            color: const Color(0xFF4FC3F7),
+            items: g1fList.take(7).toList(),
+            lowerIsBetter: true,
+          ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  경주 개요
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildRaceOverview(RaceInfo race, List<HorseEntry> horses) {
+    final venueLabel = race.venueCode == '1' ? '서울'
+        : race.venueCode == '2' ? '부산경남' : '제주';
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF0C1A1A),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF1A3A2A)),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0C1A2E), Color(0xFF071220)],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1A3A5A)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: _overviewChip('📍 경주장', venueLabel,
+                  const Color(0xFF64B5F6))),
+              const SizedBox(width: 8),
+              Expanded(child: _overviewChip('📏 거리', '${race.distance}m',
+                  const Color(0xFFFFD700))),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: _overviewChip('🐎 출전두수', '${horses.length}두',
+                  const Color(0xFF81C784))),
+              const SizedBox(width: 8),
+              Expanded(child: _overviewChip('📊 파서데이터',
+                  _hasParsedData ? '${_parsedHorseMap.length}마 연동' : '대기 중',
+                  _hasParsedData ? const Color(0xFF4CAF50) : Colors.grey)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _overviewChip(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 섹션 헤더
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: const BoxDecoration(
-              color: Color(0xFF0D2020),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
-            ),
-            child: Row(
-              children: const [
-                Icon(Icons.assignment, color: Color(0xFF4DB6AC), size: 15),
-                SizedBox(width: 8),
-                Text(
-                  '📋 출전표 파싱 데이터',
-                  style: TextStyle(
-                    color: Color(0xFF4DB6AC),
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // 테이블 헤더
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: Row(
-              children: const [
-                SizedBox(width: 26, child: Text('번', style: _pHdrStyle)),
-                Expanded(flex: 3, child: Text('마명', style: _pHdrStyle)),
-                Expanded(flex: 2, child: Text('기수', style: _pHdrStyle)),
-                SizedBox(width: 38, child: Text('부담중량', style: _pHdrStyle)),
-                SizedBox(width: 44, child: Text('체중(변화)', style: _pHdrStyle)),
-                Expanded(flex: 2, child: Text('최근성적', style: _pHdrStyle)),
-                Expanded(flex: 2, child: Text('스타일/지수', style: _pHdrStyle)),
-              ],
-            ),
-          ),
-          const Divider(color: Color(0xFF1A3A2A), height: 4),
-          // 마필 행
-          ...sorted.map((h) => _buildParsedHorseRow(h)),
-          const SizedBox(height: 6),
+          Text(label,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5), fontSize: 9.5)),
+          const SizedBox(height: 2),
+          Text(value,
+              style: TextStyle(
+                  color: color, fontSize: 13, fontWeight: FontWeight.w800)),
         ],
       ),
     );
   }
 
-  static const _pHdrStyle = TextStyle(
-    color: Color(0xFF4A7A70),
-    fontSize: 9,
-    fontWeight: FontWeight.w600,
-  );
+  // ══════════════════════════════════════════════════════════════════════
+  //  AI 인사이트 (기존 기능 유지)
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildApiInsightSection(
+      List<HorseEntry> sorted, List<HorseEntry> darkHorses) {
+    if (sorted.isEmpty) return const SizedBox.shrink();
 
-  Widget _buildParsedHorseRow(HorseEntry h) {
-    final parsed = _parsedHorseMap[h.gateNo];
-
-    // 파싱 데이터 우선 사용, 없으면 API 데이터 폴백
-    final jockey      = parsed?.jockeyName.isNotEmpty == true
-        ? parsed!.jockeyName : h.jockeyName;
-    final wgBudam     = parsed?.wgBudam ?? h.wgBudam;
-    final weight      = parsed?.weight ?? h.weight;
-    final weightChg   = parsed?.weightChange ?? h.weightChange;
-    final recentRanks = parsed?.pastRaces.map((r) => r.selfRank).toList() ?? [];
-    final style       = parsed?.advancedStat.runningStyle ?? RunningStyle.unknown;
-    final speedIdx    = parsed?.advancedStat.speedIndex ?? 0.0;
-    final isFromParse = parsed != null;
-
-    final styleLabel = EntryTextParser.runningStyleLabel(style);
-    final styleColor = style == RunningStyle.frontRunner
-        ? const Color(0xFFFF8A65)
-        : style == RunningStyle.closer
-            ? const Color(0xFF64B5F6)
-            : style == RunningStyle.stalker
-                ? const Color(0xFF81C784)
-                : const Color(0xFF888888);
-
+    // 상위 3마 예측
+    final top3 = sorted.take(3).toList();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isFromParse
-            ? const Color(0xFF0A1A15).withValues(alpha: 0.5)
-            : Colors.transparent,
-        border: Border(
-          bottom: BorderSide(color: const Color(0xFF1A3A2A), width: 0.5),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0D1830), Color(0xFF060E20)],
         ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1A2A50)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 마번
-          SizedBox(
-            width: 26,
-            child: Container(
-              width: 20, height: 20,
-              decoration: BoxDecoration(
-                color: HorseCapColors.getCapData(h.gateNo).bg,
-                shape: BoxShape.circle,
+          Row(
+            children: [
+              const Text('🤖', style: TextStyle(fontSize: 14)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('AI 분석 기반 예상 순위',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13, fontWeight: FontWeight.w800)),
               ),
-              child: Center(
-                child: Text(
-                  '${h.gateNo}',
-                  style: TextStyle(
-                    color: HorseCapColors.getCapData(h.gateNo).text,
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: top3.asMap().entries.map((entry) {
+              final rank = entry.key + 1;
+              final h = entry.value;
+              final rankColor = rank == 1
+                  ? const Color(0xFFFFD700)
+                  : rank == 2
+                      ? const Color(0xFFB0BEC5)
+                      : const Color(0xFFCD7F32);
+              final capData = HorseCapColors.getCapData(h.gateNo);
+              return Expanded(
+                child: Container(
+                  margin: EdgeInsets.only(right: rank < 3 ? 8 : 0),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: rankColor.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: rankColor.withValues(alpha: 0.3)),
                   ),
-                ),
-              ),
-            ),
-          ),
-          // 마명
-          Expanded(
-            flex: 3,
-            child: Text(
-              h.horseName,
-              style: TextStyle(
-                color: isFromParse
-                    ? const Color(0xFFE0FFF0)
-                    : const Color(0xFFCCCCDD),
-                fontSize: 10,
-                fontWeight: FontWeight.w500,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          // 기수
-          Expanded(
-            flex: 2,
-            child: Row(
-              children: [
-                Text(
-                  jockey.isNotEmpty ? jockey : '-',
-                  style: const TextStyle(
-                    color: Color(0xFFAABBCC),
-                    fontSize: 10,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (isFromParse)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 2),
-                    child: Icon(Icons.text_snippet,
-                        color: Color(0xFF4DB6AC), size: 8),
-                  ),
-              ],
-            ),
-          ),
-          // 부담중량
-          SizedBox(
-            width: 38,
-            child: Text(
-              '${wgBudam}kg',
-              style: const TextStyle(
-                color: Color(0xFFCCCCDD),
-                fontSize: 10,
-              ),
-            ),
-          ),
-          // 체중 + 변화
-          SizedBox(
-            width: 44,
-            child: Text(
-              weight > 0
-                  ? '$weight(${weightChg >= 0 ? '+' : ''}$weightChg)'
-                  : '-',
-              style: TextStyle(
-                color: weightChg > 0
-                    ? const Color(0xFFEF9A9A)
-                    : weightChg < 0
-                        ? const Color(0xFFA5D6A7)
-                        : const Color(0xFFCCCCDD),
-                fontSize: 9,
-              ),
-            ),
-          ),
-          // 최근 4경주 성적
-          Expanded(
-            flex: 2,
-            child: recentRanks.isNotEmpty
-                ? Wrap(
-                    spacing: 3,
-                    children: recentRanks.take(4).map((rank) {
-                      Color rankColor = rank == 1
-                          ? const Color(0xFFFFD700)
-                          : rank <= 3
-                              ? const Color(0xFF81C784)
-                              : rank <= 5
-                                  ? const Color(0xFFCCCCDD)
-                                  : const Color(0xFF666688);
-                      return Container(
-                        width: 14, height: 14,
+                  child: Column(
+                    children: [
+                      Text('$rank위',
+                          style: TextStyle(
+                              color: rankColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: 28, height: 28,
                         decoration: BoxDecoration(
-                          color: rankColor.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(2),
-                          border: Border.all(
-                            color: rankColor.withValues(alpha: 0.5),
-                            width: 0.5,
-                          ),
+                          color: capData.bg,
+                          shape: BoxShape.circle,
                         ),
                         child: Center(
-                          child: Text(
-                            '$rank',
-                            style: TextStyle(
-                              color: rankColor,
-                              fontSize: 8,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          child: Text('${h.gateNo}',
+                              style: TextStyle(
+                                  color: capData.text,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900)),
                         ),
-                      );
-                    }).toList(),
-                  )
-                : Text(
-                    h.recentRecord.isNotEmpty ? h.recentRecord : '-',
-                    style: const TextStyle(
-                      color: Color(0xFF666688),
-                      fontSize: 9,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-          ),
-          // 주행스타일 / 속도지수
-          Expanded(
-            flex: 2,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (style != RunningStyle.unknown)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 4, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: styleColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                    child: Text(
-                      styleLabel,
-                      style: TextStyle(
-                        color: styleColor,
-                        fontSize: 8,
-                        fontWeight: FontWeight.w600,
                       ),
-                    ),
+                      const SizedBox(height: 4),
+                      Text(h.horseName,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700),
+                          overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 3),
+                      Text('${h.finalScore.toStringAsFixed(1)}점',
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.5),
+                              fontSize: 9)),
+                    ],
                   ),
-                if (speedIdx > 0) ...[
-                  const SizedBox(width: 3),
-                  Text(
-                    speedIdx.toStringAsFixed(0),
+                ),
+              );
+            }).toList(),
+          ),
+          if (darkHorses.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Text('💣', style: TextStyle(fontSize: 12)),
+                const SizedBox(width: 6),
+                Text('복병마: ${darkHorses.map((h) => '${h.gateNo}번 ${h.horseName}').join(', ')}',
                     style: TextStyle(
-                      color: speedIdx >= 90
-                          ? const Color(0xFFFFD54F)
-                          : const Color(0xFF888899),
-                      fontSize: 9,
-                      fontWeight: speedIdx >= 90
-                          ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                ],
+                        color: const Color(0xFFFF7043).withValues(alpha: 0.85),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600)),
               ],
             ),
-          ),
+          ],
         ],
       ),
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 실시간 상태 바 (배당 변동 알림)
-  // ───────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  //  복병마 카드
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildDarkHorseCards(List<HorseEntry> darkHorses) {
+    return Row(
+      children: darkHorses.take(3).toList().asMap().entries.map((entry) {
+        final h = entry.value;
+        final capData = HorseCapColors.getCapData(h.gateNo);
+        return Expanded(
+          child: Container(
+            margin: EdgeInsets.only(right: entry.key < darkHorses.length - 1 ? 8 : 0),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A0808),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: const Color(0xFFFF7043).withValues(alpha: 0.35)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Text('💣', style: TextStyle(fontSize: 18)),
+                const SizedBox(height: 6),
+                Container(
+                  width: 30, height: 30,
+                  decoration: BoxDecoration(
+                    color: capData.bg, shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text('${h.gateNo}',
+                        style: TextStyle(
+                            color: capData.text,
+                            fontSize: 12, fontWeight: FontWeight.w900)),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(h.horseName,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Color(0xFFFF8A65),
+                        fontSize: 10, fontWeight: FontWeight.w700),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text('${h.odds.toStringAsFixed(1)}배',
+                    style: const TextStyle(
+                        color: Color(0xFFFFD700),
+                        fontSize: 11, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  실시간 상태 바
+  // ══════════════════════════════════════════════════════════════════════
   Widget _buildLiveStatusBar(RaceProvider provider) {
     final changes = provider.recentOddsChanges;
-
-    // 표시할 내용 없으면 업데이트 타임만 표시
     final lastLabel = provider.lastUpdatedLabel;
     final hasChanges = changes.isNotEmpty;
-
     if (!provider.isAutoRefreshEnabled && !hasChanges) {
       return const SizedBox.shrink();
     }
-
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -694,9 +1236,7 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
               Container(
                 width: 6, height: 6,
                 decoration: const BoxDecoration(
-                  color: Color(0xFF4CAF50),
-                  shape: BoxShape.circle,
-                ),
+                    color: Color(0xFF4CAF50), shape: BoxShape.circle),
               ),
               const SizedBox(width: 6),
               Text('실시간 모니터링',
@@ -754,901 +1294,151 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 경주 개요
-  // ───────────────────────────────────────────────────────────
-  Widget _buildRaceOverview(RaceInfo race, List<HorseEntry> horses) {
-    final venueLabel = race.venueCode == '1' ? '서울'
-        : race.venueCode == '2' ? '부산경남' : '제주';
-    final dirLabel = race.venueCode == '3' ? 'CW (시계방향)' : 'CCW (반시계)';
+  // ══════════════════════════════════════════════════════════════════════
+  //  배당 섹션
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildOddsSection(List<HorseEntry> sorted, Set<int> darkGates) {
+    if (sorted.isEmpty) return const SizedBox.shrink();
+    final maxOdds = sorted.fold(0.0, (m, h) => math.max(m, h.odds));
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0C1A2E), Color(0xFF071220)],
-        ),
+        color: const Color(0xFF0C1628),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF1A3A5A)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(child: _overviewChip('📍 경주장', venueLabel,
-                  const Color(0xFF64B5F6))),
-              const SizedBox(width: 8),
-              Expanded(child: _overviewChip('📏 거리', '${race.distance}m',
-                  const Color(0xFFFFD700))),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: _overviewChip('🐎 출전두수', '${horses.length}두',
-                  const Color(0xFF81C784))),
-              const SizedBox(width: 8),
-              Expanded(child: _overviewChip('🔄 방향', dirLabel,
-                  const Color(0xFFFF8A65))),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _overviewChip(String label, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
+        border: Border.all(color: const Color(0xFF1A2A4A)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.5), fontSize: 9.5)),
-          const SizedBox(height: 2),
-          Text(value,
-              style: TextStyle(
-                  color: color, fontSize: 13, fontWeight: FontWeight.w800)),
-        ],
-      ),
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  //  복병마 정밀 선정 알고리즘
-  // ═══════════════════════════════════════════════════════════
-
-  /// 복병 종합 점수 산출
-  /// - 배당 매력도 (8~60배 구간 선호)
-  /// - 기수 승률 (jockeyRcWins) × 가중치 2.0
-  /// - 경주마 승률 (rcWins) × 가중치 1.5
-  /// - 최근 컨디션 (formStat/100) × 0.5
-  /// - 상금 경쟁력 (prizeCompetitiveness) × 0.3
-  double _darkHorseScore(HorseEntry h) {
-    // 배당 매력도: 8~60배 구간 선호, 그 외 페널티
-    double oddsScore;
-    if (h.odds < 8.0) {
-      oddsScore = 0.0; // 인기마 제외
-    } else if (h.odds <= 60.0) {
-      // 8~60배: 중간값(30배) 근처 최고점 포물선
-      oddsScore = 1.0 - ((h.odds - 30.0) / 30.0).abs().clamp(0.0, 1.0);
-    } else {
-      // 60배 초과: 급락 (너무 높은 배당은 비현실적)
-      oddsScore = (1.0 - ((h.odds - 60.0) / 40.0)).clamp(0.0, 0.3);
-    }
-
-    // 기수 승률 (핵심 요소 — 가중치 최고)
-    final jockeyScore = (h.jockeyRcWins * 2.0).clamp(0.0, 2.0);
-
-    // 경주마 통산 승률
-    final horseScore = (h.rcWins * 1.5).clamp(0.0, 1.5);
-
-    // 최근 컨디션 폼
-    final formScore = (h.formStat / 100.0 * 0.5).clamp(0.0, 0.5);
-
-    // 상금 경쟁력 (경주 경험 지표)
-    final prizeScore = (h.prizeCompetitiveness * 0.3).clamp(0.0, 0.3);
-
-    return oddsScore + jockeyScore + horseScore + formScore + prizeScore;
-  }
-
-  /// 경주별 복병마 상위 2개 선정
-  /// 조건:
-  ///   - odds > 8.0 (인기마 제외)
-  ///   - 취소(isCancelled)가 아닌 말
-  ///   - 기수 승률 OR 경주마 승률 OR 컨디션 중 하나라도 실적 있음
-  List<HorseEntry> _selectDarkHorses(List<HorseEntry> horses) {
-    final candidates = horses.where((h) {
-      if (h.odds <= 8.0) return false;
-      if (h.isCancelled) return false;
-      // 기수·경주마 실적 또는 컨디션 중 하나 이상 보유
-      final hasJockeyRecord  = h.jockeyRcWins > 0.03;
-      final hasHorseRecord   = h.rcWins > 0.03;
-      final hasFormStat      = h.formStat > 50.0;
-      return hasJockeyRecord || hasHorseRecord || hasFormStat;
-    }).toList();
-
-    // 점수 내림차순 정렬
-    candidates.sort((a, b) =>
-        _darkHorseScore(b).compareTo(_darkHorseScore(a)));
-
-    return candidates.take(2).toList();
-  }
-
-  // ───────────────────────────────────────────────────────────
-  // AI 인사이트 섹션 (복병 2개로 개선)
-  // ───────────────────────────────────────────────────────────
-  Widget _buildApiInsightSection(
-      List<HorseEntry> sorted, List<HorseEntry> darkHorses) {
-    final winner   = sorted.isNotEmpty ? sorted[0] : null;
-    final bestCond = [...sorted]
-      ..sort((a, b) => b.formStat.compareTo(a.formStat));
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _sectionTitle('🔎 AI 분석 주요 인사이트'),
-        const SizedBox(height: 10),
-
-        // ① AI 최고점수
-        if (winner != null) ...[
-          _insightCard(
-            '⭐ AI 최고점수',
-            '${winner.gateNo}번 ${winner.horseName}  '
-            '${winner.finalScore.toStringAsFixed(1)}pt',
-            '속도 ${winner.speedStat.toStringAsFixed(0)} · '
-            '스테미나 ${winner.staminaStat.toStringAsFixed(0)} · '
-            '컨디션폼 ${winner.formStat.toStringAsFixed(0)}',
-            const Color(0xFFFFD700),
-          ),
-          const SizedBox(height: 8),
-        ],
-
-        // ② 복병 조합 카드 (최대 2개)
-        if (darkHorses.isNotEmpty) ...[
-          _buildDarkHorseCombinedCard(darkHorses),
-          const SizedBox(height: 8),
-        ],
-
-        // ③ 최상 컨디션
-        if (bestCond.isNotEmpty)
-          _insightCard(
-            '💪 최상 컨디션',
-            '${bestCond[0].gateNo}번 ${bestCond[0].horseName}  '
-            '폼 ${bestCond[0].formStat.toStringAsFixed(0)}pt',
-            '직전 경주 대비 컨디션 최고조 — 선행 유력',
-            const Color(0xFF81C784),
-          ),
-      ],
-    );
-  }
-
-  /// 복병 조합 카드 (2개 통합 표시)
-  Widget _buildDarkHorseCombinedCard(List<HorseEntry> darkHorses) {
-    const color = Color(0xFFFF7043);
-
-    return Container(
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            color.withValues(alpha: 0.12),
-            color.withValues(alpha: 0.05),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 섹션 헤더
-          Row(
-            children: [
-              const Text('💣', style: TextStyle(fontSize: 14)),
-              const SizedBox(width: 6),
-              const Text('이번 경주 복병 주목 조합',
-                  style: TextStyle(
-                      color: Color(0xFFFF7043),
-                      fontSize: 11, fontWeight: FontWeight.w800)),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text('${darkHorses.length}개 선정',
-                    style: TextStyle(
-                        color: color, fontSize: 9, fontWeight: FontWeight.w800)),
-              ),
-            ],
-          ),
+          _sectionTitle('📊 배당 현황'),
           const SizedBox(height: 10),
-
-          // 각 복병마 행
-          ...darkHorses.asMap().entries.map((entry) {
-            final i = entry.key;
-            final h = entry.value;
-            final score = _darkHorseScore(h);
-            final cd = HorseCapColors.getCapData(h.gateNo);
-            final isFirst = i == 0;
-
+          ...sorted.take(8).map((h) {
+            final barF = maxOdds > 0 ? (h.odds / maxOdds).clamp(0.05, 1.0) : 0.05;
+            final isDark = darkGates.contains(h.gateNo);
+            final oddColor = h.odds < 5
+                ? const Color(0xFFFF5252)
+                : h.odds < 15
+                    ? const Color(0xFFFFD700)
+                    : Colors.white.withValues(alpha: 0.6);
+            final capData = HorseCapColors.getCapData(h.gateNo);
             return Padding(
-              padding: EdgeInsets.only(bottom: i < darkHorses.length - 1 ? 8 : 0),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: isFirst
-                      ? color.withValues(alpha: 0.12)
-                      : Colors.white.withValues(alpha: 0.04),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isFirst
-                        ? color.withValues(alpha: 0.35)
-                        : Colors.white.withValues(alpha: 0.08),
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Container(
+                    width: 22, height: 22,
+                    decoration: BoxDecoration(
+                      color: capData.bg, shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text('${h.gateNo}',
+                          style: TextStyle(
+                              color: capData.text,
+                              fontSize: 9, fontWeight: FontWeight.w900)),
+                    ),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    // 순위 배지
-                    Container(
-                      width: 20, height: 20,
-                      decoration: BoxDecoration(
-                        color: isFirst ? color : Colors.white.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
-                        child: Text('${i + 1}',
-                            style: TextStyle(
-                                color: isFirst ? Colors.white : Colors.white.withValues(alpha: 0.5),
-                                fontSize: 10, fontWeight: FontWeight.w900)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // 마번 원
-                    Container(
-                      width: 26, height: 26,
-                      decoration: BoxDecoration(color: cd.bg, shape: BoxShape.circle),
-                      child: Center(
-                        child: Text('${h.gateNo}',
-                            style: TextStyle(
-                                color: cd.text,
-                                fontSize: 11, fontWeight: FontWeight.w900)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // 마명 + 기수
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(h.horseName,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12, fontWeight: FontWeight.w800)),
-                              const SizedBox(width: 5),
-                              Text(h.jockeyName,
-                                  style: TextStyle(
-                                      color: Colors.white.withValues(alpha: 0.5),
-                                      fontSize: 10)),
-                            ],
-                          ),
-                          const SizedBox(height: 3),
-                          // 근거 지표
-                          _buildDarkHorseRationale(h),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // 복병 점수 + 배당
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                  const SizedBox(width: 7),
+                  SizedBox(
+                    width: 60,
+                    child: Row(
                       children: [
-                        Text('${h.odds.toStringAsFixed(1)}배',
-                            style: TextStyle(
-                                color: isFirst ? color : Colors.white.withValues(alpha: 0.7),
-                                fontSize: 12, fontWeight: FontWeight.w900)),
-                        const SizedBox(height: 2),
+                        Expanded(
+                          child: Text(h.horseName,
+                              style: TextStyle(
+                                  color: isDark
+                                      ? const Color(0xFFFF7043)
+                                      : Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: isDark
+                                      ? FontWeight.w800
+                                      : FontWeight.normal),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        if (isDark)
+                          const Text(' 💣',
+                              style: TextStyle(fontSize: 8)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Stack(
+                      children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 2),
+                          height: 8,
                           decoration: BoxDecoration(
                             color: Colors.white.withValues(alpha: 0.07),
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: Text('복병점 ${score.toStringAsFixed(2)}',
-                              style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.55),
-                                  fontSize: 8.5)),
                         ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-
-  /// 복병 선정 근거 지표 (소형 태그)
-  Widget _buildDarkHorseRationale(HorseEntry h) {
-    final tags = <(String, Color)>[];
-
-    if (h.jockeyRcWins > 0.15) {
-      tags.add(('기수승률 ${(h.jockeyRcWins * 100).toStringAsFixed(0)}%',
-          const Color(0xFF64B5F6)));
-    }
-    if (h.rcWins > 0.10) {
-      tags.add(('마승률 ${(h.rcWins * 100).toStringAsFixed(0)}%',
-          const Color(0xFF81C784)));
-    }
-    if (h.formStat > 70) {
-      tags.add(('폼 ${h.formStat.toStringAsFixed(0)}pt',
-          const Color(0xFFFFD700)));
-    }
-    if (h.prizeCompetitiveness > 0.3) {
-      tags.add(('상금실적',
-          const Color(0xFFB388FF)));
-    }
-
-    if (tags.isEmpty) {
-      tags.add(('고배당 역전형', const Color(0xFFFF7043)));
-    }
-
-    return Wrap(
-      spacing: 4, runSpacing: 3,
-      children: tags.take(3).map((t) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(
-          color: t.$2.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(3),
-          border: Border.all(color: t.$2.withValues(alpha: 0.3)),
-        ),
-        child: Text(t.$1,
-            style: TextStyle(
-                color: t.$2, fontSize: 8.5, fontWeight: FontWeight.w700)),
-      )).toList(),
-    );
-  }
-
-  Widget _insightCard(String label, String main, String sub, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: TextStyle(
-                  color: color.withValues(alpha: 0.8),
-                  fontSize: 10, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(main,
-              style: TextStyle(
-                  color: color, fontSize: 13, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 3),
-          Text(sub,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.55), fontSize: 10.5)),
-        ],
-      ),
-    );
-  }
-
-  // ───────────────────────────────────────────────────────────
-  // 출전마 특이사항 (복병 2개 강조 처리)
-  // ───────────────────────────────────────────────────────────
-  Widget _buildHorseSpecialInfo(
-      List<HorseEntry> sorted, Set<int> darkHorseGates) {
-    // 복병마가 먼저, 나머지는 점수 순
-    final darkFirst = <HorseEntry>[];
-    final others    = <HorseEntry>[];
-    for (final h in sorted) {
-      if (darkHorseGates.contains(h.gateNo)) {
-        darkFirst.add(h);
-      } else {
-        others.add(h);
-      }
-    }
-    // 복병마는 복병 점수 순으로 정렬
-    darkFirst.sort((a, b) =>
-        _darkHorseScore(b).compareTo(_darkHorseScore(a)));
-
-    final allSorted = [...darkFirst, ...others];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _sectionTitle('🎯 AI 순위 분석'),
-        const SizedBox(height: 4),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            'AI 점수 기준 전체 순위 • 출전마 ${allSorted.length}두',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.35),
-              fontSize: 10.5,
-            ),
-          ),
-        ),
-        ...allSorted.map((h) {
-          final cd     = HorseCapColors.getCapData(h.gateNo);
-          final aiRank = allSorted.indexWhere(
-              (e) => e.gateNo == h.gateNo) + 1;
-          final alerts = _getHorseAlerts(
-            h, darkHorseGates,
-            allSortedByScore: allSorted,
-          );
-          // alerts가 비어도 행은 항상 표시 (6·7위 누락 방지)
-          // alerts가 비어있으면 기본 태그(AI 순위 표시)를 추가
-          final displayAlerts = alerts.isNotEmpty
-              ? alerts
-              : [('$aiRank위', Colors.white.withValues(alpha: 0.35))];
-
-          final isDarkHorse = darkHorseGates.contains(h.gateNo);
-          final darkRank = isDarkHorse ? darkFirst.indexOf(h) + 1 : 0;
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.all(11),
-            decoration: BoxDecoration(
-              color: isDarkHorse
-                  ? const Color(0xFF1A100C)
-                  : const Color(0xFF0C1A2E),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isDarkHorse
-                    ? const Color(0xFFFF7043).withValues(alpha: 0.4)
-                    : const Color(0xFF1A2A3A),
-                width: isDarkHorse ? 1.5 : 1.0,
-              ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 복병 순위 또는 일반 마번 원
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      width: 32, height: 32,
-                      decoration: BoxDecoration(
-                          color: cd.bg, shape: BoxShape.circle),
-                      child: Center(
-                        child: Text('${h.gateNo}',
-                            style: TextStyle(
-                                color: cd.text,
-                                fontSize: 13, fontWeight: FontWeight.w900)),
-                      ),
-                    ),
-                    if (isDarkHorse)
-                      Positioned(
-                        top: -4, right: -4,
-                        child: Container(
-                          width: 14, height: 14,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFFFF7043),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Text('$darkRank',
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 8, fontWeight: FontWeight.w900)),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(h.horseName,
-                              style: TextStyle(
-                                  color: isDarkHorse
-                                      ? const Color(0xFFFF7043)
-                                      : Colors.white,
-                                  fontSize: 13, fontWeight: FontWeight.w800)),
-                          const SizedBox(width: 6),
-                          Text(h.jockeyName,
-                              style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                  fontSize: 10)),
-                        ],
-                      ),
-                      const SizedBox(height: 5),
-                      Wrap(
-                        spacing: 5, runSpacing: 4,
-                        children: displayAlerts.map((a) => Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: a.$2.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(5),
-                            border: Border.all(
-                                color: a.$2.withValues(alpha: 0.4)),
-                          ),
-                          child: Text(a.$1,
-                              style: TextStyle(
-                                  color: a.$2,
-                                  fontSize: 9.5, fontWeight: FontWeight.w700)),
-                        )).toList(),
-                      ),
-                    ],
-                  ),
-                ),
-                // 우측: AI 순위 + 점수
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // AI 순위 배지
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: aiRank == 1
-                            ? const Color(0xFFFFD700).withValues(alpha: 0.18)
-                            : aiRank == 2
-                                ? const Color(0xFFB0BEC5).withValues(alpha: 0.18)
-                                : aiRank == 3
-                                    ? const Color(0xFFCD7F32).withValues(alpha: 0.18)
-                                    : Colors.white.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(5),
-                        border: Border.all(
-                          color: aiRank == 1
-                              ? const Color(0xFFFFD700).withValues(alpha: 0.5)
-                              : aiRank == 2
-                                  ? const Color(0xFFB0BEC5).withValues(alpha: 0.5)
-                                  : aiRank == 3
-                                      ? const Color(0xFFCD7F32).withValues(alpha: 0.5)
-                                      : Colors.white.withValues(alpha: 0.1),
-                        ),
-                      ),
-                      child: Text(
-                        '$aiRank위',
-                        style: TextStyle(
-                          color: aiRank == 1
-                              ? const Color(0xFFFFD700)
-                              : aiRank == 2
-                                  ? const Color(0xFFB0BEC5)
-                                  : aiRank == 3
-                                      ? const Color(0xFFCD7F32)
-                                      : Colors.white.withValues(alpha: 0.45),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    // AI 점수
-                    Text('${h.finalScore.toStringAsFixed(1)}pt',
-                        style: TextStyle(
-                            color: isDarkHorse
-                                ? const Color(0xFFFF7043)
-                                : const Color(0xFFFFD700),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800)),
-                  ],
-                ),
-              ],
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  /// 말별 특이사항 태그 생성 — 순위 기반 상대 평가
-  ///
-  /// 절대값 조건(> 80 등) 대신 전체 출전마 중 상대 순위로 판단:
-  ///   rank    = finalScore 내림차순 기준 1~N 순위
-  ///   aiRank  = 1위 → '🥇 AI 1순위', 2위 → '🥈 AI 2순위', 3위 → '🥉 AI 3순위'
-  ///   상위 40% → '⭐ 유력 후보'
-  ///   복병 선정 → '💣 복병 선정' (별도 전달)
-  ///   하위 30% → '📉 하위권'
-  ///
-  /// 추가 특이사항 태그 (상대 기준):
-  ///   speedStat 전체 1위 → '⚡ 속도 최고'
-  ///   staminaStat 전체 1위 → '💪 스태미나 최고'
-  ///   formStat 전체 1위 → '📈 폼 최고'
-  ///   odds 최저 (1위) → '🏆 단독 1인기'
-  ///   odds 2~3위 → '🏇 상위권 인기'
-  ///
-  /// [allSortedByScore]: finalScore 내림차순 정렬된 전체 출전마 리스트
-  List<(String, Color)> _getHorseAlerts(
-      HorseEntry h,
-      Set<int> darkHorseGates, {
-      required List<HorseEntry> allSortedByScore,
-  }) {
-    final alerts = <(String, Color)>[];
-    final total  = allSortedByScore.length;
-    if (total == 0) return alerts;
-
-    // ── AI 순위 배지 (finalScore 기준) ──────────────────────────────
-    final aiRank = allSortedByScore.indexWhere(
-            (e) => e.gateNo == h.gateNo) + 1;  // 1-based
-
-    if (aiRank == 1) {
-      alerts.add(('🥇 AI 1순위', const Color(0xFFFFD700)));
-    } else if (aiRank == 2) {
-      alerts.add(('🥈 AI 2순위', const Color(0xFFB0BEC5)));
-    } else if (aiRank == 3) {
-      alerts.add(('🥉 AI 3순위', const Color(0xFFCD7F32)));
-    } else if (aiRank <= (total * 0.4).ceil()) {
-      // 상위 40%
-      alerts.add(('⭐ 유력 후보', const Color(0xFF64B5F6)));
-    } else if (aiRank > (total * 0.7).floor()) {
-      // 하위 30%
-      alerts.add(('📉 하위권', const Color(0xFF78909C)));
-    } else {
-      // 중위권 (상위 40%~하위 30% 사이 — 6·7위 등)
-      alerts.add(('▪ 중위권', const Color(0xFF546E7A)));
-    }
-
-    // ── 복병 선정 태그 ───────────────────────────────────────────────
-    if (darkHorseGates.contains(h.gateNo)) {
-      alerts.add(('💣 복병', const Color(0xFFFF7043)));
-    }
-
-    // ── 특이사항: 전체 1위 지표 ─────────────────────────────────────
-    final topSpeed   = allSortedByScore.reduce(
-        (a, b) => a.speedStat   >= b.speedStat   ? a : b);
-    final topStamina = allSortedByScore.reduce(
-        (a, b) => a.staminaStat >= b.staminaStat ? a : b);
-    final topForm    = allSortedByScore.reduce(
-        (a, b) => a.formStat    >= b.formStat    ? a : b);
-
-    // 배당 순위 (odds 낮을수록 인기 — 단, 0.0은 미설정이므로 제외)
-    final validOdds = allSortedByScore
-        .where((e) => e.odds > 0.1)
-        .toList()
-      ..sort((a, b) => a.odds.compareTo(b.odds));
-    final oddsRank = validOdds.isEmpty ? 99
-        : validOdds.indexWhere((e) => e.gateNo == h.gateNo) + 1;
-
-    if (topSpeed.gateNo == h.gateNo && h.speedStat > 0) {
-      alerts.add(('⚡ 속도 최고', const Color(0xFFFFCC02)));
-    }
-    if (topStamina.gateNo == h.gateNo &&
-        topStamina.gateNo != topSpeed.gateNo &&
-        h.staminaStat > 0) {
-      alerts.add(('💪 스태미나 최고', const Color(0xFF81C784)));
-    }
-    if (topForm.gateNo == h.gateNo &&
-        topForm.gateNo != topSpeed.gateNo &&
-        topForm.gateNo != topStamina.gateNo &&
-        h.formStat > 0) {
-      alerts.add(('📈 폼 최고', const Color(0xFF64B5F6)));
-    }
-    if (oddsRank == 1 && h.odds > 0.1) {
-      // 이미 AI 1순위라면 중복 생략
-      if (aiRank != 1) alerts.add(('🏆 단독 1인기', const Color(0xFFFF7043)));
-    } else if (oddsRank <= 3 && oddsRank > 0 && h.odds > 0.1) {
-      if (aiRank > 3) alerts.add(('🏇 상위 인기', const Color(0xFFFFAB40)));
-    }
-
-    return alerts;
-  }
-
-  // ───────────────────────────────────────────────────────────
-  // 부담중량 섹션
-  // ───────────────────────────────────────────────────────────
-  Widget _buildWeightAlertSection(List<HorseEntry> sorted) {
-    final weightChanges = sorted
-        .where((h) => h.horseName.isNotEmpty)
-        .toList();
-    if (weightChanges.isEmpty) return const SizedBox.shrink();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _sectionTitle('⚖️ 부담중량 분석'),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0C1A2E),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF1A2A3A)),
-          ),
-          child: Column(
-            children: weightChanges.take(6).map((h) {
-              final wAdj = ((h.gateNo % 3) - 1).toDouble();
-              final wColor = wAdj < 0
-                  ? const Color(0xFF81C784)
-                  : wAdj > 0
-                      ? const Color(0xFFFF7043)
-                      : Colors.white;
-              final wLabel = wAdj < 0 ? '${wAdj.toStringAsFixed(0)}kg 감량'
-                  : wAdj > 0 ? '+${wAdj.toStringAsFixed(0)}kg 증량'
-                  : '기준중량';
-
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 24, height: 24,
-                      decoration: BoxDecoration(
-                        color: HorseCapColors.getCapData(h.gateNo).bg,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
-                        child: Text('${h.gateNo}',
-                            style: TextStyle(
-                                color: HorseCapColors.getCapData(h.gateNo).text,
-                                fontSize: 10, fontWeight: FontWeight.w900)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(h.horseName,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 11)),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: wColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(wLabel,
-                          style: TextStyle(
-                              color: wColor,
-                              fontSize: 10, fontWeight: FontWeight.w700)),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ───────────────────────────────────────────────────────────
-  // 배당률 분포 (복병마 강조)
-  // ───────────────────────────────────────────────────────────
-  Widget _buildOddsSection(
-      List<HorseEntry> sorted, Set<int> darkHorseGates) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _sectionTitle('💰 배당률 분포'),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0C1A2E),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF1A2A3A)),
-          ),
-          child: Column(
-            children: sorted.map((h) {
-              final maxOdds = sorted
-                  .map((e) => e.odds)
-                  .reduce((a, b) => a > b ? a : b);
-              final barF = (h.odds / maxOdds).clamp(0.05, 1.0);
-              final isDark = darkHorseGates.contains(h.gateNo);
-
-              final oddColor = isDark
-                  ? const Color(0xFFFF7043)
-                  : h.odds < 5.0
-                      ? const Color(0xFF81C784)
-                      : h.odds < 15.0
-                          ? const Color(0xFFFFD700)
-                          : const Color(0xFFFF5722);
-
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 22, height: 22,
-                      decoration: BoxDecoration(
-                        color: HorseCapColors.getCapData(h.gateNo).bg,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
-                        child: Text('${h.gateNo}',
-                            style: TextStyle(
-                                color: HorseCapColors.getCapData(h.gateNo).text,
-                                fontSize: 9, fontWeight: FontWeight.w900)),
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    SizedBox(
-                      width: 60,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(h.horseName,
-                                style: TextStyle(
-                                    color: isDark
-                                        ? const Color(0xFFFF7043)
-                                        : Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: isDark
-                                        ? FontWeight.w800
-                                        : FontWeight.normal),
-                                overflow: TextOverflow.ellipsis),
-                          ),
-                          if (isDark)
-                            const Text(' 💣',
-                                style: TextStyle(fontSize: 8)),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          Container(
+                        FractionallySizedBox(
+                          widthFactor: barF,
+                          child: Container(
                             height: 8,
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.07),
+                              color: oddColor.withValues(alpha: 0.8),
                               borderRadius: BorderRadius.circular(4),
                             ),
                           ),
-                          FractionallySizedBox(
-                            widthFactor: barF,
-                            child: Container(
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: oddColor.withValues(alpha: 0.8),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 6),
-                    SizedBox(
-                      width: 44,
-                      child: Text('${h.odds.toStringAsFixed(1)}배',
-                          style: TextStyle(
-                              color: oddColor,
-                              fontSize: 10.5, fontWeight: FontWeight.w800),
-                          textAlign: TextAlign.right),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-      ],
+                  ),
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 44,
+                    child: Text('${h.odds.toStringAsFixed(1)}배',
+                        style: TextStyle(
+                            color: oddColor,
+                            fontSize: 10.5, fontWeight: FontWeight.w800),
+                        textAlign: TextAlign.right),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ],
+      ),
     );
   }
 
-  // ───────────────────────────────────────────────────────────
-  // 공통 위젯
-  // ───────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  //  복병마 정밀 선정 알고리즘 (기존 로직 유지)
+  // ══════════════════════════════════════════════════════════════════════
+  double _darkHorseScore(HorseEntry h) {
+    double oddsScore;
+    if (h.odds < 8.0) {
+      oddsScore = 0.0;
+    } else if (h.odds <= 60.0) {
+      oddsScore = 1.0 - ((h.odds - 30.0) / 30.0).abs().clamp(0.0, 1.0);
+    } else {
+      oddsScore = (1.0 - ((h.odds - 60.0) / 40.0)).clamp(0.0, 0.3);
+    }
+    final jockeyScore = (h.jockeyRcWins * 2.0).clamp(0.0, 2.0);
+    final horseScore  = (h.rcWins * 1.5).clamp(0.0, 1.5);
+    final formScore   = (h.formStat / 100.0 * 0.5).clamp(0.0, 0.5);
+    return oddsScore + jockeyScore + horseScore + formScore;
+  }
+
+  List<HorseEntry> _selectDarkHorses(List<HorseEntry> horses) {
+    final candidates = horses
+        .where((h) => h.odds >= 8.0)
+        .toList()
+      ..sort((a, b) => _darkHorseScore(b).compareTo(_darkHorseScore(a)));
+    return candidates.take(2).toList();
+  }
+
+  // ── 공통 유틸 ───────────────────────────────────────────────────────
+  Color _styleColor(RunningStyle style) {
+    switch (style) {
+      case RunningStyle.frontRunner: return const Color(0xFFFF8A65);
+      case RunningStyle.stalker:     return const Color(0xFF81C784);
+      case RunningStyle.closer:      return const Color(0xFF64B5F6);
+      case RunningStyle.unknown:     return const Color(0xFF888888);
+    }
+  }
+
   Widget _sectionTitle(String text) {
     return Row(
       children: [
@@ -1665,6 +1455,717 @@ class _RaceInfoScreenState extends State<RaceInfoScreen> {
                 color: AppTheme.textWhite,
                 fontSize: 14, fontWeight: FontWeight.w800)),
       ],
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  _TrendLineWidget — 최근 착순 꺾은선 + 화살표 커스텀 위젯
+// ══════════════════════════════════════════════════════════════════════════
+class _TrendLineWidget extends StatelessWidget {
+  final List<int> ranks;    // 최근 순서대로 [가장오래된 → 최근]
+  final int prize6m;        // 최근 6개월 상금 (원)
+  final int gateNo;
+
+  const _TrendLineWidget({
+    required this.ranks,
+    required this.prize6m,
+    required this.gateNo,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (ranks.isEmpty) return const SizedBox.shrink();
+
+    // 최근 4개만 사용
+    final displayRanks = ranks.length > 4
+        ? ranks.sublist(ranks.length - 4)
+        : List<int>.from(ranks);
+
+    // 추세 계산 (마지막 - 첫번째, 양수면 악화/큰 착순, 음수면 개선)
+    final trend = displayRanks.length >= 2
+        ? displayRanks.last - displayRanks.first
+        : 0;
+    final isImproving = trend < -1; // 2착순 이상 개선
+    final isDeclining = trend > 1;  // 2착순 이상 악화
+
+    // 상금 표시 (fallback 없음)
+    final hasF6m = prize6m > 0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: isImproving
+            ? const Color(0xFF0A1A10)
+            : isDeclining
+                ? const Color(0xFF1A0A0A)
+                : const Color(0xFF0A0F1A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isImproving
+              ? const Color(0xFF4CAF50).withValues(alpha: 0.3)
+              : isDeclining
+                  ? const Color(0xFFEF5350).withValues(alpha: 0.3)
+                  : const Color(0xFF1A2A3A),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 꺾은선 그래프 영역
+          Expanded(
+            flex: 3,
+            child: SizedBox(
+              height: 40,
+              child: CustomPaint(
+                painter: _TrendLinePainter(
+                  ranks: displayRanks,
+                  isImproving: isImproving,
+                  isDeclining: isDeclining,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          // 착순 뱃지 행
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: displayRanks.map((rank) {
+                    final isLast = rank == displayRanks.last;
+                    return Container(
+                      margin: const EdgeInsets.only(left: 3),
+                      width: isLast ? 18 : 16,
+                      height: isLast ? 18 : 16,
+                      decoration: BoxDecoration(
+                        color: _rankBgColor(rank, isLast),
+                        borderRadius: BorderRadius.circular(3),
+                        border: isLast
+                            ? Border.all(
+                                color: _rankColor(rank).withValues(alpha: 0.7))
+                            : null,
+                      ),
+                      child: Center(
+                        child: Text(
+                          rank > 0 ? '$rank' : '-',
+                          style: TextStyle(
+                              color: isLast
+                                  ? _rankColor(rank)
+                                  : Colors.white.withValues(alpha: 0.6),
+                              fontSize: isLast ? 9 : 8,
+                              fontWeight: isLast
+                                  ? FontWeight.w900
+                                  : FontWeight.normal),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 3),
+                // 추세 화살표 + 레이블
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (isImproving) ...[
+                      const Icon(Icons.trending_up,
+                          color: Color(0xFF4CAF50), size: 13),
+                      const SizedBox(width: 3),
+                      const Text('기세 상승',
+                          style: TextStyle(
+                              color: Color(0xFF4CAF50),
+                              fontSize: 9, fontWeight: FontWeight.w700)),
+                    ] else if (isDeclining) ...[
+                      const Icon(Icons.trending_down,
+                          color: Color(0xFFEF5350), size: 13),
+                      const SizedBox(width: 3),
+                      const Text('기세 하락',
+                          style: TextStyle(
+                              color: Color(0xFFEF5350),
+                              fontSize: 9, fontWeight: FontWeight.w700)),
+                    ] else ...[
+                      const Icon(Icons.trending_flat,
+                          color: Color(0xFF888888), size: 12),
+                      const SizedBox(width: 3),
+                      Text('유지',
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.4),
+                              fontSize: 9)),
+                    ],
+                    if (hasF6m) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        _formatPrize6m(prize6m),
+                        style: const TextStyle(
+                            color: Color(0xFF81C784),
+                            fontSize: 8.5),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatPrize6m(int prize) {
+    if (prize >= 100000000) return '${(prize / 100000000.0).toStringAsFixed(1)}억';
+    if (prize >= 10000000) return '${(prize / 10000000.0).toStringAsFixed(1)}천만';
+    if (prize >= 1000000) return '${(prize / 1000000.0).toStringAsFixed(1)}백만';
+    return '${prize ~/ 1000}천원';
+  }
+
+  Color _rankColor(int rank) {
+    if (rank == 1) return const Color(0xFFFFD700);
+    if (rank <= 2) return const Color(0xFF4CAF50);
+    if (rank <= 5) return const Color(0xFFCCCCDD);
+    return const Color(0xFF666688);
+  }
+
+  Color _rankBgColor(int rank, bool isLast) {
+    if (!isLast) {
+      return rank == 1
+          ? const Color(0xFFFFD700).withValues(alpha: 0.15)
+          : rank <= 2
+              ? const Color(0xFF4CAF50).withValues(alpha: 0.10)
+              : Colors.white.withValues(alpha: 0.05);
+    }
+    return rank == 1
+        ? const Color(0xFFFFD700).withValues(alpha: 0.2)
+        : rank <= 2
+            ? const Color(0xFF4CAF50).withValues(alpha: 0.15)
+            : Colors.white.withValues(alpha: 0.08);
+  }
+}
+
+// ── CustomPainter: 꺾은선 + 화살표 ─────────────────────────────────────
+class _TrendLinePainter extends CustomPainter {
+  final List<int> ranks;
+  final bool isImproving;
+  final bool isDeclining;
+
+  _TrendLinePainter({
+    required this.ranks,
+    required this.isImproving,
+    required this.isDeclining,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (ranks.length < 2) {
+      // 1개만 있으면 점 하나
+      if (ranks.isNotEmpty) {
+        final y = _rankToY(ranks[0], size.height);
+        final paint = Paint()
+          ..color = const Color(0xFFFFD700)
+          ..strokeWidth = 2.5
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(Offset(size.width / 2, y), 5, paint);
+      }
+      return;
+    }
+
+    final n = ranks.length;
+    final lineColor = isImproving
+        ? const Color(0xFFEF5350) // 착순 낮아짐(좋아짐) = 붉은 추세선
+        : isDeclining
+            ? const Color(0xFF78909C)
+            : const Color(0xFFEF5350);
+
+    final linePaint = Paint()
+      ..color = lineColor
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final fillPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          lineColor.withValues(alpha: 0.15),
+          lineColor.withValues(alpha: 0.02),
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    final dotPaint = Paint()
+      ..style = PaintingStyle.fill;
+
+    final points = <Offset>[];
+    for (int i = 0; i < n; i++) {
+      final x = size.width * i / (n - 1);
+      final y = _rankToY(ranks[i], size.height);
+      points.add(Offset(x, y));
+    }
+
+    // 채우기 영역
+    final fillPath = Path()
+      ..moveTo(points.first.dx, size.height)
+      ..lineTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length; i++) {
+      fillPath.lineTo(points[i].dx, points[i].dy);
+    }
+    fillPath
+      ..lineTo(points.last.dx, size.height)
+      ..close();
+    canvas.drawPath(fillPath, fillPaint);
+
+    // 꺾은선
+    final linePath = Path()..moveTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length; i++) {
+      linePath.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(linePath, linePaint);
+
+    // 마지막 화살표 (추세 방향)
+    if (points.length >= 2) {
+      final last = points.last;
+      final prev = points[points.length - 2];
+      final angle = math.atan2(
+          last.dy - prev.dy, last.dx - prev.dx);
+      _drawArrow(canvas, last, angle, lineColor);
+    }
+
+    // 점들
+    for (int i = 0; i < points.length; i++) {
+      final isLast = i == points.length - 1;
+      final rank = ranks[i];
+      final dotColor = rank == 1
+          ? const Color(0xFFFFD700)
+          : rank <= 2
+              ? const Color(0xFF4CAF50)
+              : lineColor;
+      dotPaint.color = dotColor;
+      canvas.drawCircle(points[i], isLast ? 5.5 : 3.5, dotPaint);
+      // 흰색 내부 점
+      canvas.drawCircle(
+          points[i],
+          isLast ? 2.5 : 1.5,
+          Paint()..color = Colors.white.withValues(alpha: 0.9));
+    }
+  }
+
+  double _rankToY(int rank, double height) {
+    // 착순 1~12 → Y좌표 (1착이 위쪽 = 작은 Y)
+    final clamped = rank.clamp(1, 12);
+    return height * (clamped - 1) / 11.0 * 0.85 + height * 0.075;
+  }
+
+  void _drawArrow(Canvas canvas, Offset tip, double angle, Color color) {
+    const arrowLen = 8.0;
+    const arrowAngle = 0.4; // 라디안
+    final p1 = Offset(
+      tip.dx - arrowLen * math.cos(angle - arrowAngle),
+      tip.dy - arrowLen * math.sin(angle - arrowAngle),
+    );
+    final p2 = Offset(
+      tip.dx - arrowLen * math.cos(angle + arrowAngle),
+      tip.dy - arrowLen * math.sin(angle + arrowAngle),
+    );
+    final arrowPath = Path()
+      ..moveTo(tip.dx, tip.dy)
+      ..lineTo(p1.dx, p1.dy)
+      ..moveTo(tip.dx, tip.dy)
+      ..lineTo(p2.dx, p2.dy);
+    canvas.drawPath(
+      arrowPath,
+      Paint()
+        ..color = color
+        ..strokeWidth = 2.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TrendLinePainter oldDelegate) {
+    return oldDelegate.ranks != ranks;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  _Top5Item — TOP5 데이터 모델
+// ══════════════════════════════════════════════════════════════════════════
+class _Top5Item {
+  final int gateNo;
+  final String horseName;
+  final String value;
+  final double sortKey;
+  final bool ascending;
+
+  const _Top5Item({
+    required this.gateNo,
+    required this.horseName,
+    required this.value,
+    required this.sortKey,
+    this.ascending = false,
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  _Top5Card — TOP5 카테고리 카드 위젯
+// ══════════════════════════════════════════════════════════════════════════
+class _Top5Card extends StatelessWidget {
+  final String title;
+  final String icon;
+  final Color color;
+  final List<_Top5Item> items;
+
+  const _Top5Card({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.items,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1420),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 제목
+          Row(
+            children: [
+              Text(icon, style: const TextStyle(fontSize: 13)),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(title,
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Divider(color: color.withValues(alpha: 0.15), height: 1),
+          const SizedBox(height: 6),
+          // TOP5 항목 (5개 고정, 없으면 '없음')
+          ...List.generate(5, (i) {
+            final rankLabel = ['1위', '2위', '3위', '4위', '5위'][i];
+            final hasItem = i < items.length;
+            final item = hasItem ? items[i] : null;
+            final rankColors = [
+              const Color(0xFFFFD700),
+              const Color(0xFFB0BEC5),
+              const Color(0xFFCD7F32),
+              Colors.white,
+              Colors.white,
+            ];
+            final capData = item != null
+                ? HorseCapColors.getCapData(item.gateNo)
+                : null;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Row(
+                children: [
+                  // 순위
+                  SizedBox(
+                    width: 22,
+                    child: Text(rankLabel,
+                        style: TextStyle(
+                            color: rankColors[i].withValues(
+                                alpha: hasItem ? 1.0 : 0.3),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                  // 마번 원형
+                  if (hasItem && capData != null) ...[
+                    Container(
+                      width: 16, height: 16,
+                      decoration: BoxDecoration(
+                        color: capData.bg, shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text('${item!.gateNo}',
+                            style: TextStyle(
+                                color: capData.text,
+                                fontSize: 7.5,
+                                fontWeight: FontWeight.w900)),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ] else
+                    const SizedBox(width: 20),
+                  // 마명
+                  Expanded(
+                    child: Text(
+                      hasItem ? item!.horseName : '없음',
+                      style: TextStyle(
+                          color: hasItem
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : Colors.white.withValues(alpha: 0.2),
+                          fontSize: 9.5,
+                          fontWeight: hasItem
+                              ? FontWeight.w600
+                              : FontWeight.normal),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  // 수치
+                  if (hasItem)
+                    Text(item!.value,
+                        style: TextStyle(
+                            color: color.withValues(alpha: 0.9),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700))
+                  else
+                    Text('-',
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            fontSize: 9)),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  _SpeedBarItem — S1F/G1F 바 차트 데이터 모델
+// ══════════════════════════════════════════════════════════════════════════
+class _SpeedBarItem {
+  final int gateNo;
+  final String horseName;
+  final double time;
+  const _SpeedBarItem({
+    required this.gateNo,
+    required this.horseName,
+    required this.time,
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  _SpeedBarChart — 가로 바 차트 위젯
+// ══════════════════════════════════════════════════════════════════════════
+class _SpeedBarChart extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final String icon;
+  final Color color;
+  final List<_SpeedBarItem> items;
+  final bool lowerIsBetter;
+
+  const _SpeedBarChart({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.items,
+    this.lowerIsBetter = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    // 기록 범위 계산
+    final minTime = items.map((i) => i.time).reduce(math.min);
+    final maxTime = items.map((i) => i.time).reduce(math.max);
+    final range = maxTime - minTime;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1420),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 제목
+          Row(
+            children: [
+              Text(icon, style: const TextStyle(fontSize: 14)),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800)),
+                  Text(subtitle,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                          fontSize: 9.5)),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // 바 차트 항목
+          ...items.asMap().entries.map((entry) {
+            final i = entry.key;
+            final item = entry.value;
+            final isFirst = i == 0;
+            final capData = HorseCapColors.getCapData(item.gateNo);
+
+            // 바 길이 계산
+            // 기록이 낮을수록 빠름 → 바 길이는 (maxTime - time) / range
+            double barFraction;
+            if (range < 0.01) {
+              barFraction = 1.0; // 모두 동일 기록
+            } else if (lowerIsBetter) {
+              barFraction = (maxTime - item.time) / range;
+              barFraction = barFraction * 0.85 + 0.15; // 최소 15% 보장
+            } else {
+              barFraction = (item.time - minTime) / range;
+              barFraction = barFraction * 0.85 + 0.15;
+            }
+            barFraction = barFraction.clamp(0.05, 1.0);
+
+            // 1위는 강조색
+            final barColor = isFirst
+                ? color
+                : color.withValues(alpha: 0.45 - i * 0.03);
+            final rankBadgeColor = isFirst
+                ? color
+                : Colors.white.withValues(alpha: 0.3);
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  // 순위 뱃지
+                  Container(
+                    width: 18, height: 18,
+                    decoration: BoxDecoration(
+                      color: rankBadgeColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                      border: isFirst
+                          ? Border.all(
+                              color: color.withValues(alpha: 0.5))
+                          : null,
+                    ),
+                    child: Center(
+                      child: Text('${i + 1}',
+                          style: TextStyle(
+                              color: isFirst
+                                  ? color
+                                  : Colors.white.withValues(alpha: 0.45),
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  // 마번 원형
+                  Container(
+                    width: 18, height: 18,
+                    decoration: BoxDecoration(
+                      color: capData.bg, shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text('${item.gateNo}',
+                          style: TextStyle(
+                              color: capData.text,
+                              fontSize: 8,
+                              fontWeight: FontWeight.w900)),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  // 마명
+                  SizedBox(
+                    width: 56,
+                    child: Text(item.horseName,
+                        style: TextStyle(
+                            color: isFirst
+                                ? Colors.white
+                                : Colors.white.withValues(alpha: 0.6),
+                            fontSize: 9.5,
+                            fontWeight: isFirst
+                                ? FontWeight.w700
+                                : FontWeight.normal),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                  const SizedBox(width: 6),
+                  // 가로 바
+                  Expanded(
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        // 배경
+                        Container(
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                        // 채워진 바
+                        FractionallySizedBox(
+                          widthFactor: barFraction,
+                          child: Container(
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: barColor,
+                              borderRadius: BorderRadius.circular(6),
+                              boxShadow: isFirst
+                                  ? [
+                                      BoxShadow(
+                                        color: color.withValues(alpha: 0.3),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 2),
+                                      )
+                                    ]
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // 기록 수치
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 38,
+                    child: Text('${item.time.toStringAsFixed(1)}초',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                            color: isFirst
+                                ? color
+                                : Colors.white.withValues(alpha: 0.5),
+                            fontSize: 10,
+                            fontWeight: isFirst
+                                ? FontWeight.w800
+                                : FontWeight.normal)),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+          // 주석
+          const SizedBox(height: 4),
+          Text(
+            lowerIsBetter
+                ? '※ 기록이 짧을수록(낮을수록) 빠름'
+                : '※ 기록이 높을수록 우수',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.3),
+                fontSize: 8.5),
+          ),
+        ],
+      ),
     );
   }
 }
