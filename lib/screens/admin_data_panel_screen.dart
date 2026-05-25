@@ -215,12 +215,12 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
 
   // ── 캘린더 날짜 선택 ─────────────────────────────────────────────────
   Future<void> _pickDate() async {
+    // locale 파라미터 제거 — flutter_localizations 미포함 환경에서 먹통 방지
     final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
       firstDate: DateTime(2024),
       lastDate: DateTime.now().add(const Duration(days: 30)),
-      locale: const Locale('ko', 'KR'),
       builder: (ctx, child) => Theme(
         data: ThemeData.dark().copyWith(
           colorScheme: const ColorScheme.dark(
