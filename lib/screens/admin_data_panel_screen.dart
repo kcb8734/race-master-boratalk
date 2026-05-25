@@ -110,6 +110,7 @@ class _ImageUploadTab extends StatefulWidget {
 }
 
 // 업로드 이미지 항목
+// parseStatus 단계: 'uploading' → 'saving' → 'parsing' → 'converting' → 'done' | 'error'
 class _UploadedItem {
   final String id;
   final String name;
@@ -118,7 +119,7 @@ class _UploadedItem {
   final String dateStr;
   final int raceNo;
   final DateTime uploadedAt;
-  String parseStatus;      // 'pending' | 'parsing' | 'done' | 'error'
+  String parseStatus;
   String? parsedSummary;
   List<_ParsedRaceEntry> entries;
 
@@ -130,10 +131,37 @@ class _UploadedItem {
     required this.dateStr,
     required this.raceNo,
     required this.uploadedAt,
-    this.parseStatus = 'pending',
+    this.parseStatus = 'uploading',
     this.parsedSummary,
     this.entries = const [],
   });
+
+  // ── JSON 직렬화 (SharedPreferences 영속화용) ────────────────────────
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'type': type,
+    'venueCode': venueCode,
+    'dateStr': dateStr,
+    'raceNo': raceNo,
+    'uploadedAt': uploadedAt.toIso8601String(),
+    'parseStatus': parseStatus,
+    'parsedSummary': parsedSummary,
+    // entries는 메모리 전용 (data URL 포함하지 않음)
+  };
+
+  factory _UploadedItem.fromJson(Map<String, dynamic> j) => _UploadedItem(
+    id: j['id'] as String,
+    name: j['name'] as String,
+    type: j['type'] as String,
+    venueCode: j['venueCode'] as String,
+    dateStr: j['dateStr'] as String,
+    raceNo: j['raceNo'] as int,
+    uploadedAt: DateTime.parse(j['uploadedAt'] as String),
+    parseStatus: (j['parseStatus'] as String?) ?? 'done',
+    parsedSummary: j['parsedSummary'] as String?,
+    entries: const [],
+  );
 
   String get typeLabel => type == 'entry' ? '출전표' : '경주기록';
   String get venueLabel {
@@ -144,20 +172,59 @@ class _UploadedItem {
       default:  return '불명';
     }
   }
-  String get statusIcon {
+
+  // ── 단계별 표시 텍스트 ────────────────────────────────────────────────
+  String get stepLabel {
     switch (parseStatus) {
-      case 'parsing': return '⏳';
-      case 'done':    return '✅';
-      case 'error':   return '❌';
-      default:        return '📄';
+      case 'uploading':   return '① 업로드 중...';
+      case 'saving':      return '② 저장 중...';
+      case 'parsing':     return '③ AI 파싱 중...';
+      case 'converting':  return '④ 데이터 변환 중...';
+      case 'done':        return '✅ 데이터화 완료';
+      case 'error':       return '❌ 처리 오류';
+      default:            return '대기 중';
     }
   }
+
+  // 파이프라인 단계 인덱스 (0~4)
+  int get stepIndex {
+    switch (parseStatus) {
+      case 'uploading':   return 0;
+      case 'saving':      return 1;
+      case 'parsing':     return 2;
+      case 'converting':  return 3;
+      case 'done':        return 4;
+      default:            return 0;
+    }
+  }
+
+  bool get isProcessing =>
+      parseStatus == 'uploading' ||
+      parseStatus == 'saving'    ||
+      parseStatus == 'parsing'   ||
+      parseStatus == 'converting';
+
+  String get statusIcon {
+    switch (parseStatus) {
+      case 'uploading':
+      case 'saving':
+      case 'parsing':
+      case 'converting': return '⏳';
+      case 'done':        return '✅';
+      case 'error':       return '❌';
+      default:            return '📄';
+    }
+  }
+
   Color get statusColor {
     switch (parseStatus) {
-      case 'parsing': return const Color(0xFFFFCC02);
-      case 'done':    return const Color(0xFF66BB6A);
-      case 'error':   return const Color(0xFFEF5350);
-      default:        return const Color(0xFF6C63FF);
+      case 'uploading':
+      case 'saving':
+      case 'parsing':
+      case 'converting': return const Color(0xFFFFCC02);
+      case 'done':        return const Color(0xFF66BB6A);
+      case 'error':       return const Color(0xFFEF5350);
+      default:            return const Color(0xFF6C63FF);
     }
   }
 }
@@ -180,7 +247,13 @@ class _ParsedRaceEntry {
   });
 }
 
-class _ImageUploadTabState extends State<_ImageUploadTab> {
+class _ImageUploadTabState extends State<_ImageUploadTab>
+    with AutomaticKeepAliveClientMixin {
+
+  // ── AutomaticKeepAliveClientMixin: 탭 전환 시 State 보존 ─────────────
+  @override
+  bool get wantKeepAlive => true;
+
   // ── 상태 ──────────────────────────────────────────────────────────────
   final List<_UploadedItem> _items = [];
   final _nameCtrl  = TextEditingController();
@@ -193,6 +266,8 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
   String? _pickedFileName;       // 선택된 파일명
   String? _pickedFileDataUrl;    // 선택된 이미지 data URL (미리보기용)
 
+  static const _kPrefsKey = 'upload_items_v2';
+
   // YYYYMMDD 변환
   String get _dateStr {
     final d = _selectedDate;
@@ -203,14 +278,47 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
   void initState() {
     super.initState();
     _selectedDate = DateTime.now().toLocal();
-    // 데모 데이터 1건 추가 (사용법 안내용)
-    _addDemoItem();
+    // _addDemoItem() 제거 — SharedPreferences에서 복원 (없으면 빈 목록)
+    _loadItemsFromPrefs();
   }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
     super.dispose();
+  }
+
+  // ── SharedPreferences 저장 ────────────────────────────────────────────
+  Future<void> _saveItemsToPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = _items.map((i) => i.toJson()).toList();
+      await prefs.setString(_kPrefsKey, jsonEncode(jsonList));
+    } catch (e) {
+      // 저장 실패는 조용히 무시 (UI 블로킹 방지)
+      debugPrint('_saveItemsToPrefs error: $e');
+    }
+  }
+
+  // ── SharedPreferences 불러오기 ────────────────────────────────────────
+  Future<void> _loadItemsFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kPrefsKey);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        if (mounted) {
+          setState(() {
+            _items.clear();
+            _items.addAll(
+              list.map((j) => _UploadedItem.fromJson(j as Map<String, dynamic>)),
+            );
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('_loadItemsFromPrefs error: $e');
+    }
   }
 
   // ── 캘린더 날짜 선택 ─────────────────────────────────────────────────
@@ -275,34 +383,7 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
     });
   }
 
-  void _addDemoItem() {
-    final demo = _UploadedItem(
-      id: 'demo_001',
-      name: '2025_서울_제3경주_출전표.jpg',
-      type: 'entry',
-      venueCode: '1',
-      dateStr: _dateStr,
-      raceNo: 3,
-      uploadedAt: DateTime.now().subtract(const Duration(minutes: 5)),
-      parseStatus: 'done',
-      parsedSummary: '10두 인식 완료 | 거리: 1400m | 등급: 국6',
-      entries: [
-        const _ParsedRaceEntry(gateNo: 1, horseName: '청명스타', jockeyName: '조성곤', trainerName: '박종훈', weight: 488, odds: '2.3'),
-        const _ParsedRaceEntry(gateNo: 2, horseName: '황금번개', jockeyName: '이현종', trainerName: '김민수', weight: 502, odds: '5.1'),
-        const _ParsedRaceEntry(gateNo: 3, horseName: '폭풍기사', jockeyName: '문세영', trainerName: '이상호', weight: 495, odds: '3.8'),
-        const _ParsedRaceEntry(gateNo: 4, horseName: '태풍질주', jockeyName: '강민성', trainerName: '박영철', weight: 511, odds: '8.4'),
-        const _ParsedRaceEntry(gateNo: 5, horseName: '번개쾌속', jockeyName: '최우성', trainerName: '정민호', weight: 483, odds: '12.0'),
-        const _ParsedRaceEntry(gateNo: 6, horseName: '질풍신마', jockeyName: '김태우', trainerName: '윤상준', weight: 498, odds: '4.2'),
-        const _ParsedRaceEntry(gateNo: 7, horseName: '맹호질주', jockeyName: '박상진', trainerName: '최성진', weight: 519, odds: '15.6'),
-        const _ParsedRaceEntry(gateNo: 8, horseName: '천리마왕', jockeyName: '이민재', trainerName: '손동현', weight: 490, odds: '6.7'),
-        const _ParsedRaceEntry(gateNo: 9, horseName: '신풍달리기', jockeyName: '정재훈', trainerName: '임현철', weight: 507, odds: '9.1'),
-        const _ParsedRaceEntry(gateNo: 10, horseName: '폭풍직진', jockeyName: '한동균', trainerName: '오정훈', weight: 501, odds: '18.3'),
-      ],
-    );
-    _items.add(demo);
-  }
-
-  // ── 파일 업로드 처리 ──────────────────────────────────────────────────────
+  // ── 파일 업로드 처리 (5단계 파이프라인) ──────────────────────────────────
   Future<void> _handleUpload() async {
     final venueName = _selVenue == '1' ? '서울' : _selVenue == '2' ? '부경' : '제주';
     final typeLabel  = _selType == 'entry' ? '출전표' : '경주기록';
@@ -310,6 +391,7 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
         ? _nameCtrl.text.trim()
         : '${_dateStr}_${venueName}_제${_selRaceNo}경주_$typeLabel.jpg';
 
+    // 동일 날짜 복수 추가 허용: millisecondsSinceEpoch unique ID
     final item = _UploadedItem(
       id: 'img_${DateTime.now().millisecondsSinceEpoch}',
       name: name,
@@ -318,30 +400,50 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
       dateStr: _dateStr,
       raceNo: _selRaceNo,
       uploadedAt: DateTime.now(),
-      parseStatus: 'parsing',
+      parseStatus: 'uploading',  // ① 업로드 시작
     );
+
+    // 업로드 즉시: 입력 초기화 (data URL 제거 — 메모리 확보)
     setState(() {
       _items.insert(0, item);
       _nameCtrl.clear();
       _pickedFileName    = null;
-      _pickedFileDataUrl = null;
+      _pickedFileDataUrl = null;  // ← 데이터화 시작과 동시에 이미지 해제
       _globalMsg = '';
     });
 
-    // 파싱 시뮬레이션 (실제 OCR/AI 연동 자리)
-    await Future.delayed(const Duration(seconds: 2));
-    if (mounted) {
-      setState(() {
-        item.parseStatus = 'done';
-        if (item.type == 'entry') {
-          item.parsedSummary = '${item.raceNo}경주 출전표 인식 완료 — 데이터를 확인 후 저장하세요';
-          item.entries = _generateMockEntries(item.raceNo);
-        } else {
-          item.parsedSummary = '${item.raceNo}경주 기록 인식 완료 — 착순/기록 확인 후 저장하세요';
-          item.entries = _generateMockResults(item.raceNo);
-        }
-      });
-    }
+    // ── ① 업로드 중 (600ms) ────────────────────────────────────────────
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+
+    // ── ② 저장 중 ─────────────────────────────────────────────────────
+    setState(() => item.parseStatus = 'saving');
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+
+    // ── ③ AI 파싱 중 ──────────────────────────────────────────────────
+    setState(() => item.parseStatus = 'parsing');
+    await Future.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
+
+    // ── ④ 데이터 변환 중 ──────────────────────────────────────────────
+    setState(() => item.parseStatus = 'converting');
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+
+    // ── ⑤ 완료 — 목 데이터 생성 + SharedPreferences 저장 ──────────────
+    setState(() {
+      item.parseStatus = 'done';
+      if (item.type == 'entry') {
+        item.parsedSummary = '${item.raceNo}경주 출전표 인식 완료 — 데이터를 확인 후 저장하세요';
+        item.entries = _generateMockEntries(item.raceNo);
+      } else {
+        item.parsedSummary = '${item.raceNo}경주 기록 인식 완료 — 착순/기록 확인 후 저장하세요';
+        item.entries = _generateMockResults(item.raceNo);
+      }
+    });
+    // 완료 후 영속 저장 (data URL 없이 메타데이터만)
+    await _saveItemsToPrefs();
   }
 
   List<_ParsedRaceEntry> _generateMockEntries(int raceNo) {
@@ -427,12 +529,15 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
     }
   }
 
-  void _deleteItem(String id) {
+  Future<void> _deleteItem(String id) async {
     setState(() => _items.removeWhere((i) => i.id == id));
+    await _saveItemsToPrefs();
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // AutomaticKeepAliveClientMixin 필수 호출
+
     // 날짜 표시용
     final displayDate =
         '${_selectedDate.year}.${_selectedDate.month.toString().padLeft(2, '0')}.${_selectedDate.day.toString().padLeft(2, '0')}';
@@ -680,9 +785,10 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
                           child: const Text('취소'),
                         ),
                         TextButton(
-                          onPressed: () {
+                          onPressed: () async {
                             setState(() => _items.clear());
                             Navigator.pop(ctx);
+                            await _saveItemsToPrefs();
                           },
                           style: TextButton.styleFrom(
                               foregroundColor: const Color(0xFFEF5350)),
@@ -797,8 +903,8 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600)),
                         const SizedBox(width: 6),
-                        // 파싱 상태
-                        if (item.parseStatus == 'parsing')
+                        // 처리 상태 아이콘
+                        if (item.isProcessing)
                           const SizedBox(
                             width: 10, height: 10,
                             child: CircularProgressIndicator(
@@ -814,7 +920,14 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
                           style: const TextStyle(
                               color: Color(0xFF7070AA), fontSize: 10),
                           overflow: TextOverflow.ellipsis),
-                      if (item.parsedSummary != null)
+                      if (item.isProcessing)
+                        Text(
+                          item.stepLabel,
+                          style: const TextStyle(
+                              color: Color(0xFFFFCC02), fontSize: 10),
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      else if (item.parsedSummary != null)
                         Text(item.parsedSummary!,
                             style: TextStyle(
                                 color: item.statusColor.withValues(alpha: 0.8),
@@ -886,22 +999,137 @@ class _ImageUploadTabState extends State<_ImageUploadTab> {
             ),
           ],
 
-          // 파싱 중 표시
-          if (item.parseStatus == 'parsing') ...[
+          // ── 파이프라인 진행 시각화 (처리 중 또는 완료 모두 표시) ─────────
+          if (item.isProcessing || item.parseStatus == 'done') ...[
             const Divider(color: Color(0xFF1A1A3A), height: 1),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Column(
-                children: [
-                  const LinearProgressIndicator(
-                    backgroundColor: Color(0xFF1A1A3A),
-                    valueColor: AlwaysStoppedAnimation(Color(0xFFFFCC02)),
-                  ),
-                  const SizedBox(height: 4),
-                  Text('AI 파싱 중... (${item.typeLabel} 인식)',
-                      style: const TextStyle(
-                          color: Color(0xFFFFCC02), fontSize: 10)),
-                ],
+            _pipelineIndicator(item),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── 5단계 파이프라인 인디케이터 ────────────────────────────────────────
+  Widget _pipelineIndicator(_UploadedItem item) {
+    const steps = ['업로드', '저장', 'AI파싱', '변환', '완료'];
+    final currentStep = item.stepIndex; // 0~4
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 단계 텍스트
+          Row(children: [
+            if (item.isProcessing)
+              const SizedBox(
+                width: 12, height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: Color(0xFFFFCC02),
+                ),
+              ),
+            if (item.isProcessing) const SizedBox(width: 6),
+            Text(
+              item.stepLabel,
+              style: TextStyle(
+                color: item.isProcessing
+                    ? const Color(0xFFFFCC02)
+                    : const Color(0xFF66BB6A),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+
+          // 스텝 인디케이터 바
+          Row(
+            children: List.generate(steps.length, (i) {
+              final isDone    = i < currentStep;
+              final isCurrent = i == currentStep && item.isProcessing;
+              final isFinished= currentStep == 4; // 전부 완료
+
+              Color dotColor;
+              if (isFinished || isDone) {
+                dotColor = const Color(0xFF66BB6A);
+              } else if (isCurrent) {
+                dotColor = const Color(0xFFFFCC02);
+              } else {
+                dotColor = const Color(0xFF2A2A4A);
+              }
+
+              return Expanded(
+                child: Column(
+                  children: [
+                    Row(children: [
+                      // 연결선 (첫 번째 제외)
+                      if (i > 0)
+                        Expanded(
+                          child: Container(
+                            height: 2,
+                            color: (isFinished || i <= currentStep)
+                                ? const Color(0xFF66BB6A)
+                                : const Color(0xFF2A2A4A),
+                          ),
+                        ),
+                      // 원형 도트
+                      Container(
+                        width: 14, height: 14,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: dotColor,
+                          border: isCurrent
+                              ? Border.all(
+                                  color: const Color(0xFFFFCC02),
+                                  width: 2)
+                              : null,
+                        ),
+                        child: (isFinished || isDone)
+                            ? const Icon(Icons.check,
+                                size: 9, color: Colors.white)
+                            : isCurrent
+                                ? null
+                                : null,
+                      ),
+                      // 연결선 (마지막 제외)
+                      if (i < steps.length - 1)
+                        Expanded(
+                          child: Container(
+                            height: 2,
+                            color: (isFinished || i < currentStep)
+                                ? const Color(0xFF66BB6A)
+                                : const Color(0xFF2A2A4A),
+                          ),
+                        ),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(
+                      steps[i],
+                      style: TextStyle(
+                        fontSize: 8,
+                        color: (isFinished || isDone || isCurrent)
+                            ? const Color(0xFFB0B0CC)
+                            : const Color(0xFF444466),
+                        fontWeight: isCurrent
+                            ? FontWeight.bold : FontWeight.normal,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+
+          // 완료 메시지
+          if (item.parseStatus == 'done') ...[
+            const SizedBox(height: 6),
+            const Text(
+              '✓ 이미지 자동 삭제 완료 · 새 이미지 업로드 가능',
+              style: TextStyle(
+                color: Color(0xFF66BB6A),
+                fontSize: 9,
               ),
             ),
           ],
