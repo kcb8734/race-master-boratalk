@@ -6,6 +6,7 @@ import '../services/kra_mock_service.dart';
 import '../services/kra_api_service.dart';
 import '../services/race_stat_engine.dart';
 import '../services/split_time_fetcher.dart';
+import '../services/race_snapshot_cache.dart'; // [v2.0] 심야 배치 캐시 레이어
 
 // ──────────────────────────────────────────────────────────────
 // 데이터 상태 열거 (Null Fallback 파이프라인용)
@@ -232,7 +233,12 @@ class RaceProvider extends ChangeNotifier {
     await _autoRefreshHorses(isManual: true);
   }
 
-  /// 내부 갱신 로직 (자동/수동 공통)
+  /// 내부 갱신 로직 (자동/수동 공통) — v2.0: OddsSnapshot 경유 배당 폴링
+  ///
+  /// [v2.0 변경사항]
+  /// - 배당 갱신 시 loadOddsSnapshot() 먼저 조회 (TTL 5분)
+  /// - 5분 캐시 히트: API 호출 없이 즉시 반환
+  /// - 5분 캐시 미스: API 호출 후 saveOddsSnapshot() 저장
   Future<void> _autoRefreshHorses({bool isManual = false}) async {
     if (_selectedRace == null || _isLoadingHorses) return;
 
@@ -241,14 +247,50 @@ class RaceProvider extends ChangeNotifier {
 
     try {
       final race = _selectedRace!;
-      final day  = _weekDays[_selectedDayIndex];
+      final day  = _weekDays.isNotEmpty ? _weekDays[_selectedDayIndex] : null;
+      if (day == null) {
+        _refreshStatus = RefreshStatus.error;
+        _lastUpdated = DateTime.now();
+        notifyListeners();
+        return;
+      }
 
       // 이전 배당률 스냅샷 저장
       _previousOddsSnapshot = {
         for (final h in _horses) h.gateNo: h.odds
       };
 
-      // ── [Milestone 3] fetchHorseEntriesWithMeta() — 배당 폴링 시 stTime 갱신 ─
+      // ── [v2.0 OddsSnapshot] 배당 캐시 조회 (TTL: 5분) ──────────────────
+      // 5분 이내 배당이 캐시에 있으면 API 호출 없이 즉시 반환
+      final snapCache = RaceSnapshotCache();
+      List<HorseEntry>? oddsFromCache;
+      try {
+        oddsFromCache = await snapCache.loadOddsSnapshot(
+          venueCode: _selectedVenue.code,
+          date:      day.date,
+          raceNo:    race.raceNo,
+        );
+      } catch (_) {}
+
+      if (oddsFromCache != null && !isManual) {
+        // ✅ 배당 캐시 히트 — API 호출 없음
+        _detectOddsChanges(oddsFromCache);
+        _horses = oddsFromCache;
+        if (_selectedRace != null) {
+          _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);
+        }
+        _lastUpdated = DateTime.now();
+        _refreshStatus = RefreshStatus.success;
+        if (kDebugMode) {
+          debugPrint('[autoRefresh] ✅ ODDS CACHE HIT: ${_selectedVenue.code} R${race.raceNo}');
+        }
+        notifyListeners();
+        return;
+      }
+
+      // ── [v2.0 온라인 fallback] 캐시 미스 시에만 API 호출 ──────────────
+      // ※ 정상 운영 시 이 블록은 드물게 실행 (배치가 배당도 갱신하면 불필요)
+      // [API26_2] 배당 폴링 — 캐시 미스 또는 수동 갱신 시만 실행
       final meta       = await KraApiService.fetchHorseEntriesWithMeta(
           _selectedVenue.code, day.date, race.raceNo);
       final rawEntries = meta.entries;
@@ -274,26 +316,34 @@ class RaceProvider extends ChangeNotifier {
             }
             return r;
           }).toList();
-          if (kDebugMode) {
-            debugPrint('[autoRefresh] RaceInfo 갱신: '
-                'startTime=${newStartTime ?? '유지'} '
-                'totalHorses=$actualCount');
-          }
         }
       }
 
       final enriched = await RaceStatEngine.enrichHorseStats(
         entries: rawEntries,
-        race:    _selectedRace ?? race, // 갱신된 RaceInfo 사용
+        race:    _selectedRace ?? race,
       );
 
       // 배당률 변동 감지
       _detectOddsChanges(enriched);
-
       _horses = enriched;
+
       if (_selectedRace != null) {
         _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);
       }
+
+      // ── [v2.0] 배당 결과를 OddsSnapshot에 저장 (TTL 5분) ──────────────
+      try {
+        await snapCache.saveOddsSnapshot(
+          venueCode: _selectedVenue.code,
+          date:      day.date,
+          raceNo:    race.raceNo,
+          horses:    _horses,
+        );
+        if (kDebugMode) {
+          debugPrint('[autoRefresh] 배당 스냅샷 저장: ${_selectedVenue.code} R${race.raceNo}');
+        }
+      } catch (_) {}
 
       _lastUpdated = DateTime.now();
       _refreshStatus = RefreshStatus.success;
@@ -620,6 +670,17 @@ class RaceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  //  selectRace() — v2.0 캐시 우선 조회 아키텍처
+  //
+  //  [1] RaceSnapshotCache.loadRaceSnapshot() 조회 (목표: <200ms)
+  //      → HIT: 즉시 반환, 외부 API 호출 없음 ✅
+  //      → MISS: [3] 온라인 fallback 허용 (캐시 없을 때만)
+  //  [2] 배당 폴링은 별도 TTL(5min) 체계로 분리 (OddsSnapshot)
+  //  [3] 온라인 fallback: 캐시 미스 시에만 기존 API 호출 허용
+  //      → fetchHorseEntriesWithMeta() + enrichHorseStats() 실행 후
+  //         캐시에 저장(source='online_fallback')
+  // ═══════════════════════════════════════════════════════════════════════
   Future<void> selectRace(RaceInfo race) async {
     // 경주 변경 시 기존 폴링 중지
     stopAutoRefresh();
@@ -632,86 +693,148 @@ class RaceProvider extends ChangeNotifier {
     _insights = [];
     notifyListeners();
 
-    bool apiSuccess = false;
-    try {
-      final day = _weekDays[_selectedDayIndex];
+    final day = _weekDays.isNotEmpty ? _weekDays[_selectedDayIndex] : null;
+    bool cacheHit = false;
 
-      // ── [Milestone 2] fetchHorseEntriesWithMeta() 연동 ─────────────────
-      // API26_2 stTime/dusu → RaceInfo.startTime/totalHorses 실시간 바인딩
-      // 기존 fetchHorseEntries() 대체 — EntrySheetResult 래퍼로 메타 수신
-      final meta = await KraApiService.fetchHorseEntriesWithMeta(
-          _selectedVenue.code, day.date, race.raceNo);
-      final rawEntries = meta.entries;
+    // ══════════════════════════════════════════════════════════════════
+    //  [CACHE LAYER 1] 심야 배치 스냅샷 조회 — 최우선 (API 호출 없음)
+    // ══════════════════════════════════════════════════════════════════
+    if (day != null) {
+      try {
+        final sw = Stopwatch()..start();
+        final cached = await RaceSnapshotCache().loadRaceSnapshot(
+          venueCode: _selectedVenue.code,
+          date:      day.date,
+          raceNo:    race.raceNo,
+        );
+        sw.stop();
 
-      // ── stTime 바인딩: API26_2 출발시각 → RaceInfo.startTime 갱신 ─────
-      // parsedStartTime 이 null 이면 fetchRaces()가 이미 설정한 값 유지
-      if (_selectedRace != null) {
-        String? newStartTime = meta.startTime; // "HH:MM" 또는 null
-        final newDusu       = meta.dusu;       // API dusu 필드 (Fallback = entries.length)
-        // rawEntries.length 가 실측 두수 — dusu 보다 우선
-        final actualCount   = rawEntries.isNotEmpty ? rawEntries.length : newDusu;
+        if (cached != null) {
+          // ✅ 캐시 히트 — 외부 API 완전 차단, 즉시 반환
+          _horses = cached;
+          _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
+          _isHorsesMock = false;
+          cacheHit = true;
 
-        // 변경이 있는 필드만 copyWith 적용
-        final needUpdate = (newStartTime != null &&
-                            newStartTime != _selectedRace!.startTime) ||
-                           (actualCount != _selectedRace!.totalHorses);
-        if (needUpdate) {
-          _selectedRace = _selectedRace!.copyWith(
-            startTime:   newStartTime,
-            totalHorses: actualCount,
-          );
-          // _races 목록도 동기화 (UI 카드 표시 일치)
-          _races = _races.map((r) {
-            if (r.raceNo == race.raceNo && r.venueCode == race.venueCode) {
-              return r.copyWith(
+          if (kDebugMode) {
+            debugPrint(
+              '[selectRace] ✅ CACHE HIT: ${_selectedVenue.code} R${race.raceNo} '
+              '— ${cached.length}두, ${sw.elapsedMilliseconds}ms',
+            );
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('[selectRace] 캐시 조회 오류: $e');
+        }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  [ONLINE FALLBACK] 캐시 미스 시에만 외부 API 호출 허용
+    //  [v2.0] 정상 운영 시에는 이 블록은 실행되지 않아야 함
+    //         (심야 배치가 성공했다면 캐시 히트)
+    // ══════════════════════════════════════════════════════════════════
+    if (!cacheHit) {
+      bool apiSuccess = false;
+
+      if (kDebugMode) {
+        debugPrint(
+          '[selectRace] ⚠️ CACHE MISS: ${_selectedVenue.code} R${race.raceNo} '
+          '— 온라인 fallback 실행 (배치 스냅샷 없음)',
+        );
+      }
+
+      try {
+        if (day != null) {
+          // ── [API26_2] 출전표 + 메타 수신 ────────────────────────────────
+          // ※ 배치 아키텍처 v2.0: 이 블록은 캐시 미스 시에만 실행
+          // ※ 정상 운영 시 이 코드는 절대 실행되지 않아야 함
+          final meta = await KraApiService.fetchHorseEntriesWithMeta(
+              _selectedVenue.code, day.date, race.raceNo);
+          final rawEntries = meta.entries;
+
+          // stTime 바인딩
+          if (_selectedRace != null) {
+            final newStartTime = meta.startTime;
+            final actualCount  = rawEntries.isNotEmpty ? rawEntries.length : meta.dusu;
+            final needUpdate   = (newStartTime != null &&
+                                  newStartTime != _selectedRace!.startTime) ||
+                                 (actualCount != _selectedRace!.totalHorses);
+            if (needUpdate) {
+              _selectedRace = _selectedRace!.copyWith(
                 startTime:   newStartTime,
                 totalHorses: actualCount,
               );
+              _races = _races.map((r) {
+                if (r.raceNo == race.raceNo && r.venueCode == race.venueCode) {
+                  return r.copyWith(
+                    startTime:   newStartTime,
+                    totalHorses: actualCount,
+                  );
+                }
+                return r;
+              }).toList();
             }
-            return r;
-          }).toList();
+          }
 
-          if (kDebugMode) {
-            debugPrint('[selectRace] RaceInfo 갱신: '
-                'startTime=${newStartTime ?? '유지'} '
-                'totalHorses=$actualCount (dusu=${meta.dusu})');
+          // ── enrichHorseStats() ──────────────────────────────────────────
+          final sw2 = Stopwatch()..start();
+          _horses = await RaceStatEngine.enrichHorseStats(
+            entries: rawEntries,
+            race:    _selectedRace ?? race,
+          );
+          _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
+          sw2.stop();
+          apiSuccess = true;
+
+          // 온라인 fallback 결과를 캐시에 저장 (다음 조회부터 캐시 히트)
+          try {
+            await RaceSnapshotCache().saveRaceSnapshot(
+              venueCode:      _selectedVenue.code,
+              date:           day.date,
+              raceNo:         race.raceNo,
+              horses:         _horses,
+              source:         'online_fallback',
+              fetchDurationMs: sw2.elapsedMilliseconds,
+            );
+            if (kDebugMode) {
+              debugPrint(
+                '[selectRace] 온라인 fallback 결과 캐시 저장 완료 '
+                '(${_selectedVenue.code} R${race.raceNo}, ${sw2.elapsedMilliseconds}ms)',
+              );
+            }
+          } catch (saveErr) {
+            if (kDebugMode) {
+              debugPrint('[selectRace] 캐시 저장 실패: $saveErr');
+            }
           }
         }
+      } catch (_) {
+        // API 실패 → Mock 대체
+        _horses = KraMockService.getHorseEntries(race);
+        _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
       }
 
-      _horses = await RaceStatEngine.enrichHorseStats(
-        entries: rawEntries,
-        race:    _selectedRace ?? race, // 갱신된 RaceInfo 사용
-      );
-      // gateNo(마번) 기준 오름차순 정렬 — API 응답 순서 불일치 방지
-      _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
-      apiSuccess = true;
-    } catch (_) {
-      _horses = KraMockService.getHorseEntries(race);
-      // Mock도 정렬 보장
-      _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
+      _isHorsesMock = !apiSuccess;
     }
 
-    // Mock 여부 기록 (UI 배지 표시용)
-    _isHorsesMock = !apiSuccess;
-
+    // ── 공통 처리 ────────────────────────────────────────────────────────
     if (_selectedRace != null) {
       _insights = RaceStatEngine.generateInsights(_horses, _selectedRace!);
     }
 
     _lastUpdated = DateTime.now();
-    _refreshStatus = apiSuccess ? RefreshStatus.success : RefreshStatus.error;
+    _refreshStatus = RefreshStatus.success;
     _isLoadingHorses = false;
     notifyListeners();
 
-    // ── [API4_3] 물리 프로필 백그라운드 사전 로딩 ──────────────────────────────────────
-    // 경주 선택 시점에 즉시 백그라운드 실행
-    // → race_animation_screen.dart 게이트빰 진입 전에 미리 프로필 주입→ 대기시간 활용
-    // → 로딩 완료 시 notifyListeners()로 UI 자동 갱신 (AI✓ 인디케이터)
-    SplitTimeFetcher.clearCache(); // 새 경주 선택 시 캐시 초기화
+    // ── [API4_3] 물리 프로필 백그라운드 사전 로딩 ──────────────────────
+    // 캐시 히트 여부에 무관하게 physicsProfile 없는 말만 보충
+    SplitTimeFetcher.clearCache();
     _prefetchPhysicsProfiles(race);
 
-    // 경주 미종료 시 자동 갱신 시작
+    // 경주 미종료 시 자동 배당 갱신 시작
     if (!race.isFinished) {
       startAutoRefresh(race);
     }

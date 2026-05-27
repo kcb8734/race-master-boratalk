@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'providers/race_provider.dart';
 import 'services/kra_server_status.dart';
 import 'services/kra_bulk_sync_service.dart';
+import 'services/race_snapshot_cache.dart'; // [v2.0] 심야 배치 캐시 퍼지
 import 'screens/home_screen.dart';
 import 'utils/app_theme.dart';
 
@@ -36,6 +37,9 @@ class RaceMasterApp extends StatelessWidget {
               await status.initialCheck();
               // ★ BulkSync 스케줄러 시작 (새벽 02:00~05:00 자동 수집)
               KraBulkSyncService().startScheduler();
+              // ★ [v2.0] 만료 스냅샷 정리 (TTL 36h 초과분 자동 삭제)
+              //    앱 시작 시 1회 실행 — 저장 공간 효율 유지
+              await RaceSnapshotCache().purgeExpired();
             });
             return status;
           },

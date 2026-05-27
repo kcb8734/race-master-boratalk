@@ -4,6 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'race_schedule_cache.dart';
+import 'race_snapshot_cache.dart';
+import 'kra_api_service.dart';
+import 'race_stat_engine.dart';
+import '../models/race_models.dart';
 
 // ══════════════════════════════════════════════════════════════════════════
 //  KraBulkSyncService — 새벽 시간대 KRA 공공데이터 API 벌크 수집 스케줄러
@@ -306,7 +310,12 @@ class KraBulkSyncService {
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  //  벌크 싱크 본체
+  //  벌크 싱크 본체 (v2.0 — RaceSnapshotCache 파이프라인 통합)
+  //
+  //  Phase 1: 23개 공공데이터 API 벌크 호출 → raw JSON 저장 (기존)
+  //  Phase 2: API26_2 출전표 수집 완료된 경주별 → enrichHorseStats() 실행
+  //           → RaceSnapshotCache.saveRaceSnapshot() 저장 (신규)
+  //  → 이후 selectRace()는 외부 API 없이 캐시만 조회 (200ms 이내 반환)
   // ══════════════════════════════════════════════════════════════════════
   Future<BulkSyncResult> runBulkSync({bool forceRun = false}) async {
     if (_isRunning) {
@@ -316,21 +325,27 @@ class KraBulkSyncService {
         completedCount: 0,
         failedCount: 0,
         details: [],
+        snapshotSavedCount: 0,
       );
     }
 
     _isRunning = true;
     _completedApis = 0;
+    // Phase 1 (API 수집) + Phase 2 (스냅샷 인젝션) 합산
     _totalApis = apiTargets.length;
     final prefs = await SharedPreferences.getInstance();
     final today = _todayStr();
     final results = <BulkApiResult>[];
     final cache = RaceScheduleCache();
+    final snapCache = RaceSnapshotCache();
+    int snapshotSavedCount = 0;
 
     if (kDebugMode) {
-      debugPrint('[BulkSync] ▶ 벌크 싱크 시작 — ${apiTargets.length}개 API (날짜: $today)');
+      debugPrint('[BulkSync] ▶ 벌크 싱크 시작 v2.0 — ${apiTargets.length}개 API (날짜: $today)');
+      debugPrint('[BulkSync] Phase 1: API 수집 | Phase 2: 스냅샷 DB 인젝션');
     }
 
+    // ── Phase 1: 23개 API 순차 수집 ─────────────────────────────────────
     for (int i = 0; i < apiTargets.length; i++) {
       final target = apiTargets[i];
       _currentApi = target.name;
@@ -340,6 +355,7 @@ class KraBulkSyncService {
         total: apiTargets.length,
         apiName: target.name,
         apiId: target.id,
+        phase: 'API수집',
       ));
 
       // 이미 오늘 수집된 API는 스킵 (forceRun이면 재수집)
@@ -379,7 +395,23 @@ class KraBulkSyncService {
       }
     }
 
-    // 완료 기록
+    // ── Phase 2: 출전표(API26_2) 기반 경주별 스냅샷 인젝션 ──────────────
+    // API26_2 raw JSON → 경주별 HorseEntry enrichment → RaceSnapshotCache 저장
+    if (kDebugMode) {
+      debugPrint('[BulkSync] Phase 2 시작: 출전표 → RaceSnapshotCache 인젝션');
+    }
+    _currentApi = '스냅샷 인젝션 중...';
+    snapshotSavedCount = await _injectSnapshotsFromBulkData(
+      today: today,
+      prefs: prefs,
+      snapCache: snapCache,
+      forceRun: forceRun,
+    );
+    if (kDebugMode) {
+      debugPrint('[BulkSync] Phase 2 완료: $snapshotSavedCount개 경주 스냅샷 저장');
+    }
+
+    // ── 완료 기록 ─────────────────────────────────────────────────────
     _lastRunAt = DateTime.now();
     await prefs.setString(_keyLastSync, _lastRunAt!.toIso8601String());
     await prefs.setString(_keyProgress, jsonEncode({
@@ -388,6 +420,7 @@ class KraBulkSyncService {
       'failed': results.where((r) => !r.success).length,
       'skipped': results.where((r) => r.skipped).length,
       'total': apiTargets.length,
+      'snapshotSaved': snapshotSavedCount,
     }));
 
     _isRunning = false;
@@ -399,17 +432,202 @@ class KraBulkSyncService {
 
     if (kDebugMode) {
       debugPrint(
-        '[BulkSync] ■ 완료 — 성공: $successCount, 실패: $failCount, 스킵: $skipCount',
+        '[BulkSync] ■ 완료 — 성공: $successCount, 실패: $failCount, 스킵: $skipCount\n'
+        '[BulkSync] ■ 스냅샷 DB 인젝션: $snapshotSavedCount개 경주',
       );
     }
 
     return BulkSyncResult(
       success: failCount < apiTargets.length,
-      message: '성공 $successCount / 실패 $failCount / 스킵 $skipCount',
+      message: '성공 $successCount / 실패 $failCount / 스킵 $skipCount | 스냅샷 $snapshotSavedCount개',
       completedCount: successCount,
       failedCount: failCount,
       details: results,
+      snapshotSavedCount: snapshotSavedCount,
     );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Phase 2 핵심: 벌크 수집 완료 후 경주별 스냅샷 인젝션
+  //
+  //  ▸ 서울/부산/제주 전체 경주번호 순회
+  //  ▸ API26_2 raw JSON → KraApiService.parseEntrySheet() → HorseEntry 목록
+  //  ▸ RaceStatEngine.enrichHorseStats() → 통계 풍부화
+  //  ▸ RaceSnapshotCache.saveRaceSnapshot() → SharedPreferences 저장
+  //
+  //  ▸ 실패 허용 (경주별 try-catch): 일부 경주 실패해도 전체 중단 없음
+  // ══════════════════════════════════════════════════════════════════════
+  Future<int> _injectSnapshotsFromBulkData({
+    required String today,
+    required SharedPreferences prefs,
+    required RaceSnapshotCache snapCache,
+    required bool forceRun,
+  }) async {
+    int savedCount = 0;
+
+    // today(YYYYMMDD) → DateTime 변환 (캐시 API용)
+    final todayDate = DateTime(
+      int.parse(today.substring(0, 4)),
+      int.parse(today.substring(4, 6)),
+      int.parse(today.substring(6, 8)),
+    );
+
+    // 수집된 경주 목록 조회 (API187 — 경마경주정보에서 파싱)
+    final raceListJson = prefs.getString('${_prefixBulk}API187_$today');
+    List<Map<String, dynamic>> raceTargets = [];
+
+    if (raceListJson != null) {
+      try {
+        raceTargets = _parseRaceListFromApi187(raceListJson);
+      } catch (e) {
+        if (kDebugMode) debugPrint('[BulkSync] API187 파싱 실패: $e');
+      }
+    }
+
+    // API187 파싱 실패 시 기본 경주 범위로 폴백
+    if (raceTargets.isEmpty) {
+      // 서울(1), 부산(2), 제주(3) × 경주번호 1~11
+      for (final meet in ['1', '2', '3']) {
+        for (int rcNo = 1; rcNo <= 11; rcNo++) {
+          raceTargets.add({'meet': meet, 'rcNo': '$rcNo'});
+        }
+      }
+    }
+
+    for (final target in raceTargets) {
+      final meet  = target['meet']  as String? ?? '1';
+      final rcNo  = target['rcNo']  as String? ?? '1';
+      final vCode = _meetToVenueCode(meet);
+
+      // forceRun=false면 이미 유효한 스냅샷이 있으면 스킵
+      if (!forceRun) {
+        final hasSnap = await snapCache.hasValidSnapshot(
+          venueCode: vCode, date: todayDate, raceNo: rcNo);
+        if (hasSnap) {
+          if (kDebugMode) {
+            debugPrint('[BulkSync] 스냅샷 스킵: $vCode R$rcNo (이미 유효)');
+          }
+          continue;
+        }
+      }
+
+      try {
+        final sw = Stopwatch()..start();
+
+        // API26_2 출전표 직접 호출 (스냅샷 인젝션용 — 배치 내에서 경주별 1회)
+        final meta = await KraApiService.fetchHorseEntriesWithMeta(
+          vCode, todayDate, rcNo);
+
+        if (meta.entries.isEmpty) {
+          if (kDebugMode) {
+            debugPrint('[BulkSync] 출전마 없음: $vCode R$rcNo — 스킵');
+          }
+          continue;
+        }
+
+        // 경주 메타 구성 (distance는 EntrySheetResult에 없어 기본값 사용)
+        final raceInfo = RaceInfo(
+          raceNo:         rcNo,
+          raceName:       '${rcNo}경주',
+          distance:       1200, // 배치 단계 기본거리
+          startTime:      meta.startTime ?? '',
+          totalHorses:    meta.entries.length,
+          venueCode:      vCode,
+          venueName:      _meetToVenueName(meet),
+          raceDate:       today,
+          condition:      '',
+          grade:          '',
+          trackCondition: '',
+          isFinished:     false,
+        );
+
+        // enrichHorseStats: API4_3, API8_2, API5_1, API6_1, API16 등 내부 처리
+        final enriched = await RaceStatEngine.enrichHorseStats(
+          entries: meta.entries,
+          race:    raceInfo,
+        );
+        enriched.sort((a, b) => a.gateNo.compareTo(b.gateNo));
+
+        sw.stop();
+
+        // RaceSnapshotCache에 저장
+        await snapCache.saveRaceSnapshot(
+          venueCode:       vCode,
+          date:            todayDate,
+          raceNo:          rcNo,
+          horses:          enriched,
+          source:          'batch',
+          fetchDurationMs: sw.elapsedMilliseconds,
+        );
+
+        savedCount++;
+        if (kDebugMode) {
+          debugPrint(
+            '[BulkSync] ✅ 스냅샷 저장: $vCode R$rcNo — '
+            '${enriched.length}마 / ${sw.elapsedMilliseconds}ms',
+          );
+        }
+
+        // 인젝션 간 1~2초 딜레이 (API 부하 분산)
+        await Future.delayed(const Duration(milliseconds: 1200));
+
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('[BulkSync] ❌ 스냅샷 실패: $vCode R$rcNo — $e');
+        }
+        // 경주별 실패는 무시하고 다음 경주 계속
+      }
+    }
+
+    return savedCount;
+  }
+
+  /// API187 응답 JSON 파싱 → (meet, rcNo) 목록
+  List<Map<String, dynamic>> _parseRaceListFromApi187(String rawJson) {
+    final result = <Map<String, dynamic>>[];
+    try {
+      final decoded = jsonDecode(rawJson);
+      List items = [];
+      if (decoded is Map) {
+        items = decoded['response']?['body']?['items']?['item'] ?? [];
+        if (items is! List) items = [items];
+      } else if (decoded is List) {
+        items = decoded;
+      }
+      final seen = <String>{};
+      for (final item in items) {
+        if (item is! Map) continue;
+        final meet  = (item['meet']  ?? item['meetCd'] ?? '').toString();
+        final rcNo  = (item['rcNo']  ?? item['raceNo'] ?? '').toString();
+        if (meet.isEmpty || rcNo.isEmpty) continue;
+        final key = '$meet:$rcNo';
+        if (!seen.contains(key)) {
+          seen.add(key);
+          result.add({'meet': meet, 'rcNo': rcNo});
+        }
+      }
+    } catch (_) {}
+    return result;
+  }
+
+  /// meet 코드 → venueCode 문자열 변환
+  static String _meetToVenueCode(String meet) {
+    switch (meet) {
+      case '1': return 'SEO';
+      case '2': return 'PUS';
+      case '3': return 'JEJ';
+      default:  return 'SEO';
+    }
+  }
+
+  /// meet 코드 → 경주장명 변환
+  static String _meetToVenueName(String meet) {
+    switch (meet) {
+      case '1': return '서울';
+      case '2': return '부산경남';
+      case '3': return '제주';
+      default:  return '서울';
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -493,7 +711,7 @@ class KraBulkSyncService {
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  //  저장된 데이터 조회 (물리 엔진 바인딩용)
+  //  저장된 Raw JSON 데이터 조회 (물리 엔진 바인딩용)
   // ─────────────────────────────────────────────────────────────────────
   Future<String?> getCachedData(String apiId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -657,6 +875,7 @@ class BulkSyncResult {
   final int    completedCount;
   final int    failedCount;
   final List<BulkApiResult> details;
+  final int    snapshotSavedCount; // Phase 2: 스냅샷 저장 성공 경주 수
 
   const BulkSyncResult({
     required this.success,
@@ -664,6 +883,7 @@ class BulkSyncResult {
     required this.completedCount,
     required this.failedCount,
     required this.details,
+    this.snapshotSavedCount = 0,
   });
 }
 
@@ -675,12 +895,14 @@ class BulkSyncProgress {
   final int    total;
   final String apiName;
   final String apiId;
+  final String phase; // 'API수집' | '스냅샷인젝션'
 
   const BulkSyncProgress({
     required this.current,
     required this.total,
     required this.apiName,
     required this.apiId,
+    this.phase = 'API수집',
   });
 
   double get ratio => total > 0 ? current / total : 0.0;
