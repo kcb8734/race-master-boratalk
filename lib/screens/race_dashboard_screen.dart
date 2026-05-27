@@ -8,6 +8,16 @@ import '../utils/horse_cap_colors.dart';
 import 'race_splash_screen.dart';
 import 'race_result_screen.dart';
 
+// ══════════════════════════════════════════════════════════════════════════
+//  🛠️ 개발 모드 플래그 — 구글 플레이 등록 전 전면 활성화
+//
+//  kDevMode = true  → 모든 잠금 해제, 횟수 제한 없음, 모의 레이스 무제한 진입
+//  kDevMode = false → 프로덕션 로직 복원 (isFinished/seasonOff/canSimulate 체크)
+//
+//  ⚠️ 구글 플레이 스토어 등록 전 반드시 false로 변경 후 빌드할 것
+// ══════════════════════════════════════════════════════════════════════════
+const bool kDevMode = true;
+
 class RaceDashboardScreen extends StatefulWidget {
   final RaceInfo race;
   /// 시즌오프 체험 모드 여부 — true이면 가상 데이터 경주임을 상단 배너로 안내
@@ -586,20 +596,23 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
 
   // ── START 버튼 ──
   Widget _buildStartButton(RaceProvider provider) {
-    final canSim = provider.canSimulate;
+    // ── 🛠️ kDevMode: true → 모든 잠금 해제, 무제한 진입 / false → 프로덕션 로직 복원 ──
+    final canSim = kDevMode ? true : provider.canSimulate;
     // ── 경주 시간 경과 여부 (상세페이지 START 버튼 전용 비활성) ──
-    final isRacePast = _isRacePast;
+    final isRacePast = kDevMode ? false : _isRacePast;
 
     // ── 라이프사이클 잠금 상태 체크 ──
-    // 데모 모드(시즌오프 체험)는 seasonOff 잠금을 건너뜀
-    final lockState = widget.isDemoMode
+    // kDevMode: 항상 active / 데모 모드(시즌오프 체험)는 seasonOff 잠금을 건너뜀
+    final lockState = kDevMode
         ? RaceLockState.active
-        : provider.raceLockFor(widget.race);
+        : (widget.isDemoMode
+            ? RaceLockState.active
+            : provider.raceLockFor(widget.race));
     // 경주 시간 경과 시에도 잠금 처리
-    final isLocked = lockState != RaceLockState.active || isRacePast;
+    final isLocked = kDevMode ? false : (lockState != RaceLockState.active || isRacePast);
 
     // isFinished 여부 (완전 종료 판정)
-    final isFinished = widget.race.isFinished;
+    final isFinished = kDevMode ? false : widget.race.isFinished;
 
     // 잠금 상태별 버튼 표시 정보
     // isFinished 최우선: 종료 경주는 전용 배너로 처리
@@ -662,8 +675,8 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                 ),
               ),
             ),
-          // 무료 잔여 횟수 (잠금 해제 + 비프리미엄 + 종료 경주 아닐 시)
-          if (!isLocked && !isFinished && !provider.isPremium)
+          // 무료 잔여 횟수 (개발 모드 비활성 + 잠금 해제 + 비프리미엄 + 종료 경주 아닐 시)
+          if (!kDevMode && !isLocked && !isFinished && !provider.isPremium)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
@@ -699,75 +712,82 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
             animation: _pulseCtrl,
             builder: (_, __) => GestureDetector(
               onTap: () {
-                // ── 최우선: isFinished 완전 종료 경주 차단 ──────────
-                if (isFinished) {
-                  _showLifecycleLockDialog(
-                    icon: '🏁',
-                    title: '경주 종료',
-                    message:
-                        '해당 경주는 이미 종료되었습니다.\n'
-                        'AI 모의 레이스는 비활성화 상태입니다.\n\n'
-                        '다음 출전마 공시 후 활성화 예정:\n'
-                        '${_nextActiveLabel()}',
-                    accentColor: const Color(0xFF4A7A4A),
-                  );
-                  return;
-                }
-                // ── 0순위: 경주 시간 경과 체크 (START 버튼 비활성) ──
-                if (isRacePast && lockState == RaceLockState.active) {
-                  _showLifecycleLockDialog(
-                    icon: '🏁',
-                    title: '경주 시간 종료',
-                    message:
-                        '해당 경주 출발 시간이 지났습니다.\n'
-                        'AI 모의 레이스는 비활성화 되었습니다.\n\n'
-                        '${_nextActiveLabel()} 예정',
-                    accentColor: const Color(0xFF7A7A9A),
-                  );
-                  return;
-                }
-                // ── 1순위: 라이프사이클 잠금 체크 ──
-                if (lockState == RaceLockState.seasonOff) {
-                  _showLifecycleLockDialog(
-                    icon: '🚫',
-                    title: '시즌 오프',
-                    message:
-                        '금주 실시간 경주 스케줄이 모두 종료되었습니다.\n'
-                        '다음 주 경주 데이터 업데이트 전까지\n'
-                        '모의 레이스가 제한됩니다.',
-                    accentColor: const Color(0xFFFF3B30),
-                  );
-                  return;
-                }
-                if (lockState == RaceLockState.dataPending) {
-                  _showLifecycleLockDialog(
-                    icon: '⏳',
-                    title: '데이터 미확정',
-                    message:
-                        '이번 주 실시간 경주 데이터가 아직\n'
-                        '업데이트되지 않았습니다.\n\n'
-                        '매주 목요일 오후 5시 이후\n'
-                        '순차 업데이트 예정',
-                    accentColor: const Color(0xFFFFAA00),
-                  );
-                  return;
-                }
-                if (lockState == RaceLockState.raceLocked) {
-                  _showLifecycleLockDialog(
-                    icon: '🏁',
-                    title: '경주 종료',
-                    message:
-                        '당일 실시간 경주가 종료되어\n'
-                        '모의 레이서 가동이 종료되었습니다.',
-                    accentColor: const Color(0xFF7A7A9A),
-                  );
-                  return;
-                }
-                // ── 2순위: 프리미엄 여부 체크 ──
-                if (!canSim) {
-                  _showPremiumDialog();
-                  return;
-                }
+                // ── 🛠️ kDevMode = true 동안 모든 잠금 차단 로직 우회 ──────────────
+                // ⚠️ 구글 플레이 등록 전 kDevMode = false 로 변경 후 빌드할 것
+                if (!kDevMode) {
+                  // ── 최우선: isFinished 완전 종료 경주 차단 ──
+                  if (widget.race.isFinished) {
+                    _showLifecycleLockDialog(
+                      icon: '🏁',
+                      title: '경주 종료',
+                      message:
+                          '해당 경주는 이미 종료되었습니다.\n'
+                          'AI 모의 레이스는 비활성화 상태입니다.\n\n'
+                          '다음 출전마 공시 후 활성화 예정:\n'
+                          '${_nextActiveLabel()}',
+                      accentColor: const Color(0xFF4A7A4A),
+                    );
+                    return;
+                  }
+                  // ── 0순위: 경주 시간 경과 체크 (START 버튼 비활성) ──
+                  if (_isRacePast && provider.raceLockFor(widget.race) == RaceLockState.active) {
+                    _showLifecycleLockDialog(
+                      icon: '🏁',
+                      title: '경주 시간 종료',
+                      message:
+                          '해당 경주 출발 시간이 지났습니다.\n'
+                          'AI 모의 레이스는 비활성화 되었습니다.\n\n'
+                          '${_nextActiveLabel()} 예정',
+                      accentColor: const Color(0xFF7A7A9A),
+                    );
+                    return;
+                  }
+                  // ── 1순위: 라이프사이클 잠금 체크 ──
+                  final prodLockState = widget.isDemoMode
+                      ? RaceLockState.active
+                      : provider.raceLockFor(widget.race);
+                  if (prodLockState == RaceLockState.seasonOff) {
+                    _showLifecycleLockDialog(
+                      icon: '🚫',
+                      title: '시즌 오프',
+                      message:
+                          '금주 실시간 경주 스케줄이 모두 종료되었습니다.\n'
+                          '다음 주 경주 데이터 업데이트 전까지\n'
+                          '모의 레이스가 제한됩니다.',
+                      accentColor: const Color(0xFFFF3B30),
+                    );
+                    return;
+                  }
+                  if (prodLockState == RaceLockState.dataPending) {
+                    _showLifecycleLockDialog(
+                      icon: '⏳',
+                      title: '데이터 미확정',
+                      message:
+                          '이번 주 실시간 경주 데이터가 아직\n'
+                          '업데이트되지 않았습니다.\n\n'
+                          '매주 목요일 오후 5시 이후\n'
+                          '순차 업데이트 예정',
+                      accentColor: const Color(0xFFFFAA00),
+                    );
+                    return;
+                  }
+                  if (prodLockState == RaceLockState.raceLocked) {
+                    _showLifecycleLockDialog(
+                      icon: '🏁',
+                      title: '경주 종료',
+                      message:
+                          '당일 실시간 경주가 종료되어\n'
+                          '모의 레이서 가동이 종료되었습니다.',
+                      accentColor: const Color(0xFF7A7A9A),
+                    );
+                    return;
+                  }
+                  // ── 2순위: 프리미엄 여부 체크 ──
+                  if (!provider.canSimulate) {
+                    _showPremiumDialog();
+                    return;
+                  }
+                } // end if (!kDevMode)
                 // ── 정상 진입 (데모 모드는 simCount 증가 제외) ──
                 if (!widget.isDemoMode) provider.incrementSimCount();
                 Navigator.push(
@@ -790,7 +810,8 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 18),
                 decoration: BoxDecoration(
-                  gradient: (!isLocked && canSim)
+                  // kDevMode: 항상 활성 gradient / 프로덕션: isLocked & canSim 조건
+                  gradient: (kDevMode || (!isLocked && canSim))
                       ? LinearGradient(
                           colors: [
                             const Color(0xFFFFD700),
@@ -803,9 +824,9 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                           end: Alignment.bottomRight,
                         )
                       : null,
-                  color: (!isLocked && canSim) ? null : const Color(0xFF1A2A3A),
+                  color: (kDevMode || (!isLocked && canSim)) ? null : const Color(0xFF1A2A3A),
                   borderRadius: BorderRadius.circular(20),
-                  boxShadow: (!isLocked && canSim)
+                  boxShadow: (kDevMode || (!isLocked && canSim))
                       ? [
                           BoxShadow(
                             color: const Color(0xFFFFD700).withValues(
@@ -821,25 +842,31 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      isLocked
-                          ? lockIcon
-                          : (canSim ? '🏁' : '🔒'),
+                      // kDevMode: 항상 🏁 / 프로덕션: 잠금 상태별 아이콘
+                      kDevMode
+                          ? '🏁'
+                          : (isLocked ? lockIcon : (canSim ? '🏁' : '🔒')),
                       style: const TextStyle(fontSize: 24),
                     ),
                     const SizedBox(width: 12),
                     Text(
-                      isLocked
-                          ? lockLabel
-                          : (canSim
-                              ? 'AI 모의 레이스  START'
-                              : '프리미엄 구독 후 이용'),
+                      // kDevMode: 항상 START 텍스트 / 프로덕션: 잠금 상태별 텍스트
+                      kDevMode
+                          ? 'AI 모의 레이스  START'
+                          : (isLocked
+                              ? lockLabel
+                              : (canSim
+                                  ? 'AI 모의 레이스  START'
+                                  : '프리미엄 구독 후 이용')),
                       style: TextStyle(
-                        color: isLocked
-                            ? lockColor.withValues(alpha: 0.8)
-                            : (canSim
-                                ? const Color(0xFF1A1A1A)
-                                : const Color(0xFF5A7A9A)),
-                        fontSize: isLocked ? 14 : 18,
+                        color: kDevMode
+                            ? const Color(0xFF1A1A1A)
+                            : (isLocked
+                                ? lockColor.withValues(alpha: 0.8)
+                                : (canSim
+                                    ? const Color(0xFF1A1A1A)
+                                    : const Color(0xFF5A7A9A))),
+                        fontSize: (!kDevMode && isLocked) ? 14 : 18,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.8,
                       ),
