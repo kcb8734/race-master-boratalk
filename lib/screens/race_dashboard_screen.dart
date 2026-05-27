@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/race_models.dart';
-import '../providers/race_provider.dart';
+import '../providers/race_provider.dart'; // HorseLoadPhase 포함
 import '../services/race_stat_engine.dart';
 import '../utils/horse_cap_colors.dart';
 import 'race_splash_screen.dart';
@@ -73,7 +73,7 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
               if (!widget.isDemoMode && provider.isHorsesMock)
                 _buildMockHorsesBanner(),
               if (provider.isLoadingHorses)
-                const Expanded(child: _LoadingPanel())
+                Expanded(child: _LoadingPanel(phase: provider.loadPhase))
               else ...[
                 _buildAiInsightBanner(provider),
                 _buildHorseListHeader(),
@@ -995,37 +995,120 @@ class _RaceDashboardScreenState extends State<RaceDashboardScreen>
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  로딩 패널
+//  스마트 로딩 패널 (캐시 HIT vs 온라인 MISS 구분)
 // ══════════════════════════════════════════════════════════════════════
 class _LoadingPanel extends StatelessWidget {
-  const _LoadingPanel();
+  final HorseLoadPhase phase;
+  const _LoadingPanel({this.phase = HorseLoadPhase.cacheChecking});
 
   @override
   Widget build(BuildContext context) {
+    // ── 단계별 메시지/색상 정의 ─────────────────────────────────────────
+    final bool isCachePath = phase == HorseLoadPhase.cacheChecking ||
+                             phase == HorseLoadPhase.cacheHit;
+
+    final Color accentColor = isCachePath
+        ? const Color(0xFF66BB6A)   // 초록: 캐시 경로 (빠름)
+        : const Color(0xFFFFD700);  // 노랑: 온라인 API 경로 (느림)
+
+    final String mainLabel;
+    final String subLabel;
+    final String statusBadge;
+
+    switch (phase) {
+      case HorseLoadPhase.cacheChecking:
+        mainLabel  = '배치 스냅샷 조회 중...';
+        subLabel   = '심야 배치 캐시 DB에서 출전마 데이터를 불러옵니다';
+        statusBadge = '⚡ 캐시 DB';
+      case HorseLoadPhase.cacheHit:
+        mainLabel  = '캐시 데이터 로딩 완료';
+        subLabel   = 'API 호출 없이 즉시 반환 (<200ms)';
+        statusBadge = '✅ 캐시 히트';
+      case HorseLoadPhase.onlineFetch:
+        mainLabel  = '23개 API 데이터 분석 중...';
+        subLabel   = '배치 스냅샷 없음 — 실시간 API 수집 중\n(관리자 패널 → 강제 벌크 싱크로 사전 적재 가능)';
+        statusBadge = '🌐 실시간 API';
+      default:
+        mainLabel  = '데이터 준비 중...';
+        subLabel   = '';
+        statusBadge = '';
+    }
+
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(
-            width: 48, height: 48,
-            child: CircularProgressIndicator(
-              color: Color(0xFFFFD700), strokeWidth: 3,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // ── 스피너 ──────────────────────────────────────────────────
+            SizedBox(
+              width: 52, height: 52,
+              child: CircularProgressIndicator(
+                color: accentColor, strokeWidth: 3,
+              ),
             ),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            '23개 API 데이터 분석 중...',
-            style: TextStyle(
-                color: Color(0xFFFFD700),
-                fontSize: 15, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'API4_3 · API6_1 · API77 · API25_1 · API155',
-            style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.4), fontSize: 10),
-          ),
-        ],
+            const SizedBox(height: 20),
+
+            // ── 상태 배지 ────────────────────────────────────────────────
+            if (statusBadge.isNotEmpty) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: accentColor.withValues(alpha: 0.4)),
+                ),
+                child: Text(
+                  statusBadge,
+                  style: TextStyle(
+                    color: accentColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // ── 메인 레이블 ─────────────────────────────────────────────
+            Text(
+              mainLabel,
+              style: TextStyle(
+                color: accentColor,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+
+            // ── 서브 레이블 ─────────────────────────────────────────────
+            if (subLabel.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                subLabel,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.38),
+                  fontSize: 11,
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+
+            // ── 온라인 API 경로일 때만 API 목록 표시 ─────────────────────
+            if (phase == HorseLoadPhase.onlineFetch) ...[
+              const SizedBox(height: 10),
+              Text(
+                'API4_3 · API6_1 · API77 · API25_1 · API155',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.25),
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -1136,9 +1219,20 @@ class _HorseStatCardState extends State<_HorseStatCard>
   void initState() {
     super.initState();
     _expandCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 300),
+      vsync: this, duration: const Duration(milliseconds: 350),
     );
     _expandAnim = CurvedAnimation(parent: _expandCtrl, curve: Curves.easeInOut);
+
+    // ── 1번마(AI 점수 1위)는 진입 시 자동으로 확장 ─────────────────────
+    // 사용자가 바로 상세 정보를 볼 수 있도록 애니메이션 딜레이 후 자동 펼침
+    if (widget.rank == 1) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_expanded) {
+          setState(() => _expanded = true);
+          _expandCtrl.forward();
+        }
+      });
+    }
   }
 
   @override

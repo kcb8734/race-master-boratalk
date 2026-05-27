@@ -3957,6 +3957,10 @@ class _CacheDashboardTabState extends State<_CacheDashboardTab> {
             _statCard('전체 캐시 키 수',
               '${s['totalKeys'] ?? 0}개',
               Icons.sd_storage),
+
+            // ── 스냅샷 상세 목록 ────────────────────────────────────────
+            const SizedBox(height: 12),
+            _buildSnapshotDetailList(s),
           ],
           const SizedBox(height: 16),
 
@@ -4093,6 +4097,259 @@ class _CacheDashboardTabState extends State<_CacheDashboardTab> {
       ),
     );
   }
+
+  // ── 스냅샷 상세 목록 위젯 ──────────────────────────────────────────────
+  Widget _buildSnapshotDetailList(Map<String, dynamic> stats) {
+    final details = (stats['snapshotDetails'] as List<dynamic>?) ?? [];
+    if (details.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A0A1A),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF2A2A4A)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.info_outline, size: 14, color: Color(0xFF555580)),
+          SizedBox(width: 8),
+          Text('저장된 스냅샷 없음 — 강제 벌크 싱크를 실행하세요',
+              style: TextStyle(color: Color(0xFF555580), fontSize: 11)),
+        ]),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0A1A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF2A2A5A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── 헤더 ──────────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: const BoxDecoration(
+              color: Color(0xFF12123A),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(8),
+                topRight: Radius.circular(8),
+              ),
+            ),
+            child: Row(children: [
+              const Icon(Icons.list_alt, size: 13, color: Color(0xFF6C63FF)),
+              const SizedBox(width: 6),
+              Text(
+                '유효 스냅샷 목록 (${details.where((d) => d['isValid'] == true).length}/${details.length}개)',
+                style: const TextStyle(
+                    color: Color(0xFF9090CC),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              const Text('경주 / 마수 / 저장시간 / TTL잔여',
+                  style: TextStyle(color: Color(0xFF444470), fontSize: 10)),
+            ]),
+          ),
+          // ── 컬럼 헤더 ─────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            color: const Color(0xFF0D0D22),
+            child: Row(children: [
+              const SizedBox(width: 36,
+                child: Text('경주장', style: TextStyle(color: Color(0xFF444470), fontSize: 10))),
+              const SizedBox(width: 28,
+                child: Text('R#', style: TextStyle(color: Color(0xFF444470), fontSize: 10))),
+              const SizedBox(width: 32,
+                child: Text('두수', style: TextStyle(color: Color(0xFF444470), fontSize: 10))),
+              const Expanded(
+                child: Text('저장 시각', style: TextStyle(color: Color(0xFF444470), fontSize: 10))),
+              const SizedBox(width: 44,
+                child: Text('TTL', style: TextStyle(color: Color(0xFF444470), fontSize: 10))),
+              const SizedBox(width: 52,
+                child: Text('소스', style: TextStyle(color: Color(0xFF444470), fontSize: 10))),
+            ]),
+          ),
+          // ── 목록 ──────────────────────────────────────────────────────
+          ...details.asMap().entries.map((entry) {
+            final i = entry.key;
+            final d = entry.value as Map<String, dynamic>;
+            final isValid  = d['isValid'] as bool? ?? false;
+            final source   = d['source'] as String? ?? 'unknown';
+            final venueCode = d['venueCode'] as String? ?? '?';
+            final raceNo   = d['raceNo'] as String? ?? '?';
+            final horses   = d['horseCount'] as int? ?? 0;
+            final savedAt  = d['savedAt'] as String?;
+            final ttlLeft  = d['ttlHoursLeft'] as String? ?? '0';
+            final ageHours = d['ageHours'] as String? ?? '0';
+
+            // 소스별 색상/라벨
+            final (srcLabel, srcColor) = switch (source) {
+              'batch'           => ('배치',   const Color(0xFF66BB6A)),
+              'online_fallback' => ('온라인', const Color(0xFFFFCC02)),
+              'manual'          => ('수동',   const Color(0xFF64B5F6)),
+              _                 => ('?',      const Color(0xFF555580)),
+            };
+
+            // 경주장 표시명
+            final venueName = switch (venueCode) {
+              'SEO' => '서울',
+              'PUS' => '부산',
+              'JEJ' => '제주',
+              _     => venueCode,
+            };
+
+            // TTL 잔여 색상
+            final double ttlLeftD = double.tryParse(ttlLeft) ?? 0;
+            final ttlColor = ttlLeftD > 12
+                ? const Color(0xFF66BB6A)
+                : ttlLeftD > 4
+                    ? const Color(0xFFFFCC02)
+                    : const Color(0xFFFF7043);
+
+            final bgColor = i.isEven
+                ? const Color(0xFF080818)
+                : const Color(0xFF0A0A1E);
+
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              color: bgColor,
+              child: Row(children: [
+                // 경주장
+                SizedBox(
+                  width: 36,
+                  child: Row(children: [
+                    Container(
+                      width: 4, height: 4,
+                      decoration: BoxDecoration(
+                        color: isValid
+                            ? const Color(0xFF66BB6A)
+                            : const Color(0xFFFF7043),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(venueName,
+                        style: TextStyle(
+                            color: isValid
+                                ? const Color(0xFFE0E0FF)
+                                : const Color(0xFF7070AA),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+                // 경주 번호
+                SizedBox(
+                  width: 28,
+                  child: Text(raceNo,
+                      style: const TextStyle(
+                          color: Color(0xFF9090CC), fontSize: 11)),
+                ),
+                // 두수
+                SizedBox(
+                  width: 32,
+                  child: Text('$horses두',
+                      style: TextStyle(
+                          color: horses > 0
+                              ? const Color(0xFFE0E0FF)
+                              : const Color(0xFF555580),
+                          fontSize: 11)),
+                ),
+                // 저장 시각
+                Expanded(
+                  child: Text(
+                    _formatTs(savedAt),
+                    style: const TextStyle(
+                        color: Color(0xFF7070AA), fontSize: 10),
+                  ),
+                ),
+                // TTL 잔여
+                SizedBox(
+                  width: 44,
+                  child: Text(
+                    isValid ? '${ttlLeft}h' : '만료(${ageHours}h)',
+                    style: TextStyle(
+                        color: isValid ? ttlColor : const Color(0xFFFF7043),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+                // 소스 배지
+                SizedBox(
+                  width: 52,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: srcColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                          color: srcColor.withValues(alpha: 0.35)),
+                    ),
+                    child: Text(
+                      srcLabel,
+                      style: TextStyle(
+                          color: srcColor,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ]),
+            );
+          }),
+          // ── 푸터 범례 ─────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: const BoxDecoration(
+              color: Color(0xFF0D0D22),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(8),
+                bottomRight: Radius.circular(8),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                _legendDot(const Color(0xFF66BB6A), '유효'),
+                const SizedBox(width: 10),
+                _legendDot(const Color(0xFFFF7043), '만료'),
+                const SizedBox(width: 14),
+                _legendSourceBadge('배치',   const Color(0xFF66BB6A)),
+                const SizedBox(width: 6),
+                _legendSourceBadge('온라인', const Color(0xFFFFCC02)),
+                const SizedBox(width: 6),
+                _legendSourceBadge('수동',   const Color(0xFF64B5F6)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendDot(Color color, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(width: 6, height: 6,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+      const SizedBox(width: 3),
+      Text(label, style: TextStyle(color: color, fontSize: 9)),
+    ],
+  );
+
+  Widget _legendSourceBadge(String label, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(3),
+      border: Border.all(color: color.withValues(alpha: 0.35)),
+    ),
+    child: Text(label, style: TextStyle(color: color, fontSize: 9,
+        fontWeight: FontWeight.w700)),
+  );
 
   Widget _statCard(String label, String value, IconData icon, {Color? color}) {
     return Container(

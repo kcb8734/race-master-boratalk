@@ -53,6 +53,17 @@ class OddsChangeEvent {
 }
 
 // ──────────────────────────────────────────────────────────────
+// 출전마 로딩 단계 (로딩 화면 메시지 구분용)
+// ──────────────────────────────────────────────────────────────
+enum HorseLoadPhase {
+  idle,           // 대기 중 (아직 선택 안 함)
+  cacheChecking,  // 캐시 DB 조회 중 (배치 스냅샷 확인)
+  cacheHit,       // ✅ 캐시 히트 — 즉시 반환 (<200ms)
+  onlineFetch,    // ⚠️ 캐시 미스 — 실시간 API 호출 중
+  done,           // 완료
+}
+
+// ──────────────────────────────────────────────────────────────
 // 실시간 갱신 상태
 // ──────────────────────────────────────────────────────────────
 enum RefreshStatus {
@@ -82,6 +93,8 @@ class RaceProvider extends ChangeNotifier {
   RaceInfo? _selectedRace;
   List<HorseEntry> _horses = [];
   bool _isLoadingHorses = false;
+  // ── 출전마 로딩 단계 (로딩 UI 메시지 구분용) ────────────────────────
+  HorseLoadPhase _loadPhase = HorseLoadPhase.idle;
   int _simCount = 0;
   bool _isPremium = false;
   static const int _freeLimitPerDay = 3;
@@ -185,6 +198,7 @@ class RaceProvider extends ChangeNotifier {
   RaceInfo? get selectedRace => _selectedRace;
   List<HorseEntry> get horses => _horses;
   bool get isLoadingHorses => _isLoadingHorses;
+  HorseLoadPhase get loadPhase => _loadPhase;
   int get simCount => _simCount;
   bool get isPremium => _isPremium;
   bool get canSimulate => _isPremium || _simCount < _freeLimitPerDay;
@@ -689,6 +703,7 @@ class RaceProvider extends ChangeNotifier {
 
     _selectedRace = race;
     _isLoadingHorses = true;
+    _loadPhase = HorseLoadPhase.cacheChecking;  // [v2.0] 캐시 조회 시작
     _horses = [];
     _insights = [];
     notifyListeners();
@@ -715,6 +730,7 @@ class RaceProvider extends ChangeNotifier {
           _horses.sort((a, b) => a.gateNo.compareTo(b.gateNo));
           _isHorsesMock = false;
           cacheHit = true;
+          _loadPhase = HorseLoadPhase.cacheHit;  // [v2.0] 캐시 히트
 
           if (kDebugMode) {
             debugPrint(
@@ -737,6 +753,8 @@ class RaceProvider extends ChangeNotifier {
     // ══════════════════════════════════════════════════════════════════
     if (!cacheHit) {
       bool apiSuccess = false;
+      _loadPhase = HorseLoadPhase.onlineFetch;  // [v2.0] 온라인 fallback 시작
+      notifyListeners();
 
       if (kDebugMode) {
         debugPrint(
@@ -827,6 +845,7 @@ class RaceProvider extends ChangeNotifier {
     _lastUpdated = DateTime.now();
     _refreshStatus = RefreshStatus.success;
     _isLoadingHorses = false;
+    _loadPhase = HorseLoadPhase.done;  // [v2.0] 로딩 완료
     notifyListeners();
 
     // ── [API4_3] 물리 프로필 백그라운드 사전 로딩 ──────────────────────

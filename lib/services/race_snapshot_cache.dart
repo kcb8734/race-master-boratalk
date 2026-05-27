@@ -544,30 +544,85 @@ class RaceSnapshotCache {
   Future<Map<String, dynamic>> getCacheStats() async {
     await init();
     final allKeys = _prefs!.getKeys();
-    final snapKeys = allKeys.where((k) => k.startsWith(_kSnap) && !k.startsWith(_kSnapTs)).toList();
-    final oddsKeys = allKeys.where((k) => k.startsWith(_kOddsSnap) && !k.startsWith(_kOddsTs)).toList();
+    final snapKeys = allKeys
+        .where((k) => k.startsWith(_kSnap) && !k.startsWith(_kSnapTs))
+        .toList()
+      ..sort();
+    final oddsKeys = allKeys
+        .where((k) => k.startsWith(_kOddsSnap) && !k.startsWith(_kOddsTs))
+        .toList();
 
     int validSnaps = 0;
     int expiredSnaps = 0;
     final now = DateTime.now().millisecondsSinceEpoch;
 
+    // ── 스냅샷 상세 목록 (관리자 대시보드 표시용) ─────────────────────
+    final List<Map<String, dynamic>> details = [];
+
     for (final key in snapKeys) {
       final tsKey = key.replaceFirst(_kSnap, _kSnapTs);
       final ts = _prefs!.getInt(tsKey) ?? 0;
       final age = now - ts;
-      if (age < _snapTtl.inMilliseconds) {
-        validSnaps++;
-      } else {
-        expiredSnaps++;
-      }
+      final isValid = age < _snapTtl.inMilliseconds;
+      if (isValid) { validSnaps++; } else { expiredSnaps++; }
+
+      // 키 파싱: batch_snap:SEO:20250120:R1
+      final parts = key.replaceFirst(_kSnap, '').split(':');
+      final venueCode = parts.isNotEmpty ? parts[0] : '?';
+      final dateStr   = parts.length > 1 ? parts[1] : '?';
+      final raceNo    = parts.length > 2 ? parts[2] : '?';
+
+      // 스냅샷 파싱 (마 수, source, fetchDurationMs)
+      int horseCount = 0;
+      String source = 'unknown';
+      int fetchMs = 0;
+      DateTime? savedAt;
+
+      try {
+        final raw = _prefs!.getString(key);
+        if (raw != null) {
+          final snap = RaceBatchSnapshot.fromJson(
+              jsonDecode(raw) as Map<String, dynamic>);
+          horseCount = snap.horses.length;
+          source     = snap.source;
+          fetchMs    = snap.fetchDurationMs;
+          savedAt    = snap.savedAt;
+        }
+      } catch (_) {}
+
+      // TTL 잔여 시간 계산
+      final ttlRemainingMs = _snapTtl.inMilliseconds - age;
+      final ttlHoursLeft   = (ttlRemainingMs / 3600000).clamp(0, 36);
+
+      details.add({
+        'key':           key,
+        'venueCode':     venueCode,
+        'dateStr':       dateStr,
+        'raceNo':        raceNo,
+        'horseCount':    horseCount,
+        'source':        source,        // 'batch' | 'online_fallback' | 'manual'
+        'fetchMs':       fetchMs,
+        'savedAt':       savedAt?.toIso8601String(),
+        'isValid':       isValid,
+        'ageHours':      (age / 3600000).toStringAsFixed(1),
+        'ttlHoursLeft':  ttlHoursLeft.toStringAsFixed(1),
+      });
     }
 
+    // 경주장 + 경주번호 순으로 정렬
+    details.sort((a, b) {
+      final v = (a['venueCode'] as String).compareTo(b['venueCode'] as String);
+      if (v != 0) return v;
+      return (a['raceNo'] as String).compareTo(b['raceNo'] as String);
+    });
+
     return {
-      'totalSnapshots': snapKeys.length,
-      'validSnapshots': validSnaps,
+      'totalSnapshots':  snapKeys.length,
+      'validSnapshots':  validSnaps,
       'expiredSnapshots': expiredSnaps,
-      'oddsSnapshots': oddsKeys.length,
-      'totalKeys': allKeys.length,
+      'oddsSnapshots':   oddsKeys.length,
+      'totalKeys':       allKeys.length,
+      'snapshotDetails': details,  // ← 상세 목록 (신규)
     };
   }
 
